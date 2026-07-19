@@ -195,6 +195,7 @@
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Equipment": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",
+          "Dispatcher.History": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Dispatcher.Simulator": "[1.0.0, )",

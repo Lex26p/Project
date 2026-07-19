@@ -1,0 +1,23 @@
+@page "/history"
+@inject IConfiguration Configuration
+
+<PageTitle>History</PageTitle>
+
+<GuardedContent Route="/history">
+    @if (Guid.TryParse(Configuration["Dispatcher:RuntimeScopeId"], out var scopeId) &&
+         Guid.TryParse(Configuration["Dispatcher:HistorySourceId"], out var sourceId) &&
+         Guid.TryParse(Configuration["Dispatcher:HistoryPointId"], out var pointId))
+    {
+        <HistoryTrendWidget
+            ScopeId="scopeId"
+            SourceId="sourceId"
+            PointId="pointId"
+            From="DateTimeOffset.UtcNow.AddHours(-1)"
+            To="DateTimeOffset.UtcNow"
+            ResolutionSeconds="60" />
+    }
+    else
+    {
+        <p>History trend is not configured.</p>
+    }
+</GuardedContent>

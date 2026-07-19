@@ -18,6 +18,8 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
 
     public event Func<Task>? RenderRequested;
 
+    public event Func<Task>? GapDetected;
+
     public RealtimeWidgetState State => state;
 
     public async Task StartAsync(
@@ -49,6 +51,11 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
             scopeId,
             state.Cursor,
             cancellationToken);
+        if (poll.Kind == RealtimePollKind.Gap && GapDetected is not null)
+        {
+            await GapDetected.Invoke();
+        }
+
         state.ApplyPoll(poll);
         if (state.NeedsResync && !state.PermissionInvalidated)
         {

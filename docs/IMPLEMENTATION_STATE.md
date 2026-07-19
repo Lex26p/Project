@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 19 июля 2026 года  
-**Статус программы:** `S15` реализован и проверен на Windows x64; остановлено перед `S16`
+**Статус программы:** `S16` реализован и проверен на Windows x64; остановлено перед `S17`
 
-**Последний завершённый пакет:** `S15` — independent History sample/gap acceptance, distinct positions, idempotent ingest, provenance и recovery checkpoint (`c4c79bf` + working tree, commit не создан)
+**Последний завершённый пакет:** `S16` — authorized History range query, stable pagination, versioned aggregation, trends/live-tail handoff и explicit retention (`4433ff0` + working tree, commit не создан)
 
 ## Следующая работа
 
-`S16` — authorized History range query, quality/gaps, stable pagination, versioned aggregation/resolution, trends/live-tail handoff и initial retention/query load qualification из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S17` — versioned Alarm definitions, local evaluation на post-`RuntimeCut` state, independent `AlarmOccurrence` facets и hysteresis/timers/restart verification из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S15`: locked restore и format verification green; Release build — 0 warnings/0 errors; 58 unit + 39 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S16`: locked restore и format verification green; Release build — 0 warnings/0 errors; 59 unit + 44 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -99,6 +99,9 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `MOD-HIS` владеет отдельной PostgreSQL schema для immutable sample/gap acceptance; `RuntimeFactPosition` и `HistoryStreamPosition` являются разными типами и продвигаются в разных acceptance orders.
 - History ingest использует exact fact fingerprint: совместимый replay возвращает прежние records без duplicate, а тот же runtime position с другим content fail closed как conflict.
 - Late/out-of-order provenance сохраняется на sample; irrecoverable source interval принимается отдельным durable gap, а contiguous recovery checkpoint не перескакивает через отсутствующий runtime fact и безопасно догоняет после reorder/crash replay.
+- History range query требует одновременно History и point permission, возвращает quality/freshness и gaps, а фиксированный upper bound сохраняет стабильную pagination при concurrent ingest.
+- Versioned resolution policy `v1` детерминированно агрегирует count/average/min/max, worst quality/freshness и gap presence; Web trend продолжает live-tail через отдельный realtime snapshot и после realtime gap очищает continuity и повторно запрашивает History.
+- History retention выполняется только по явной versioned policy, cutoff и bounded history position; immutable protection разрешает delete только внутри retention transaction. Initial query profile проверяет paged traversal 32 samples без production capacity claim.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.
@@ -119,7 +122,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Initial in-process Simulator не доказывает безопасность co-hosting real protocol I/O.
 - Linux x64 build/test/load evidence отсутствует по указанию пользователя; полный acceptance `IG-01` и platform parity `S05/S14` не заявляются.
 - Локальная Visual Studio 2026 использует preview SDK `10.0.400-preview.0.26322.102`; Windows validation выполнена на нём.
-- Data/history capacity profile пока не измерен.
+- Initial History query/retention profile выполнен; production numeric capacity, retention и SLO limits остаются не квалифицированы.
 - Full Incident, Maintenance и IAM scope ограничен maturity границами Web/API requirements.
 - Production commands требуют нескольких независимых gates; `DG-05` сам по себе ничего не включает.
 

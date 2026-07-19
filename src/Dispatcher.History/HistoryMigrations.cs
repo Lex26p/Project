@@ -92,5 +92,32 @@ public static class HistoryMigrations
                     BEFORE UPDATE OR DELETE ON {Schema}.gap
                     FOR EACH ROW EXECUTE FUNCTION {Schema}.reject_history_record_mutation();
                 """),
+            new MigrationStep(
+                2,
+                "range query and explicit retention policy",
+                $"""
+                CREATE INDEX sample_range_idx
+                    ON {Schema}.sample
+                    (scope_id, source_id, point_id, source_timestamp, history_stream_position);
+                CREATE INDEX gap_range_idx
+                    ON {Schema}.gap
+                    (scope_id, source_id, accepted_at, history_stream_position);
+                CREATE TABLE {Schema}.retention_policy (
+                    scope_id uuid PRIMARY KEY REFERENCES {Schema}.scope_state(scope_id),
+                    policy_version integer NOT NULL CHECK (policy_version > 0),
+                    delete_before timestamp with time zone NOT NULL,
+                    through_stream_position bigint NOT NULL CHECK (through_stream_position >= 0),
+                    applied_at timestamp with time zone NOT NULL
+                );
+                CREATE OR REPLACE FUNCTION {Schema}.reject_history_record_mutation() RETURNS trigger AS $$
+                BEGIN
+                    IF TG_OP = 'DELETE' AND
+                       current_setting('dispatcher.history_retention', true) = 'enabled' THEN
+                        RETURN OLD;
+                    END IF;
+                    RAISE EXCEPTION 'accepted history records are immutable';
+                END;
+                $$ LANGUAGE plpgsql;
+                """),
         ]);
 }

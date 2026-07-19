@@ -1,0 +1,119 @@
+@implements IAsyncDisposable
+@inject HistoryApiClient History
+@inject RealtimeWidgetClient Realtime
+
+<section aria-label="History trend">
+    @if (!string.IsNullOrEmpty(error))
+    {
+        <p role="alert">@error</p>
+    }
+    else if (state.RequiresHistoryRequery)
+    {
+        <p>Loading History…</p>
+    }
+    else
+    {
+        <table>
+            <thead><tr><th>From</th><th>Average</th><th>Range</th><th>Quality</th></tr></thead>
+            <tbody>
+                @foreach (var bucket in state.Buckets)
+                {
+                    <tr>
+                        <td>@bucket.FromInclusive.ToString("u")</td>
+                        <td>@bucket.Average</td>
+                        <td>@bucket.Minimum–@bucket.Maximum</td>
+                        <td>@bucket.Quality@if (bucket.HasGap) { <text>; gap</text> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (state.LivePoint is not null)
+        {
+            <p>Live: @state.LivePoint.Value @state.LivePoint.Unit (@state.LivePoint.Quality)</p>
+        }
+    }
+</section>
+
+@code {
+    private readonly HistoryTrendState state = new();
+    private readonly CancellationTokenSource cancellation = new();
+    private Task? polling;
+    private string? error;
+
+    [Parameter] public Guid ScopeId { get; set; }
+    [Parameter] public Guid SourceId { get; set; }
+    [Parameter] public Guid PointId { get; set; }
+    [Parameter] public DateTimeOffset From { get; set; }
+    [Parameter] public DateTimeOffset To { get; set; }
+    [Parameter] public int ResolutionSeconds { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Realtime.RenderRequested += RenderAsync;
+        Realtime.GapDetected += OnGapDetectedAsync;
+        try
+        {
+            await ReloadHistoryAsync();
+            await Realtime.StartAsync(ScopeId, cancellation.Token, [PointId]);
+            ApplyLive();
+            polling = PollAsync(cancellation.Token);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            error = "History trend is unavailable.";
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try { await polling; } catch (OperationCanceledException) { }
+        }
+
+        Realtime.RenderRequested -= RenderAsync;
+        Realtime.GapDetected -= OnGapDetectedAsync;
+        await Realtime.DisposeAsync();
+        cancellation.Dispose();
+    }
+
+    private async Task ReloadHistoryAsync()
+    {
+        var history = await History.ReadAggregatesAsync(
+            ScopeId, SourceId, PointId, From, To, ResolutionSeconds, cancellation.Token);
+        if (history is null)
+        {
+            throw new InvalidOperationException("History query failed.");
+        }
+
+        state.ApplyHistory(history);
+    }
+
+    private async Task OnGapDetectedAsync()
+    {
+        state.MarkRealtimeGap();
+        await ReloadHistoryAsync();
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            await Realtime.PollAsync(cancellationToken);
+        }
+    }
+
+    private Task RenderAsync()
+    {
+        ApplyLive();
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyLive()
+    {
+        var snapshot = new RuntimeSnapshotPayload(Realtime.State.ScopeId, Realtime.State.Cursor, Realtime.State.Points);
+        state.ApplyLiveSnapshot(snapshot, PointId);
+    }
+}

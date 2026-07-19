@@ -19,6 +19,20 @@ if (registryEnabled)
 {
     builder.Services.AddRegistryServer(workspaceConnection!, facilityRole!, equipmentRole!);
 }
+var historyRole = builder.Configuration["Dispatcher:History:DatabaseRole"];
+var historyMaxPageSize = builder.Configuration.GetValue<int?>("Dispatcher:History:MaxPageSize");
+var historyMaxAggregateBuckets = builder.Configuration.GetValue<int?>("Dispatcher:History:MaxAggregateBuckets");
+var historyEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
+                     !string.IsNullOrWhiteSpace(historyRole) &&
+                     historyMaxPageSize > 0 &&
+                     historyMaxAggregateBuckets > 0;
+if (historyEnabled)
+{
+    builder.Services.AddHistoryServer(
+        workspaceConnection!,
+        historyRole!,
+        new Dispatcher.History.HistoryQueryLimits(historyMaxPageSize!.Value, historyMaxAggregateBuckets!.Value));
+}
 
 var app = builder.Build();
 app.MapDispatcherServer();
@@ -29,5 +43,9 @@ if (workspaceEnabled)
 if (registryEnabled)
 {
     app.MapRegistryServer();
+}
+if (historyEnabled)
+{
+    app.MapHistoryServer();
 }
 app.Run();

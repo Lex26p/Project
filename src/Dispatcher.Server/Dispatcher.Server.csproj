@@ -10,6 +10,7 @@
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
     <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
+    <ProjectReference Include="..\Dispatcher.History\Dispatcher.History.csproj" />
     <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
     <ProjectReference Include="..\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
