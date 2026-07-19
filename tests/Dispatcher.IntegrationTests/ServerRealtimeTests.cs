@@ -136,7 +136,11 @@ public sealed class ServerRealtimeTests
             var scopeId = RuntimeScopeId.From(Guid.Parse("10000000-0000-0000-0000-000000000001"));
             var allowedPoint = PointId.From(Guid.Parse("20000000-0000-0000-0000-000000000001"));
             var hiddenPoint = PointId.From(Guid.Parse("20000000-0000-0000-0000-000000000002"));
-            var runtime = new CoreRuntime(scopeId, SystemClock.Instance, SystemClock.Instance);
+            var runtime = new CoreRuntime(
+                scopeId,
+                SystemClock.Instance,
+                SystemClock.Instance,
+                new RuntimeCurrentLimits(maxPoints: 128, retainedChangeCapacity: 1024));
             app.Services.GetRequiredService<RuntimeRegistry>().Add(scopeId, runtime);
 
             var now = DateTimeOffset.UtcNow;

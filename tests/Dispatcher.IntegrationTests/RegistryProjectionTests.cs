@@ -258,7 +258,11 @@ public sealed class RegistryProjectionTests
                 app.Services.GetRequiredService<SessionDirectory>().Set(session);
 
                 var runtimeScope = RuntimeScopeId.From(scopeA.Value);
-                var runtime = new CoreRuntime(runtimeScope, SystemClock.Instance, SystemClock.Instance);
+                var runtime = new CoreRuntime(
+                    runtimeScope,
+                    SystemClock.Instance,
+                    SystemClock.Instance,
+                    new RuntimeCurrentLimits(maxPoints: 128, retainedChangeCapacity: 1024));
                 app.Services.GetRequiredService<RuntimeRegistry>().Add(runtimeScope, runtime);
                 var allowedBinding = new SourceBinding(
                     runtimeScope,

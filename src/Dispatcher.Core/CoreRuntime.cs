@@ -8,22 +8,29 @@ public sealed class CoreRuntime
     private readonly RuntimeScopeId scopeId;
     private readonly IWallClock wallClock;
     private readonly IMonotonicClock monotonicClock;
+    private readonly RuntimeCurrentLimits limits;
     private readonly Dictionary<SourceId, SourceBinding> bindings = [];
     private readonly Dictionary<SourceId, ulong> sourcePositions = [];
     private readonly Dictionary<PointId, CurrentEntry> current = [];
     private readonly Dictionary<SourceId, SourceLiveness> liveness = [];
-    private readonly List<CurrentEntry> changes = [];
+    private readonly Queue<CurrentEntry> changes = [];
     private ulong currentPosition;
     private ulong livenessPosition;
 
-    public CoreRuntime(RuntimeScopeId scopeId, IWallClock wallClock, IMonotonicClock monotonicClock)
+    public CoreRuntime(
+        RuntimeScopeId scopeId,
+        IWallClock wallClock,
+        IMonotonicClock monotonicClock,
+        RuntimeCurrentLimits limits)
     {
         _ = scopeId.Value;
         ArgumentNullException.ThrowIfNull(wallClock);
         ArgumentNullException.ThrowIfNull(monotonicClock);
+        ArgumentNullException.ThrowIfNull(limits);
         this.scopeId = scopeId;
         this.wallClock = wallClock;
         this.monotonicClock = monotonicClock;
+        this.limits = limits;
     }
 
     public Result ActivateBinding(SourceBinding binding)
@@ -84,6 +91,14 @@ public sealed class CoreRuntime
                 }
             }
 
+            var addedPointCount = cut.Observations.Count(observation => !current.ContainsKey(observation.PointId));
+            if (addedPointCount > limits.MaxPoints - current.Count)
+            {
+                return Failure<RuntimeCutAcceptance>(
+                    "core.current_capacity",
+                    "The configured runtime current point capacity is exhausted.");
+            }
+
             var receivedAt = ReceiveTimestamp.FromUtc(wallClock.GetUtcNow());
             var processedMonotonic = monotonicClock.GetTimestamp();
             var processedAt = ProcessedTimestamp.FromUtc(wallClock.GetUtcNow());
@@ -133,7 +148,12 @@ public sealed class CoreRuntime
             foreach (var transition in transitions)
             {
                 current[transition.PointId] = transition;
-                changes.Add(transition);
+                changes.Enqueue(transition);
+            }
+
+            while (changes.Count > limits.RetainedChangeCapacity)
+            {
+                changes.Dequeue();
             }
 
             currentPosition = nextCurrentPosition;
@@ -210,6 +230,7 @@ public sealed class CoreRuntime
                 checkpoint.Sources.Any(item => item.Binding.ScopeId != scopeId) ||
                 checkpoint.Current.Any(item => item.ScopeId != scopeId) ||
                 checkpoint.Liveness.Any(item => item.ScopeId != scopeId) ||
+                checkpoint.Current.Count > limits.MaxPoints ||
                 checkpoint.Current.Any(item => item.CurrentPosition.Value > checkpoint.CurrentPosition.Value) ||
                 checkpoint.Liveness.Any(item => item.LivenessPosition.Value > checkpoint.LivenessPosition.Value))
             {
@@ -253,9 +274,12 @@ public sealed class CoreRuntime
     {
         lock (sync)
         {
-            if (cursor.Value > currentPosition)
+            var earliestResumableCursor = changes.Count == 0
+                ? currentPosition
+                : checked(changes.Peek().CurrentPosition.Value - 1);
+            if (cursor.Value > currentPosition || cursor.Value < earliestResumableCursor)
             {
-                throw new ArgumentOutOfRangeException(nameof(cursor), "Cursor is ahead of current.");
+                throw new ArgumentOutOfRangeException(nameof(cursor), "Cursor cannot be resumed from retained current changes.");
             }
 
             var delta = changes
@@ -266,6 +290,18 @@ public sealed class CoreRuntime
                 cursor,
                 new ConsumerCursor<CurrentEntry>(currentPosition),
                 delta);
+        }
+    }
+
+    public RuntimeCurrentCapacity GetCurrentCapacity()
+    {
+        lock (sync)
+        {
+            return new RuntimeCurrentCapacity(
+                current.Count,
+                limits.MaxPoints,
+                changes.Count,
+                limits.RetainedChangeCapacity);
         }
     }
 

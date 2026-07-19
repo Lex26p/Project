@@ -34,7 +34,7 @@ public sealed class SimulatorWalkingSkeletonTests
     {
         var clock = new DeterministicClock(Start, TimeSpan.FromSeconds(1), 100, 10);
         var scenario = new SimulatorScenario(CreateConfig(), clock);
-        var runtime = new CoreRuntime(ScopeId, clock, clock);
+        var runtime = CreateRuntime(clock);
         Assert.True(runtime.ActivateBinding(CreateBinding()).IsSuccess);
 
         Assert.True(ApplyStep(runtime, scenario, 1).IsSuccess);
@@ -92,7 +92,7 @@ public sealed class SimulatorWalkingSkeletonTests
     public void RuntimeCutRejectsObservationFromAnotherScope()
     {
         var clock = new DeterministicClock(Start, TimeSpan.FromSeconds(1), 100, 10);
-        var runtime = new CoreRuntime(ScopeId, clock, clock);
+        var runtime = CreateRuntime(clock);
         Assert.True(runtime.ActivateBinding(CreateBinding()).IsSuccess);
         var foreignScope = RuntimeScopeId.From(Guid.Parse("aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"));
         var observation = new SourceObservation(
@@ -116,7 +116,7 @@ public sealed class SimulatorWalkingSkeletonTests
     {
         var clock = new DeterministicClock(Start, TimeSpan.FromSeconds(1), 100, 10);
         var scenario = new SimulatorScenario(CreateConfig(), clock);
-        var runtime = new CoreRuntime(ScopeId, clock, clock);
+        var runtime = CreateRuntime(clock);
         var entries = new List<CurrentEntry>();
         Assert.True(runtime.ActivateBinding(CreateBinding()).IsSuccess);
 
@@ -142,6 +142,9 @@ public sealed class SimulatorWalkingSkeletonTests
         SourceId,
         SourceBindingGeneration.From(1),
         SourceSessionGeneration.From(1));
+
+    private static CoreRuntime CreateRuntime(DeterministicClock clock) =>
+        new(ScopeId, clock, clock, new RuntimeCurrentLimits(maxPoints: 8, retainedChangeCapacity: 64));
 
     private static Result<RuntimeCutAcceptance> ApplyStep(
         CoreRuntime runtime,

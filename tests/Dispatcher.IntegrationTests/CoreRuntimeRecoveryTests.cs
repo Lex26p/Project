@@ -176,7 +176,11 @@ public sealed class CoreRuntimeRecoveryTests
 
         public HostBundle CreateHost(int capacity, RuntimeObligationCommitHook? hook = null)
         {
-            var runtime = new CoreRuntime(ScopeId, Clock, Clock);
+            var runtime = new CoreRuntime(
+                ScopeId,
+                Clock,
+                Clock,
+                new RuntimeCurrentLimits(maxPoints: 8, retainedChangeCapacity: 64));
             return new HostBundle(
                 runtime,
                 new CoreRuntimeHost(

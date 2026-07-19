@@ -20,5 +20,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Golden\simulator-core.trace" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Golden\simulator-burst.trace" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

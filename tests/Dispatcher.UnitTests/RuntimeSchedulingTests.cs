@@ -80,7 +80,7 @@ public sealed class RuntimeSchedulingTests
             ScopeId,
             new PollScheduleLimits(TimeSpan.FromMinutes(1), 1, 1),
             clock);
-        var runtime = new CoreRuntime(ScopeId, clock, clock);
+        var runtime = CreateRuntime(clock);
         var firstBinding = Binding(SourceA, 1, 1);
         var nextBinding = Binding(SourceA, 2, 1);
         Assert.True(scheduler.ActivateBinding(firstBinding).IsSuccess);
@@ -113,7 +113,7 @@ public sealed class RuntimeSchedulingTests
     public void UnchangedObservationAdvancesOnlyLiveness()
     {
         var clock = new MutableClock(Start);
-        var runtime = new CoreRuntime(ScopeId, clock, clock);
+        var runtime = CreateRuntime(clock);
         var binding = Binding(SourceA, 1, 1);
         Assert.True(runtime.ActivateBinding(binding).IsSuccess);
 
@@ -144,7 +144,7 @@ public sealed class RuntimeSchedulingTests
     public void RuntimeCutNormalizesOrderAndRejectsPartialPositionAdvance()
     {
         var clock = new MutableClock(Start);
-        var runtime = new CoreRuntime(ScopeId, clock, clock);
+        var runtime = CreateRuntime(clock);
         var binding = Binding(SourceA, 1, 1);
         Assert.True(runtime.ActivateBinding(binding).IsSuccess);
         var cut = RuntimeCut.Normalize(
@@ -226,6 +226,9 @@ public sealed class RuntimeSchedulingTests
             sourceId,
             SourceBindingGeneration.From(bindingGeneration),
             SourceSessionGeneration.From(sessionGeneration));
+
+    private static CoreRuntime CreateRuntime(MutableClock clock) =>
+        new(ScopeId, clock, clock, new RuntimeCurrentLimits(maxPoints: 8, retainedChangeCapacity: 64));
 
     private static SourceObservation Observation(
         SourceBinding binding,
