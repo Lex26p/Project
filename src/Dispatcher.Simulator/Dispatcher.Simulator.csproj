@@ -3,7 +3,13 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Configuration\Dispatcher.Configuration.csproj" />
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
+    <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
   </ItemGroup>
 </Project>

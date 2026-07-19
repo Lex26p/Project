@@ -373,6 +373,17 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "dispatcher.configuration": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Equipment": "[1.0.0, )",
+          "Dispatcher.Facilities": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.core": {
         "type": "Project",
         "dependencies": {
@@ -418,8 +429,12 @@
       "dispatcher.simulator": {
         "type": "Project",
         "dependencies": {
+          "Dispatcher.Configuration": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
-          "Dispatcher.Semantics": "[1.0.0, )"
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
         }
       },
       "dispatcher.web": {

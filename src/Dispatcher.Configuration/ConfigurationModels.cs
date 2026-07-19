@@ -133,7 +133,7 @@ internal static class ConfigurationFingerprint
             throw new ArgumentException("A whole-scope configuration manifest must be a JSON object.", nameof(manifestJson));
         }
 
-        var json = JsonSerializer.Serialize(document.RootElement);
+        var json = Canonicalize(document.RootElement);
         return (json, Compute(json));
     }
 
@@ -158,4 +158,50 @@ internal static class ConfigurationFingerprint
 
     public static string Combine(string manifestFingerprint, string dependencyFingerprint) =>
         Compute($"{manifestFingerprint}:{dependencyFingerprint}");
+
+    private static string Canonicalize(JsonElement element)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            WriteCanonical(element, writer);
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static void WriteCanonical(JsonElement element, Utf8JsonWriter writer)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject().OrderBy(item => item.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonical(property.Value, writer);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteCanonical(item, writer);
+                }
+
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
+}
+
+public static class ConfigurationManifestFingerprint
+{
+    public static (string Json, string Fingerprint) Normalize(string manifestJson) =>
+        ConfigurationFingerprint.NormalizeManifest(manifestJson);
 }

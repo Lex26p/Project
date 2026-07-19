@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
     <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+    <ProjectReference Include="..\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
     <ProjectReference Include="..\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
   </ItemGroup>
 </Project>

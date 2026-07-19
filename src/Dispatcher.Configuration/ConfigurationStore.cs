@@ -596,6 +596,12 @@ public sealed partial class ConfigurationStore
         await LockScopeAsync(connection, transaction, scopeId, cancellationToken).ConfigureAwait(false);
         var state = await ReadStateAsync(connection, transaction, scopeId, true, cancellationToken).ConfigureAwait(false);
         var revision = await ReadRevisionAsync(connection, transaction, revisionId, true, cancellationToken).ConfigureAwait(false);
+        if (state?.ActivatedRevisionId == revisionId && revision?.ActivatedAt is not null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return Result.Success(revision);
+        }
+
         if (state?.PublishedRevisionId != revisionId || state.DistributedRevisionId != revisionId ||
             revision is null || revision.Version != expectedVersion)
         {
