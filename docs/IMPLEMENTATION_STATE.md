@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 19 июля 2026 года  
-**Статус программы:** `S14` реализован и проверен на Windows x64; остановлено перед `S15`
+**Статус программы:** `S15` реализован и проверен на Windows x64; остановлено перед `S16`
 
-**Последний завершённый пакет:** `S14` — расширенный Simulator golden/property/fault corpus, bounded current/delta, burst/clock/restart/slow-consumer и Windows load/soak evidence (`f283191` + working tree, commit не создан)
+**Последний завершённый пакет:** `S15` — independent History sample/gap acceptance, distinct positions, idempotent ingest, provenance и recovery checkpoint (`c4c79bf` + working tree, commit не создан)
 
 ## Следующая работа
 
-`S15` — independent History sample/gap acceptance, отдельный `HistoryStreamPosition`, idempotent ingest, late/out-of-order provenance и recovery checkpoint из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S16` — authorized History range query, quality/gaps, stable pagination, versioned aggregation/resolution, trends/live-tail handoff и initial retention/query load qualification из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S14`: locked restore и format verification green; Release build — 0 warnings/0 errors; 57 unit + 35 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker. Representative workload обработал 320000 observations за 20000 steps с bounded retention `256/256`; raw phase evidence сохранено в test output, arbitrary production limits не заявлены.
+Windows x64 evidence для `S15`: locked restore и format verification green; Release build — 0 warnings/0 errors; 58 unit + 39 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -96,6 +96,9 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Staging secret material хранится только в защищённом виде; публичные staging/obligation snapshots раскрывают лишь `HasSecret`, а audit не содержит form data или secret.
 - Integration DB lifecycle использует отдельный временный PostgreSQL cluster без Docker и не изменяет рабочую БД.
 - Расширенный Simulator corpus фиксирует deterministic burst golden, 32-seed property runs, mass timeout, wall-clock regression, restart/resnapshot, slow-consumer gap и atomic point-capacity failure; workload profile сохраняет bounded point/current-delta state без нормативных capacity обещаний.
+- `MOD-HIS` владеет отдельной PostgreSQL schema для immutable sample/gap acceptance; `RuntimeFactPosition` и `HistoryStreamPosition` являются разными типами и продвигаются в разных acceptance orders.
+- History ingest использует exact fact fingerprint: совместимый replay возвращает прежние records без duplicate, а тот же runtime position с другим content fail closed как conflict.
+- Late/out-of-order provenance сохраняется на sample; irrecoverable source interval принимается отдельным durable gap, а contiguous recovery checkpoint не перескакивает через отсутствующий runtime fact и безопасно догоняет после reorder/crash replay.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.
@@ -103,7 +106,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 ## Provisional
 
 - exact .NET 10 SDK feature-band/patch beyond the repository baseline;
-- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime owners;
+- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History owners;
 - production process topology;
 - protocol isolation mechanism;
 - IAM/IdP mechanism;
