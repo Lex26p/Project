@@ -12,6 +12,7 @@
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Dispatcher.Alarm\Dispatcher.Alarm.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Core\Dispatcher.Core.csproj" />

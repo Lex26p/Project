@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
-**Обновлено:** 19 июля 2026 года  
-**Статус программы:** `S16` реализован и проверен на Windows x64; остановлено перед `S17`
+**Обновлено:** 20 июля 2026 года
+**Статус программы:** `S17` реализован и проверен на Windows x64; остановлено перед `S18`
 
-**Последний завершённый пакет:** `S16` — authorized History range query, stable pagination, versioned aggregation, trends/live-tail handoff и explicit retention (`4433ff0` + working tree, commit не создан)
+**Последний завершённый пакет:** `S17` — versioned Alarm definitions, post-`RuntimeCut` local evaluation, independent occurrence facets и durable hysteresis/timers (`9b52c0c` + working tree, commit не создан)
 
 ## Следующая работа
 
-`S17` — versioned Alarm definitions, local evaluation на post-`RuntimeCut` state, independent `AlarmOccurrence` facets и hysteresis/timers/restart verification из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S18` — immutable Event Journal acceptance/position, Event Dispatcher query/filter/counters, separate occurrence projection/realtime catch-up и permission/gap behavior из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S16`: locked restore и format verification green; Release build — 0 warnings/0 errors; 59 unit + 44 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S17`: locked restore и format verification green; Release build — 0 warnings/0 errors; 60 unit + 46 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -102,6 +102,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - History range query требует одновременно History и point permission, возвращает quality/freshness и gaps, а фиксированный upper bound сохраняет стабильную pagination при concurrent ingest.
 - Versioned resolution policy `v1` детерминированно агрегирует count/average/min/max, worst quality/freshness и gap presence; Web trend продолжает live-tail через отдельный realtime snapshot и после realtime gap очищает continuity и повторно запрашивает History.
 - History retention выполняется только по явной versioned policy, cutoff и bounded history position; immutable protection разрешает delete только внутри retention transaction. Initial query profile проверяет paged traversal 32 samples без production capacity claim.
+- `MOD-ALM` владеет отдельной PostgreSQL schema для immutable contiguous definition epochs, единого serialized evaluation state на scope и durable `AlarmOccurrence` lifecycle.
+- Alarm evaluator принимает только принятый `RuntimeCutAcceptance` с соответствующим post-cut current snapshot; raw adapter не имеет API создания occurrence, а stale/replayed evaluation position не создаёт второго перехода.
+- У occurrence раздельно хранятся condition, acknowledgement, assignment, shelving и suppression facets с независимыми versions; local condition evaluation изменяет только condition facet.
+- High/low threshold nucleus использует explicit hysteresis и durable raise/clear timers; pending/active state переживает restart без silent clear либо duplicate occurrence.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.
@@ -109,7 +113,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 ## Provisional
 
 - exact .NET 10 SDK feature-band/patch beyond the repository baseline;
-- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History owners;
+- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm owners;
 - production process topology;
 - protocol isolation mechanism;
 - IAM/IdP mechanism;
