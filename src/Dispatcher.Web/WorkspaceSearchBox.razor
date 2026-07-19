@@ -1,0 +1,20 @@
+@inject NavigationManager Navigation
+
+<form @onsubmit="Submit" @onsubmit:preventDefault>
+    <label>
+        <span>Search</span>
+        <input @bind="query" aria-label="Global search" />
+    </label>
+</form>
+
+@code {
+    private string query = string.Empty;
+
+    private void Submit()
+    {
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            Navigation.NavigateTo($"/search?q={Uri.EscapeDataString(query.Trim())}");
+        }
+    }
+}

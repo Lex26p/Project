@@ -1,5 +1,12 @@
 <Solution>
   <Project Path="src/Dispatcher.Semantics/Dispatcher.Semantics.csproj" />
+  <Project Path="src/Dispatcher.Persistence/Dispatcher.Persistence.csproj" />
+  <Project Path="src/Dispatcher.Platform/Dispatcher.Platform.csproj" />
+  <Project Path="src/Dispatcher.Core/Dispatcher.Core.csproj" />
+  <Project Path="src/Dispatcher.Simulator/Dispatcher.Simulator.csproj" />
+  <Project Path="src/Dispatcher.Server/Dispatcher.Server.csproj" />
+  <Project Path="src/Dispatcher.Web/Dispatcher.Web.csproj" />
+  <Project Path="src/Dispatcher.Workspace/Dispatcher.Workspace.csproj" />
   <Project Path="tests/Dispatcher.IntegrationTests/Dispatcher.IntegrationTests.csproj" />
   <Project Path="tests/Dispatcher.UnitTests/Dispatcher.UnitTests.csproj" />
 </Solution>

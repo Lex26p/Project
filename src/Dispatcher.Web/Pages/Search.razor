@@ -1,0 +1,38 @@
+@page "/search"
+@inject WorkspaceApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Search</PageTitle>
+
+<GuardedContent Route="/search">
+    <h1>Search</h1>
+    @if (results is null)
+    {
+        <p>Searching…</p>
+    }
+    else
+    {
+        <p>@results.Count result(s)</p>
+        <ul>
+            @foreach (var result in results)
+            {
+                <li><a href="@result.Route">@result.Label</a></li>
+            }
+        </ul>
+    }
+</GuardedContent>
+
+@code {
+    private IReadOnlyList<WorkspaceSearchPayload>? results;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var query = new Uri(Navigation.Uri).Query.TrimStart('?');
+        var value = query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2))
+            .Where(parts => parts.Length == 2 && string.Equals(parts[0], "q", StringComparison.Ordinal))
+            .Select(parts => Uri.UnescapeDataString(parts[1].Replace('+', ' ')))
+            .FirstOrDefault() ?? string.Empty;
+        results = await Api.SearchAsync(value) ?? [];
+    }
+}

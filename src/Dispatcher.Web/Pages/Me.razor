@@ -1,0 +1,111 @@
+@page "/me"
+@inject WorkspaceApiClient Api
+
+<PageTitle>My profile</PageTitle>
+
+<GuardedContent Route="/me">
+    @if (model is null)
+    {
+        <p>Loading profile…</p>
+    }
+    else
+    {
+        <h1>My profile</h1>
+        <p>Account: @model.UserId</p>
+        <p>Person: @model.PersonId</p>
+        <EditForm Model="form" OnValidSubmit="SaveProfileAsync">
+            <label>Display name <InputText @bind-Value="form.DisplayName" /></label>
+            <label>Title <InputText @bind-Value="form.Title" /></label>
+            <label>
+                Availability
+                <InputSelect @bind-Value="form.Availability">
+                    <option value="1">Available</option>
+                    <option value="2">Away</option>
+                    <option value="3">Unavailable</option>
+                </InputSelect>
+            </label>
+            <label>
+                Privacy
+                <InputSelect @bind-Value="form.Visibility">
+                    <option value="1">Organization</option>
+                    <option value="2">Private</option>
+                </InputSelect>
+            </label>
+            <button type="submit">Save profile</button>
+        </EditForm>
+        <EditForm Model="preferences" OnValidSubmit="SavePreferencesAsync">
+            <label><InputCheckbox @bind-Value="preferences.CompactNavigation" /> Compact navigation</label>
+            <label>Start route <InputText @bind-Value="preferences.StartRoute" /></label>
+            <button type="submit">Save preferences</button>
+        </EditForm>
+        @if (!string.IsNullOrEmpty(status))
+        {
+            <p role="status">@status</p>
+        }
+    }
+</GuardedContent>
+
+@code {
+    private PersonProfilePayload? model;
+    private readonly ProfileForm form = new();
+    private readonly PreferencesForm preferences = new();
+    private string? status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        model = await Api.ReadMeAsync();
+        if (model is not null)
+        {
+            form.DisplayName = model.DisplayName;
+            form.Title = model.Title;
+            form.Availability = ParseAvailability(model.Availability);
+            form.Visibility = string.Equals(model.Visibility, "Private", StringComparison.Ordinal) ? 2 : 1;
+        }
+
+        var home = await Api.ReadHomeAsync();
+        if (home is not null)
+        {
+            preferences.CompactNavigation = home.Preferences.CompactNavigation;
+            preferences.StartRoute = home.Preferences.StartRoute;
+        }
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        var response = await Api.UpdateProfileAsync(new UpdateProfileRequest(
+            form.DisplayName,
+            form.Title,
+            form.Availability,
+            form.Visibility));
+        status = response.IsSuccessStatusCode ? "Profile saved." : "Profile was not saved.";
+    }
+
+    private async Task SavePreferencesAsync()
+    {
+        var response = await Api.UpdatePreferencesAsync(new UpdatePreferencesRequest(
+            preferences.CompactNavigation,
+            preferences.StartRoute));
+        status = response.IsSuccessStatusCode ? "Preferences saved." : "Preferences were not saved.";
+    }
+
+    private static int ParseAvailability(string value) => value switch
+    {
+        "Away" => 2,
+        "Unavailable" => 3,
+        _ => 1,
+    };
+
+    private sealed class ProfileForm
+    {
+        public string DisplayName { get; set; } = string.Empty;
+        public string? Title { get; set; }
+        public int Availability { get; set; } = 1;
+        public int Visibility { get; set; } = 1;
+    }
+
+    private sealed class PreferencesForm
+    {
+        public bool CompactNavigation { get; set; }
+        public string StartRoute { get; set; } = "/home";
+    }
+}

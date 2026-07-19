@@ -1,0 +1,15 @@
+@page "/current"
+@inject IConfiguration Configuration
+
+<PageTitle>Current values</PageTitle>
+
+<GuardedContent Route="/current">
+    @if (Guid.TryParse(Configuration["Dispatcher:RuntimeScopeId"], out var scopeId))
+    {
+        <CurrentValueWidget ScopeId="scopeId" />
+    }
+    else
+    {
+        <p>Runtime scope is not configured.</p>
+    }
+</GuardedContent>

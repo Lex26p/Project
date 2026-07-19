@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+  </ItemGroup>
+</Project>

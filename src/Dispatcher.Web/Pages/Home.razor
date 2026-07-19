@@ -1,0 +1,70 @@
+@page "/home"
+@inject WorkspaceApiClient Api
+
+<PageTitle>Home</PageTitle>
+
+<GuardedContent Route="/home">
+    @if (home is null)
+    {
+        <p>Loading Home…</p>
+    }
+    else
+    {
+        <h1>Home</h1>
+        <p>@home.Profile.DisplayName</p>
+        <section aria-label="Assigned workspace">
+            <h2>Assigned</h2>
+            <ul>
+                @foreach (var item in home.Items)
+                {
+                    <li>
+                        <a href="@item.Route" @onclick="() => OpenAsync(item)" @onclick:preventDefault>@item.Label</a>
+                        <button type="button" @onclick="() => FavoriteAsync(item.ItemId)">Favorite</button>
+                        <button type="button" @onclick="() => HideAsync(item.ItemId)">Hide</button>
+                    </li>
+                }
+            </ul>
+        </section>
+        <section aria-label="Favorites">
+            <h2>Favorites</h2>
+            <ul>@foreach (var item in home.Favorites) { <li><a href="@item.Route">@item.Label</a></li> }</ul>
+        </section>
+        <section aria-label="Recent">
+            <h2>Recent</h2>
+            <ul>@foreach (var item in home.Recent) { <li><a href="@item.Route">@item.Label</a></li> }</ul>
+        </section>
+    }
+</GuardedContent>
+
+@code {
+    private WorkspaceHomePayload? home;
+
+    [Inject]
+    private NavigationManager Navigation { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync() => home = await Api.ReadHomeAsync();
+
+    private async Task FavoriteAsync(Guid itemId)
+    {
+        var response = await Api.UpdateFavoriteAsync(itemId, true);
+        if (response.IsSuccessStatusCode)
+        {
+            home = await Api.ReadHomeAsync();
+        }
+    }
+
+    private async Task HideAsync(Guid itemId)
+    {
+        var response = await Api.UpdateHomeItemAsync(itemId, new UpdateHomeOverrideRequest(true, null));
+        if (response.IsSuccessStatusCode)
+        {
+            home = await Api.ReadHomeAsync();
+        }
+    }
+
+    private async Task OpenAsync(HomeItemPayload item)
+    {
+        await Api.RecordRecentAsync(item.ItemId);
+        Navigation.NavigateTo(item.Route);
+    }
+}

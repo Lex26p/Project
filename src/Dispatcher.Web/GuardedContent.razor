@@ -1,0 +1,35 @@
+@inject WorkspaceApiClient Api
+
+@if (state.Access is null)
+{
+    <p>Checking access…</p>
+}
+else if (state.Access == RouteAccess.SessionExpired)
+{
+    <p role="alert">Your session has expired.</p>
+}
+else if (state.Access == RouteAccess.Denied)
+{
+    <p role="alert">This page is not available.</p>
+}
+else
+{
+    @ChildContent
+}
+
+@code {
+    private readonly WorkspaceRouteGuardState state = new();
+
+    [Parameter, EditorRequired]
+    public string Route { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public RenderFragment? ChildContent { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var generation = state.BeginNavigation(Route);
+        var access = await Api.CheckAccessAsync(Route);
+        state.CompleteNavigation(generation, access);
+    }
+}

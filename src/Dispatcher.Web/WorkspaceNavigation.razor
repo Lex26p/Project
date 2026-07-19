@@ -1,0 +1,31 @@
+@inject WorkspaceApiClient Api
+
+@if (items is null)
+{
+    <p>Loading navigation…</p>
+}
+else
+{
+    <nav>
+        @foreach (var item in items)
+        {
+            <NavLink href="@item.Route">@item.Label</NavLink>
+        }
+    </nav>
+}
+
+@code {
+    private IReadOnlyList<WorkspaceNavigationPayload>? items;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            items = await Api.ReadNavigationAsync();
+        }
+        catch (HttpRequestException)
+        {
+            items = [];
+        }
+    }
+}

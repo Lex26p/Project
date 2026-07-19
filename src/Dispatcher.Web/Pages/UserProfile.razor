@@ -1,0 +1,26 @@
+@page "/users/{UserId:guid}"
+@inject WorkspaceApiClient Api
+
+<PageTitle>Person</PageTitle>
+
+<GuardedContent Route="@($"/users/{UserId}")">
+    @if (profile is null)
+    {
+        <p>This profile is not visible.</p>
+    }
+    else
+    {
+        <h1>@profile.DisplayName</h1>
+        <p>@profile.Title</p>
+        <p>@profile.Availability</p>
+    }
+</GuardedContent>
+
+@code {
+    private PersonProfilePayload? profile;
+
+    [Parameter]
+    public Guid UserId { get; set; }
+
+    protected override async Task OnParametersSetAsync() => profile = await Api.ReadUserAsync(UserId);
+}

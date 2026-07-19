@@ -1,0 +1,92 @@
+@implements IAsyncDisposable
+@inject RealtimeWidgetClient Client
+
+<section aria-label="Current values">
+    @if (!string.IsNullOrEmpty(error))
+    {
+        <p role="alert">@error</p>
+    }
+    else if (Client.State.PermissionInvalidated)
+    {
+        <p>Access changed. Reauthorization is required.</p>
+    }
+    else if (Client.State.NeedsResync)
+    {
+        <p>Synchronizing current values…</p>
+    }
+    else
+    {
+        <ul>
+            @foreach (var point in Client.State.Points)
+            {
+                <li><code>@point.PointId</code>: @point.Value @point.Unit (@point.Quality)</li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    private readonly CancellationTokenSource cancellation = new();
+    private Task? polling;
+    private string? error;
+
+    [Parameter]
+    public Guid ScopeId { get; set; }
+
+    [Parameter]
+    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.RenderRequested += RenderAsync;
+        try
+        {
+            await Client.StartAsync(ScopeId, cancellation.Token);
+            polling = PollAsync(cancellation.Token);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            error = "Realtime connection failed.";
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        Client.RenderRequested -= RenderAsync;
+        await Client.DisposeAsync();
+        cancellation.Dispose();
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(PollInterval);
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            try
+            {
+                await Client.PollAsync(cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                Client.State.MarkDisconnected();
+                error = "Realtime connection interrupted.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+    }
+
+    private Task RenderAsync() => InvokeAsync(StateHasChanged);
+}

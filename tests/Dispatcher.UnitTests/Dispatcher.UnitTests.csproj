@@ -9,6 +9,14 @@
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Web\Dispatcher.Web.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Golden\simulator-core.trace" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
