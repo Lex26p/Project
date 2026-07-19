@@ -18,6 +18,8 @@
     <ProjectReference Include="..\..\src\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Web\Dispatcher.Web.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

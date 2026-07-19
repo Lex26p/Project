@@ -15,6 +15,8 @@
     <ProjectReference Include="..\..\src\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Web\Dispatcher.Web.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Golden\simulator-core.trace" CopyToOutputDirectory="PreserveNewest" />
