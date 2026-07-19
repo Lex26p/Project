@@ -127,6 +127,7 @@
       "dispatcher.configuration": {
         "type": "Project",
         "dependencies": {
+          "Dispatcher.Equipment": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.Persistence": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
@@ -179,6 +180,7 @@
       "dispatcher.server": {
         "type": "Project",
         "dependencies": {
+          "Dispatcher.Configuration": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Equipment": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",

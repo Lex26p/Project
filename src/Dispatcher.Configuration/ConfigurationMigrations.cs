@@ -94,5 +94,34 @@ public static class ConfigurationMigrations
                     BEFORE UPDATE ON {Schema}.revision
                     FOR EACH ROW EXECUTE FUNCTION {Schema}.protect_published_revision();
                 """),
+            new MigrationStep(
+                2,
+                "initial equipment configuration obligations",
+                $"""
+                CREATE TABLE {Schema}.initial_configuration_obligation (
+                    obligation_id uuid PRIMARY KEY,
+                    request_fingerprint character(64) NOT NULL,
+                    scope_id uuid NOT NULL,
+                    equipment_id uuid NOT NULL,
+                    protocol text NOT NULL,
+                    form_data jsonb NOT NULL,
+                    protected_secret bytea NULL,
+                    accepted_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX initial_configuration_scope_idx
+                    ON {Schema}.initial_configuration_obligation (scope_id, equipment_id);
+                CREATE TABLE {Schema}.obligation_audit (
+                    audit_id uuid PRIMARY KEY,
+                    obligation_id uuid NOT NULL,
+                    scope_id uuid NOT NULL,
+                    equipment_id uuid NOT NULL,
+                    session_id uuid NOT NULL,
+                    subject_id uuid NOT NULL,
+                    permission text NOT NULL,
+                    action text NOT NULL,
+                    changed_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX obligation_audit_scope_idx ON {Schema}.obligation_audit (scope_id, changed_at);
+                """),
         ]);
 }

@@ -84,6 +84,19 @@ public sealed partial class EquipmentStore
         return new EquipmentRegistry(scopeId, equipment, points);
     }
 
+    public async Task<EquipmentSnapshot?> ReadEquipmentAsync(
+        EquipmentId equipmentId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var equipment = await ReadEquipmentAsync(connection, transaction, equipmentId, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return equipment;
+    }
+
     public async Task<Result<EquipmentMutation>> CreateEquipmentAsync(
         AuthorizedAccess authorization,
         CreateEquipment request,

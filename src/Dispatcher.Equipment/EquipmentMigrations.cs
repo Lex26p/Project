@@ -49,5 +49,40 @@ public static class EquipmentMigrations
                 );
                 CREATE INDEX equipment_audit_scope_idx ON {Schema}.mutation_audit (scope_id, changed_at);
                 """),
+            new MigrationStep(
+                2,
+                "recoverable equipment staging rows",
+                $"""
+                CREATE TABLE {Schema}.staging_row (
+                    row_id uuid PRIMARY KEY,
+                    request_fingerprint character(64) NOT NULL,
+                    scope_id uuid NOT NULL,
+                    equipment_id uuid NOT NULL,
+                    location_id uuid NOT NULL,
+                    code text NOT NULL,
+                    name text NOT NULL,
+                    protocol text NOT NULL,
+                    form_data jsonb NOT NULL,
+                    protected_secret bytea NULL,
+                    state smallint NOT NULL CHECK (state BETWEEN 1 AND 3),
+                    version bigint NOT NULL CHECK (version > 0),
+                    created_at timestamp with time zone NOT NULL,
+                    updated_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX staging_scope_state_idx ON {Schema}.staging_row (scope_id, state, row_id);
+                CREATE TABLE {Schema}.staging_audit (
+                    audit_id uuid PRIMARY KEY,
+                    row_id uuid NOT NULL,
+                    scope_id uuid NOT NULL,
+                    equipment_id uuid NOT NULL,
+                    session_id uuid NOT NULL,
+                    subject_id uuid NOT NULL,
+                    permission text NOT NULL,
+                    action text NOT NULL,
+                    resulting_version bigint NOT NULL CHECK (resulting_version > 0),
+                    changed_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX staging_audit_scope_idx ON {Schema}.staging_audit (scope_id, changed_at);
+                """),
         ]);
 }

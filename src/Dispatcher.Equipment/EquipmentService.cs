@@ -54,6 +54,47 @@ public sealed class EquipmentService
         return await store.CreateEquipmentAsync(authorization.Value, request, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<Result<EquipmentMutation>> EnsureEquipmentAsync(
+        SessionSnapshot? session,
+        CreateEquipment request,
+        CancellationToken cancellationToken = default)
+    {
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session,
+            EquipmentPermissions.Write(request.ScopeId),
+            clock);
+        if (authorization.IsFailure)
+        {
+            return Result.Failure<EquipmentMutation>(authorization.Error!);
+        }
+
+        if (!await LocationBelongsToScopeAsync(request.LocationId, request.ScopeId, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return Failure("equipment.location_scope", "Equipment location must exist in the same scope.");
+        }
+
+        var existing = await store.ReadEquipmentAsync(request.EquipmentId, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            return Matches(existing, request)
+                ? Result.Success(new EquipmentMutation(existing.EquipmentId, existing.Version))
+                : Failure("equipment.identity_conflict", "Equipment identity is already used by different metadata.");
+        }
+
+        var created = await store.CreateEquipmentAsync(authorization.Value, request, cancellationToken)
+            .ConfigureAwait(false);
+        if (created.IsSuccess || created.Error?.Code.Value != "equipment.identity_conflict")
+        {
+            return created;
+        }
+
+        existing = await store.ReadEquipmentAsync(request.EquipmentId, cancellationToken).ConfigureAwait(false);
+        return existing is not null && Matches(existing, request)
+            ? Result.Success(new EquipmentMutation(existing.EquipmentId, existing.Version))
+            : created;
+    }
+
     public async Task<Result<EquipmentMutation>> MoveEquipmentAsync(
         SessionSnapshot? session,
         FacilityScopeId scopeId,
@@ -105,4 +146,10 @@ public sealed class EquipmentService
 
     private static Result<EquipmentMutation> Failure(string code, string message) =>
         Result.Failure<EquipmentMutation>(new OperationError(ErrorCode.From(code), message));
+
+    private static bool Matches(EquipmentSnapshot existing, CreateEquipment request) =>
+        existing.ScopeId == request.ScopeId &&
+        existing.LocationId == request.LocationId &&
+        string.Equals(existing.Code, request.Code.Trim(), StringComparison.Ordinal) &&
+        string.Equals(existing.Name, request.Name.Trim(), StringComparison.Ordinal);
 }

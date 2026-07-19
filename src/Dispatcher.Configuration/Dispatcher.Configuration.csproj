@@ -3,6 +3,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
     <PackageReference Include="Npgsql" />
   </ItemGroup>
   <ItemGroup>
