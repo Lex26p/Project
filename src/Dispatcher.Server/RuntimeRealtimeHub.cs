@@ -42,9 +42,18 @@ public sealed class RuntimeRealtimeHub : Hub
     }
 
     public Task<RuntimeSnapshotPayload> Bootstrap(Guid scopeId)
+        => BootstrapCore(scopeId, null);
+
+    public Task<RuntimeSnapshotPayload> BootstrapPoints(Guid scopeId, IReadOnlyCollection<Guid> pointIds)
+    {
+        ArgumentNullException.ThrowIfNull(pointIds);
+        return BootstrapCore(scopeId, pointIds.ToHashSet());
+    }
+
+    private Task<RuntimeSnapshotPayload> BootstrapCore(Guid scopeId, IReadOnlySet<Guid>? pointIds)
     {
         var session = sessionResolver.Resolve(Context.GetHttpContext());
-        var result = reader.ReadSnapshot(session, RuntimeScopeId.From(scopeId));
+        var result = reader.ReadSnapshot(session, RuntimeScopeId.From(scopeId), pointIds);
         if (result.IsFailure)
         {
             throw new HubException(result.Error!.Code.Value);
@@ -77,14 +86,18 @@ public sealed class RuntimeRealtimeHub : Hub
             return Task.FromResult(new RealtimePollPayload(RealtimePollKind.PermissionInvalidated));
         }
 
-        var currentSnapshot = reader.ReadSnapshot(session, subscription.ScopeId);
+        var currentSnapshot = reader.ReadSnapshot(session, subscription.ScopeId, subscription.PointIds);
         if (currentSnapshot.IsFailure || !currentSnapshot.Value.PointIds.SetEquals(subscription.PointIds))
         {
             subscriptions.Remove(Context.ConnectionId);
             return Task.FromResult(new RealtimePollPayload(RealtimePollKind.PermissionInvalidated));
         }
 
-        var result = reader.ReadDelta(session, subscription.ScopeId, subscription.CoreCursor);
+        var result = reader.ReadDelta(
+            session,
+            subscription.ScopeId,
+            subscription.CoreCursor,
+            subscription.PointIds);
         if (result.IsFailure)
         {
             subscriptions.Remove(Context.ConnectionId);

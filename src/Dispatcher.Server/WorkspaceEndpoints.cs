@@ -1,6 +1,7 @@
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
 using Dispatcher.Workspace;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 
 namespace Dispatcher.Server;
@@ -15,7 +16,7 @@ public static class WorkspaceEndpoints
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseRole);
-        services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
+        services.TryAddSingleton(_ => NpgsqlDataSource.Create(connectionString));
         services.AddSingleton(sp => new WorkspaceStore(
             sp.GetRequiredService<NpgsqlDataSource>(),
             databaseRole,
@@ -36,6 +37,12 @@ public static class WorkspaceEndpoints
             WorkspaceService workspace) =>
         {
             var session = sessions.Resolve(context);
+            var registry = context.RequestServices.GetService<RegistryProjectionService>();
+            if (registry is not null && RegistryRoutes.IsCanonical(route))
+            {
+                return ToHttpResult(registry.CanAccess(session, route));
+            }
+
             if (string.Equals(route.Split('?', 2)[0], "/current", StringComparison.OrdinalIgnoreCase))
             {
                 var access = SessionAuthorization.AuthorizeAccess(
@@ -68,6 +75,13 @@ public static class WorkspaceEndpoints
             if (session is not null && session.Permissions.Allows(RuntimePermissions.ReadCurrent))
             {
                 items.Add(new WorkspaceNavigationPayload("Current", "/current"));
+            }
+
+            var registry = context.RequestServices.GetService<RegistryProjectionService>();
+            if (registry?.ReadableScopes(session) is { IsSuccess: true } scopes && scopes.Value.Count > 0)
+            {
+                items.Add(new WorkspaceNavigationPayload("Locations", RegistryRoutes.Locations));
+                items.Add(new WorkspaceNavigationPayload("Equipment", RegistryRoutes.Equipment));
             }
 
             return Results.Ok(items);

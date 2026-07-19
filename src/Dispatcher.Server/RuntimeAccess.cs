@@ -52,7 +52,10 @@ public sealed class AuthorizedRuntimeReader
         this.clock = clock;
     }
 
-    public Result<AuthorizedRuntimeSnapshot> ReadSnapshot(SessionSnapshot? session, RuntimeScopeId scopeId)
+    public Result<AuthorizedRuntimeSnapshot> ReadSnapshot(
+        SessionSnapshot? session,
+        RuntimeScopeId scopeId,
+        IReadOnlySet<Guid>? requestedPointIds = null)
     {
         var authorization = SessionAuthorization.AuthorizeAccess(session, RuntimePermissions.ReadCurrent, clock);
         if (authorization.IsFailure)
@@ -66,17 +69,25 @@ public sealed class AuthorizedRuntimeReader
         }
 
         var snapshot = runtime!.GetSnapshot();
-        var points = Filter(snapshot.Entries, authorization.Value.Session.Permissions);
+        var permissions = authorization.Value.Session.Permissions;
+        var authorizedPointIds = requestedPointIds is null
+            ? null
+            : requestedPointIds
+                .Where(pointId => pointId != Guid.Empty)
+                .Where(pointId => permissions.Allows(RuntimePermissions.ReadPoint(PointId.From(pointId))))
+                .ToHashSet();
+        var points = Filter(snapshot.Entries, permissions, authorizedPointIds);
         return Result.Success(new AuthorizedRuntimeSnapshot(
             new RuntimeSnapshotPayload(scopeId.Value, 0, points),
             snapshot.Position.Value,
-            points.Select(point => point.PointId).ToHashSet()));
+            authorizedPointIds ?? points.Select(point => point.PointId).ToHashSet()));
     }
 
     public Result<AuthorizedRuntimeDelta> ReadDelta(
         SessionSnapshot? session,
         RuntimeScopeId scopeId,
-        ulong coreCursor)
+        ulong coreCursor,
+        IReadOnlySet<Guid>? requestedPointIds = null)
     {
         var authorization = SessionAuthorization.AuthorizeAccess(session, RuntimePermissions.ReadCurrent, clock);
         if (authorization.IsFailure)
@@ -100,14 +111,16 @@ public sealed class AuthorizedRuntimeReader
         }
 
         return Result.Success(new AuthorizedRuntimeDelta(
-            Filter(delta.Changes, authorization.Value.Session.Permissions),
+            Filter(delta.Changes, authorization.Value.Session.Permissions, requestedPointIds),
             delta.To.Value));
     }
 
     private static RuntimePointPayload[] Filter(
         IEnumerable<CurrentEntry> entries,
-        EffectivePermissions permissions) =>
+        EffectivePermissions permissions,
+        IReadOnlySet<Guid>? requestedPointIds) =>
         entries
+            .Where(entry => requestedPointIds is null || requestedPointIds.Contains(entry.PointId.Value))
             .Where(entry => permissions.Allows(RuntimePermissions.ReadPoint(entry.PointId)))
             .Select(ToPayload)
             .ToArray();
@@ -117,7 +130,10 @@ public sealed class AuthorizedRuntimeReader
         entry.Value.Value,
         entry.Unit.Symbol,
         entry.Quality.ToString(),
-        entry.Freshness.ToString());
+        entry.Freshness.ToString(),
+        entry.SourceTimestamp.Value,
+        entry.ReceiveTimestamp.Value,
+        entry.ProcessedTimestamp.Value);
 
     private static Result<TValue> Failure<TValue>(string code, string message) =>
         Result.Failure<TValue>(new OperationError(ErrorCode.From(code), message));

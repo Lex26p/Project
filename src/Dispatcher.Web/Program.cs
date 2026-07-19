@@ -16,5 +16,6 @@ builder.Services.AddTransient(sp =>
 });
 builder.Services.AddTransient<RealtimeWidgetClient>();
 builder.Services.AddTransient<WorkspaceApiClient>();
+builder.Services.AddTransient<RegistryApiClient>();
 
 await builder.Build().RunAsync();

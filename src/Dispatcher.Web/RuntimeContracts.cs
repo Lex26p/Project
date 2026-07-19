@@ -5,7 +5,10 @@ public sealed record RuntimePointPayload(
     long Value,
     string Unit,
     string Quality,
-    string Freshness);
+    string Freshness,
+    DateTimeOffset? SourceTimestamp = null,
+    DateTimeOffset? ReceiveTimestamp = null,
+    DateTimeOffset? ProcessedTimestamp = null);
 
 public sealed record RuntimeSnapshotPayload(
     Guid ScopeId,

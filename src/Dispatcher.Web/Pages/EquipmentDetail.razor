@@ -1,0 +1,53 @@
+@page "/equipment/{EquipmentId:guid}"
+@inject RegistryApiClient Api
+
+<PageTitle>Equipment</PageTitle>
+
+<GuardedContent Route="@($"/equipment/{EquipmentId:D}?scope={ScopeId:D}")">
+    @if (detail is null)
+    {
+        <p>Equipment is unavailable.</p>
+    }
+    else
+    {
+        <h1>@detail.Equipment.Code — @detail.Equipment.Name</h1>
+        <p>Location: <a href="@($"/locations/{detail.Location.LocationId:D}?scope={ScopeId:D}")">@detail.Location.Name</a></p>
+        <dl>
+            <dt>Current</dt><dd>@detail.CurrentStatus</dd>
+            <dt>Connection</dt><dd>@detail.ConnectionStatus — @detail.ConnectionStatusReason</dd>
+        </dl>
+        <section aria-label="Last current values">
+            <h2>Last current values</h2>
+            <ul>
+                @foreach (var point in detail.Points)
+                {
+                    <li>
+                        @point.Code — @point.Name:
+                        @if (point.Current is null)
+                        {
+                            <span>no accessible sample</span>
+                        }
+                        else
+                        {
+                            <span>@point.Current.Value @point.Current.Unit; @point.Current.Quality, @point.Current.Freshness; processed @point.Current.ProcessedTimestamp.ToString("u")</span>
+                        }
+                    </li>
+                }
+            </ul>
+        </section>
+        <EquipmentRealtimeWidget ScopeId="ScopeId" Points="detail.Points" />
+    }
+</GuardedContent>
+
+@code {
+    private EquipmentDetailPayload? detail;
+
+    [Parameter]
+    public Guid EquipmentId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "scope")]
+    public Guid ScopeId { get; set; }
+
+    protected override async Task OnParametersSetAsync() =>
+        detail = await Api.ReadEquipmentAsync(ScopeId, EquipmentId);
+}

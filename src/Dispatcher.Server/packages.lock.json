@@ -14,6 +14,25 @@
           "Dispatcher.Semantics": "[1.0.0, )"
         }
       },
+      "dispatcher.equipment": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Facilities": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
+      "dispatcher.facilities": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.persistence": {
         "type": "Project",
         "dependencies": {

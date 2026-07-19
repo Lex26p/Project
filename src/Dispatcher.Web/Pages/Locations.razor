@@ -1,0 +1,83 @@
+@page "/locations"
+@inject RegistryApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Locations</PageTitle>
+
+<GuardedContent Route="/locations">
+    <h1>Locations</h1>
+    @if (scopes is null)
+    {
+        <p>Loading locations…</p>
+    }
+    else if (scopes.Count == 0)
+    {
+        <p>No accessible location scope.</p>
+    }
+    else
+    {
+        <label>
+            Scope
+            <select value="@selectedScope" @onchange="SelectScopeAsync">
+                @foreach (var scope in scopes)
+                {
+                    <option value="@scope.ScopeId">@scope.Label (@scope.LocationCount)</option>
+                }
+            </select>
+        </label>
+        <label>Filter <input @bind="query" /></label>
+        <button type="button" @onclick="LoadAsync">Search</button>
+        @if (locations is not null)
+        {
+            <p>@locations.Total location(s)</p>
+            <ul>
+                @foreach (var location in locations.Items)
+                {
+                    <li>
+                        <a href="@($"/locations/{location.LocationId:D}?scope={selectedScope:D}")">
+                            @location.Code — @location.Name
+                        </a>
+                        (@location.ChildCount child, @location.EquipmentCount equipment)
+                    </li>
+                }
+            </ul>
+        }
+    }
+</GuardedContent>
+
+@code {
+    private IReadOnlyList<RegistryScopePayload>? scopes;
+    private LocationListPayload? locations;
+    private Guid selectedScope;
+    private string query = string.Empty;
+
+    [SupplyParameterFromQuery(Name = "scope")]
+    public Guid? RequestedScope { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        scopes = await Api.ReadScopesAsync() ?? [];
+        selectedScope = scopes.Any(scope => scope.ScopeId == RequestedScope)
+            ? RequestedScope!.Value
+            : scopes.FirstOrDefault()?.ScopeId ?? Guid.Empty;
+        await LoadAsync();
+    }
+
+    private async Task SelectScopeAsync(ChangeEventArgs args)
+    {
+        if (Guid.TryParse(args.Value?.ToString(), out var value))
+        {
+            selectedScope = value;
+            Navigation.NavigateTo($"/locations?scope={selectedScope:D}", false, true);
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (selectedScope != Guid.Empty)
+        {
+            locations = await Api.ReadLocationsAsync(selectedScope, query);
+        }
+    }
+}

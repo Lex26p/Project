@@ -7,6 +7,7 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
     private readonly HubConnection connection;
     private readonly RealtimeWidgetState state = new();
     private Guid scopeId;
+    private IReadOnlyCollection<Guid>? pointIds;
 
     public RealtimeWidgetClient(HubConnection connection)
     {
@@ -19,9 +20,13 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
 
     public RealtimeWidgetState State => state;
 
-    public async Task StartAsync(Guid runtimeScopeId, CancellationToken cancellationToken)
+    public async Task StartAsync(
+        Guid runtimeScopeId,
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<Guid>? requestedPointIds = null)
     {
         scopeId = runtimeScopeId;
+        pointIds = requestedPointIds;
         if (connection.State == HubConnectionState.Disconnected)
         {
             await connection.StartAsync(cancellationToken);
@@ -63,10 +68,16 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
 
     private async Task ResnapshotAsync(CancellationToken cancellationToken)
     {
-        var snapshot = await connection.InvokeAsync<RuntimeSnapshotPayload>(
-            "Bootstrap",
-            scopeId,
-            cancellationToken);
+        var snapshot = pointIds is null
+            ? await connection.InvokeAsync<RuntimeSnapshotPayload>(
+                "Bootstrap",
+                scopeId,
+                cancellationToken)
+            : await connection.InvokeAsync<RuntimeSnapshotPayload>(
+                "BootstrapPoints",
+                scopeId,
+                pointIds,
+                cancellationToken);
         state.ApplySnapshot(snapshot);
         await RequestRenderIfNeededAsync();
     }

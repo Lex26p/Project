@@ -1,0 +1,84 @@
+@implements IAsyncDisposable
+@inject RealtimeWidgetClient Client
+
+<section aria-label="Equipment realtime values">
+    @if (Client.State.PermissionInvalidated)
+    {
+        <p role="alert">Current-value access changed.</p>
+    }
+    else if (Client.State.NeedsResync)
+    {
+        <p>Synchronizing current values…</p>
+    }
+    else
+    {
+        <dl>
+            @foreach (var definition in Points)
+            {
+                var current = Client.State.Points.SingleOrDefault(point => point.PointId == definition.PointId);
+                <dt>@definition.Name</dt>
+                <dd>
+                    @if (current is null)
+                    {
+                        <span>No accessible sample</span>
+                    }
+                    else
+                    {
+                        <span>@current.Value @current.Unit — @current.Quality, @current.Freshness</span>
+                    }
+                </dd>
+            }
+        </dl>
+    }
+</section>
+
+@code {
+    private readonly CancellationTokenSource cancellation = new();
+    private Task? polling;
+
+    [Parameter]
+    public Guid ScopeId { get; set; }
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<EquipmentPointPayload> Points { get; set; } = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.RenderRequested += RenderAsync;
+        await Client.StartAsync(
+            ScopeId,
+            cancellation.Token,
+            Points.Select(point => point.PointId).ToArray());
+        polling = PollAsync(cancellation.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        Client.RenderRequested -= RenderAsync;
+        await Client.DisposeAsync();
+        cancellation.Dispose();
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            await Client.PollAsync(cancellationToken);
+        }
+    }
+
+    private Task RenderAsync() => InvokeAsync(StateHasChanged);
+}

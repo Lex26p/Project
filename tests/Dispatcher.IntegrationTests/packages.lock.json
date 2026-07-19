@@ -170,6 +170,8 @@
         "type": "Project",
         "dependencies": {
           "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Equipment": "[1.0.0, )",
+          "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Dispatcher.Workspace": "[1.0.0, )",

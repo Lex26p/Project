@@ -1,0 +1,53 @@
+@page "/locations/{LocationId:guid}"
+@inject RegistryApiClient Api
+
+<PageTitle>Location</PageTitle>
+
+<GuardedContent Route="@($"/locations/{LocationId:D}?scope={ScopeId:D}")">
+    @if (detail is null || plan is null)
+    {
+        <p>Location is unavailable.</p>
+    }
+    else
+    {
+        <h1>@detail.Location.Code — @detail.Location.Name</h1>
+        <p>
+            @foreach (var ancestor in plan.Ancestors)
+            {
+                <a href="@($"/locations/{ancestor.LocationId:D}?scope={ScopeId:D}")">@ancestor.Name</a>
+                <span> / </span>
+            }
+            @detail.Location.Name
+        </p>
+        <section aria-label="Physical children">
+            <h2>Children</h2>
+            <ul>@foreach (var child in detail.Children) { <li><a href="@($"/locations/{child.LocationId:D}?scope={ScopeId:D}")">@child.Code — @child.Name</a></li> }</ul>
+        </section>
+        <section aria-label="Equipment at location">
+            <h2>Equipment</h2>
+            <ul>@foreach (var item in detail.Equipment) { <li><a href="@($"/equipment/{item.EquipmentId:D}?scope={ScopeId:D}")">@item.Code — @item.Name</a></li> }</ul>
+        </section>
+        <section aria-label="Functional relations">
+            <h2>Functional relations</h2>
+            <p>Incoming: @string.Join(", ", detail.FunctionalIncoming.Select(item => item.Name))</p>
+            <p>Outgoing: @string.Join(", ", detail.FunctionalOutgoing.Select(item => item.Name))</p>
+        </section>
+    }
+</GuardedContent>
+
+@code {
+    private LocationDetailPayload? detail;
+    private LocationPlanContextPayload? plan;
+
+    [Parameter]
+    public Guid LocationId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "scope")]
+    public Guid ScopeId { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        detail = await Api.ReadLocationAsync(ScopeId, LocationId);
+        plan = await Api.ReadPlanContextAsync(ScopeId, LocationId);
+    }
+}
