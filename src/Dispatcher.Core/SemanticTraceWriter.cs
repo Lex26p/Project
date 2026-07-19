@@ -16,6 +16,8 @@ public static class SemanticTraceWriter
             trace.Append(";scope=").Append(entry.ScopeId.Value.ToString("D"));
             trace.Append(";source=").Append(entry.SourceId.Value.ToString("D"));
             trace.Append(";point=").Append(entry.PointId.Value.ToString("D"));
+            trace.Append(";binding=").Append(entry.BindingGeneration.Value.ToString(CultureInfo.InvariantCulture));
+            trace.Append(";session=").Append(entry.SessionGeneration.Value.ToString(CultureInfo.InvariantCulture));
             trace.Append(";value=").Append(entry.Value.Value.ToString(CultureInfo.InvariantCulture));
             trace.Append(";unit=").Append(entry.Unit.Symbol);
             trace.Append(";quality=").Append(entry.Quality);

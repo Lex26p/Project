@@ -35,18 +35,13 @@ public sealed class SimulatorWalkingSkeletonTests
         var clock = new DeterministicClock(Start, TimeSpan.FromSeconds(1), 100, 10);
         var scenario = new SimulatorScenario(CreateConfig(), clock);
         var runtime = new CoreRuntime(ScopeId, clock, clock);
+        Assert.True(runtime.ActivateBinding(CreateBinding()).IsSuccess);
 
-        foreach (var observation in scenario.NextStep())
-        {
-            Assert.True(runtime.Admit(observation).IsSuccess);
-        }
+        Assert.True(ApplyStep(runtime, scenario, 1).IsSuccess);
 
         var firstDelta = runtime.GetDelta(new ConsumerCursor<CurrentEntry>(0));
         var firstSnapshot = runtime.GetSnapshot();
-        foreach (var observation in scenario.NextStep())
-        {
-            Assert.True(runtime.Admit(observation).IsSuccess);
-        }
+        Assert.True(ApplyStep(runtime, scenario, 2).IsSuccess);
 
         var secondDelta = runtime.GetDelta(firstDelta.To);
         var finalSnapshot = runtime.GetSnapshot();
@@ -94,10 +89,11 @@ public sealed class SimulatorWalkingSkeletonTests
     }
 
     [Fact]
-    public void CoreRejectsObservationFromAnotherScope()
+    public void RuntimeCutRejectsObservationFromAnotherScope()
     {
         var clock = new DeterministicClock(Start, TimeSpan.FromSeconds(1), 100, 10);
         var runtime = new CoreRuntime(ScopeId, clock, clock);
+        Assert.True(runtime.ActivateBinding(CreateBinding()).IsSuccess);
         var foreignScope = RuntimeScopeId.From(Guid.Parse("aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"));
         var observation = new SourceObservation(
             foreignScope,
@@ -110,9 +106,9 @@ public sealed class SimulatorWalkingSkeletonTests
             Freshness.Fresh,
             SourceTimestamp.FromUtc(Start));
 
-        var result = runtime.Admit(observation);
+        var result = RuntimeCut.Normalize(CreateBinding(), 1, [observation]);
 
-        Assert.Equal("core.scope_mismatch", result.Error?.Code.Value);
+        Assert.Equal("core.cut_binding", result.Error?.Code.Value);
         Assert.Empty(runtime.GetSnapshot().Entries);
     }
 
@@ -122,13 +118,11 @@ public sealed class SimulatorWalkingSkeletonTests
         var scenario = new SimulatorScenario(CreateConfig(), clock);
         var runtime = new CoreRuntime(ScopeId, clock, clock);
         var entries = new List<CurrentEntry>();
+        Assert.True(runtime.ActivateBinding(CreateBinding()).IsSuccess);
 
         for (var step = 0; step < 2; step++)
         {
-            foreach (var observation in scenario.NextStep())
-            {
-                entries.Add(runtime.Admit(observation).Value);
-            }
+            entries.AddRange(ApplyStep(runtime, scenario, checked((ulong)step + 1)).Value.CurrentTransitions);
         }
 
         return SemanticTraceWriter.Write(entries);
@@ -142,6 +136,23 @@ public sealed class SimulatorWalkingSkeletonTests
             new SimulatorPointConfig(PointB, 200, 10, Unit.FromSymbol("bar")),
             new SimulatorPointConfig(PointA, 100, 5, Unit.FromSymbol("°C")),
         ]);
+
+    private static SourceBinding CreateBinding() => new(
+        ScopeId,
+        SourceId,
+        SourceBindingGeneration.From(1),
+        SourceSessionGeneration.From(1));
+
+    private static Result<RuntimeCutAcceptance> ApplyStep(
+        CoreRuntime runtime,
+        SimulatorScenario scenario,
+        ulong scheduleSequence)
+    {
+        var cut = RuntimeCut.Normalize(CreateBinding(), scheduleSequence, scenario.NextStep());
+        return cut.IsSuccess
+            ? runtime.Apply(cut.Value)
+            : Result.Failure<RuntimeCutAcceptance>(cut.Error!);
+    }
 
     private sealed class DeterministicClock : IWallClock, IMonotonicClock
     {

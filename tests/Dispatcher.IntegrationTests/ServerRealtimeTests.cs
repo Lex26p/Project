@@ -199,7 +199,13 @@ public sealed class ServerRealtimeTests
 
         private void Admit(SourceId sourceId, PointId pointId, long value, ulong sourcePosition)
         {
-            var result = runtime.Admit(new SourceObservation(
+            var binding = new SourceBinding(
+                ScopeId,
+                sourceId,
+                SourceBindingGeneration.From(1),
+                SourceSessionGeneration.From(1));
+            Assert.True(runtime.ActivateBinding(binding).IsSuccess);
+            var observation = new SourceObservation(
                 ScopeId,
                 sourceId,
                 pointId,
@@ -208,8 +214,10 @@ public sealed class ServerRealtimeTests
                 Unit.FromSymbol("°C"),
                 DataQuality.Good,
                 Freshness.Fresh,
-                SourceTimestamp.FromUtc(ObservationTime.AddSeconds(sourcePosition))));
-            Assert.True(result.IsSuccess);
+                SourceTimestamp.FromUtc(ObservationTime.AddSeconds(sourcePosition)));
+            var cut = RuntimeCut.Normalize(binding, sourcePosition, [observation]);
+            Assert.True(cut.IsSuccess);
+            Assert.True(runtime.Apply(cut.Value).IsSuccess);
         }
     }
 }

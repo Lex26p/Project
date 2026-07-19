@@ -260,26 +260,42 @@ public sealed class RegistryProjectionTests
                 var runtimeScope = RuntimeScopeId.From(scopeA.Value);
                 var runtime = new CoreRuntime(runtimeScope, SystemClock.Instance, SystemClock.Instance);
                 app.Services.GetRequiredService<RuntimeRegistry>().Add(runtimeScope, runtime);
-                Assert.True(runtime.Admit(new SourceObservation(
+                var allowedBinding = new SourceBinding(
                     runtimeScope,
                     SourceId.From(Guid.Parse("65000000-0000-0000-0000-000000000011")),
+                    SourceBindingGeneration.From(1),
+                    SourceSessionGeneration.From(1));
+                var hiddenBinding = new SourceBinding(
+                    runtimeScope,
+                    SourceId.From(Guid.Parse("65000000-0000-0000-0000-000000000012")),
+                    SourceBindingGeneration.From(1),
+                    SourceSessionGeneration.From(1));
+                Assert.True(runtime.ActivateBinding(allowedBinding).IsSuccess);
+                Assert.True(runtime.ActivateBinding(hiddenBinding).IsSuccess);
+                var allowedCut = RuntimeCut.Normalize(allowedBinding, 1, [new SourceObservation(
+                    runtimeScope,
+                    allowedBinding.SourceId,
                     allowedPoint,
                     new OwnerPosition<SourceObservation>(1),
                     TypedValue.From(21L),
                     Unit.FromSymbol("C"),
                     DataQuality.Good,
                     Freshness.Stale,
-                    SourceTimestamp.FromUtc(now))).IsSuccess);
-                Assert.True(runtime.Admit(new SourceObservation(
+                    SourceTimestamp.FromUtc(now))]);
+                var hiddenCut = RuntimeCut.Normalize(hiddenBinding, 1, [new SourceObservation(
                     runtimeScope,
-                    SourceId.From(Guid.Parse("65000000-0000-0000-0000-000000000012")),
+                    hiddenBinding.SourceId,
                     hiddenPoint,
                     new OwnerPosition<SourceObservation>(1),
                     TypedValue.From(99L),
                     Unit.FromSymbol("C"),
                     DataQuality.Good,
                     Freshness.Fresh,
-                    SourceTimestamp.FromUtc(now))).IsSuccess);
+                    SourceTimestamp.FromUtc(now))]);
+                Assert.True(allowedCut.IsSuccess);
+                Assert.True(hiddenCut.IsSuccess);
+                Assert.True(runtime.Apply(allowedCut.Value).IsSuccess);
+                Assert.True(runtime.Apply(hiddenCut.Value).IsSuccess);
 
                 await app.StartAsync();
                 var address = new Uri(Assert.Single(app.Services
