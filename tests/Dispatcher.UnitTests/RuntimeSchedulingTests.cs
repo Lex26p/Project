@@ -21,6 +21,17 @@ public sealed class RuntimeSchedulingTests
         Guid.Parse("93000000-0000-0000-0000-000000000002"));
     private static readonly DateTimeOffset Start = new(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
 
+    [Theory]
+    [InlineData(RuntimeFactClass.CurrentCheckpoint, RuntimeFactProtection.Rebuildable)]
+    [InlineData(RuntimeFactClass.SourceCut, RuntimeFactProtection.Protected)]
+    [InlineData(RuntimeFactClass.SourceGap, RuntimeFactProtection.Protected)]
+    public void RuntimeFactsHaveExplicitRecoveryClassification(
+        RuntimeFactClass factClass,
+        RuntimeFactProtection expected)
+    {
+        Assert.Equal(expected, RuntimeFactClassifier.Classify(factClass));
+    }
+
     [Fact]
     public void SchedulerBoundsBindingsAndInFlightAttemptsWithExplicitMissedPolicy()
     {

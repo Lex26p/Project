@@ -143,6 +143,101 @@ public sealed class CoreRuntime
         }
     }
 
+    public Result ApplyGap(RuntimeSourceGap gap)
+    {
+        ArgumentNullException.ThrowIfNull(gap);
+        lock (sync)
+        {
+            if (gap.Binding.ScopeId != scopeId)
+            {
+                return Failure("core.scope_mismatch", "Source gap belongs to another runtime scope.");
+            }
+
+            if (!bindings.TryGetValue(gap.Binding.SourceId, out var active) || active != gap.Binding)
+            {
+                return Failure("core.binding_stale", "Source gap binding is not active.");
+            }
+
+            sourcePositions.TryGetValue(gap.Binding.SourceId, out var lastSourcePosition);
+            if (gap.FirstSourcePosition != checked(lastSourcePosition + 1))
+            {
+                return Failure("core.source_position", "Source gap does not start at the next source position.");
+            }
+
+            sourcePositions[gap.Binding.SourceId] = gap.LastSourcePosition;
+            return Result.Success();
+        }
+    }
+
+    public CoreRuntimeCheckpoint CaptureCheckpoint()
+    {
+        lock (sync)
+        {
+            return new CoreRuntimeCheckpoint(
+                scopeId,
+                new OwnerPosition<CurrentEntry>(currentPosition),
+                new OwnerPosition<SourceLiveness>(livenessPosition),
+                bindings.Values
+                    .OrderBy(binding => binding.SourceId.Value)
+                    .Select(binding => new SourceRuntimeCheckpoint(
+                        binding,
+                        sourcePositions.GetValueOrDefault(binding.SourceId)))
+                    .ToArray(),
+                current.Values.OrderBy(entry => entry.PointId.Value).ToArray(),
+                liveness.Values.OrderBy(item => item.SourceId.Value).ToArray());
+        }
+    }
+
+    public Result Restore(CoreRuntimeCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        lock (sync)
+        {
+            if (checkpoint.ScopeId != scopeId)
+            {
+                return Failure("core.scope_mismatch", "Runtime checkpoint belongs to another scope.");
+            }
+
+            if (bindings.Count != 0 || current.Count != 0 || liveness.Count != 0 ||
+                currentPosition != 0 || livenessPosition != 0)
+            {
+                return Failure("core.restore_not_empty", "A runtime checkpoint can only restore an empty runtime.");
+            }
+
+            if (checkpoint.Sources.Select(item => item.Binding.SourceId).Distinct().Count() != checkpoint.Sources.Count ||
+                checkpoint.Current.Select(item => item.PointId).Distinct().Count() != checkpoint.Current.Count ||
+                checkpoint.Liveness.Select(item => item.SourceId).Distinct().Count() != checkpoint.Liveness.Count ||
+                checkpoint.Sources.Any(item => item.Binding.ScopeId != scopeId) ||
+                checkpoint.Current.Any(item => item.ScopeId != scopeId) ||
+                checkpoint.Liveness.Any(item => item.ScopeId != scopeId) ||
+                checkpoint.Current.Any(item => item.CurrentPosition.Value > checkpoint.CurrentPosition.Value) ||
+                checkpoint.Liveness.Any(item => item.LivenessPosition.Value > checkpoint.LivenessPosition.Value))
+            {
+                return Failure("core.checkpoint_invalid", "Runtime checkpoint invariants are invalid.");
+            }
+
+            foreach (var source in checkpoint.Sources)
+            {
+                bindings.Add(source.Binding.SourceId, source.Binding);
+                sourcePositions.Add(source.Binding.SourceId, source.SourcePosition);
+            }
+
+            foreach (var entry in checkpoint.Current)
+            {
+                current.Add(entry.PointId, entry);
+            }
+
+            foreach (var item in checkpoint.Liveness)
+            {
+                liveness.Add(item.SourceId, item);
+            }
+
+            currentPosition = checkpoint.CurrentPosition.Value;
+            livenessPosition = checkpoint.LivenessPosition.Value;
+            return Result.Success();
+        }
+    }
+
     public CurrentSnapshot GetSnapshot()
     {
         lock (sync)
