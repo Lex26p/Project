@@ -286,12 +286,12 @@ public sealed partial class AlarmStore
         await using var command = new NpgsqlCommand(
             $"""
             INSERT INTO {AlarmMigrations.Schema}.occurrence (
-                occurrence_id, scope_id, definition_epoch, definition_id, point_id,
+                occurrence_id, scope_id, definition_epoch, definition_id, point_id, priority,
                 opened_at, condition_state, condition_active_since, condition_version,
                 acknowledgement_state, acknowledgement_version, assignment_version,
                 shelving_version, is_suppressed, suppression_version)
             VALUES (
-                @occurrence_id, @scope_id, @definition_epoch, @definition_id, @point_id,
+                @occurrence_id, @scope_id, @definition_epoch, @definition_id, @point_id, @priority,
                 @opened_at, @condition_state, @opened_at, 1, 1, 1, 1, 1, false, 1);
             """,
             connection,
@@ -301,6 +301,7 @@ public sealed partial class AlarmStore
         command.Parameters.AddWithValue("definition_epoch", checked((long)epoch.Value));
         command.Parameters.AddWithValue("definition_id", definition.DefinitionId.Value);
         command.Parameters.AddWithValue("point_id", definition.PointId.Value);
+        command.Parameters.AddWithValue("priority", (short)definition.Priority);
         command.Parameters.AddWithValue("opened_at", openedAt);
         command.Parameters.AddWithValue("condition_state", (short)AlarmConditionState.Active);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -414,7 +415,7 @@ public sealed partial class AlarmStore
         await using var command = new NpgsqlCommand(
             $"""
             SELECT definition_id, point_id, name, direction, threshold, hysteresis,
-                   raise_delay_ticks, clear_delay_ticks, enabled
+                   raise_delay_ticks, clear_delay_ticks, enabled, priority
             FROM {AlarmMigrations.Schema}.definition
             WHERE scope_id = @scope_id AND epoch = @epoch
             ORDER BY definition_id;
@@ -436,7 +437,8 @@ public sealed partial class AlarmStore
                 reader.GetInt64(5),
                 TimeSpan.FromTicks(reader.GetInt64(6)),
                 TimeSpan.FromTicks(reader.GetInt64(7)),
-                reader.GetBoolean(8)));
+                reader.GetBoolean(8),
+                (AlarmPriority)reader.GetInt16(9)));
         }
 
         return definitions;
@@ -482,7 +484,7 @@ public sealed partial class AlarmStore
     {
         await using var command = new NpgsqlCommand(
             $"""
-            SELECT occurrence_id, definition_epoch, definition_id, point_id, opened_at, closed_at,
+            SELECT occurrence_id, definition_epoch, definition_id, point_id, priority, opened_at, closed_at,
                    condition_state, condition_pending_since, condition_active_since, condition_cleared_at,
                    condition_version, acknowledgement_state, acknowledged_by, acknowledged_at,
                    acknowledgement_version, assigned_to, assigned_at, assignment_version,
@@ -505,31 +507,32 @@ public sealed partial class AlarmStore
                 RevisionNumber.From(checked((ulong)reader.GetInt64(1))),
                 AlarmDefinitionId.From(reader.GetGuid(2)),
                 PointId.From(reader.GetGuid(3)),
-                reader.GetFieldValue<DateTimeOffset>(4),
-                reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
+                (AlarmPriority)reader.GetInt16(4),
+                reader.GetFieldValue<DateTimeOffset>(5),
+                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
                 new AlarmConditionFacet(
-                    (AlarmConditionState)reader.GetInt16(6),
-                    reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
+                    (AlarmConditionState)reader.GetInt16(7),
                     reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
                     reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9),
-                    StateVersion.From(checked((ulong)reader.GetInt64(10)))),
+                    reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10),
+                    StateVersion.From(checked((ulong)reader.GetInt64(11)))),
                 new AlarmAcknowledgementFacet(
-                    (AlarmAcknowledgementState)reader.GetInt16(11),
-                    reader.IsDBNull(12) ? null : reader.GetGuid(12),
-                    reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13),
-                    StateVersion.From(checked((ulong)reader.GetInt64(14)))),
+                    (AlarmAcknowledgementState)reader.GetInt16(12),
+                    reader.IsDBNull(13) ? null : reader.GetGuid(13),
+                    reader.IsDBNull(14) ? null : reader.GetFieldValue<DateTimeOffset>(14),
+                    StateVersion.From(checked((ulong)reader.GetInt64(15)))),
                 new AlarmAssignmentFacet(
-                    reader.IsDBNull(15) ? null : reader.GetGuid(15),
-                    reader.IsDBNull(16) ? null : reader.GetFieldValue<DateTimeOffset>(16),
-                    StateVersion.From(checked((ulong)reader.GetInt64(17)))),
+                    reader.IsDBNull(16) ? null : reader.GetGuid(16),
+                    reader.IsDBNull(17) ? null : reader.GetFieldValue<DateTimeOffset>(17),
+                    StateVersion.From(checked((ulong)reader.GetInt64(18)))),
                 new AlarmShelvingFacet(
-                    reader.IsDBNull(18) ? null : reader.GetFieldValue<DateTimeOffset>(18),
-                    reader.IsDBNull(19) ? null : reader.GetString(19),
-                    StateVersion.From(checked((ulong)reader.GetInt64(20)))),
+                    reader.IsDBNull(19) ? null : reader.GetFieldValue<DateTimeOffset>(19),
+                    reader.IsDBNull(20) ? null : reader.GetString(20),
+                    StateVersion.From(checked((ulong)reader.GetInt64(21)))),
                 new AlarmSuppressionFacet(
-                    reader.GetBoolean(21),
-                    reader.IsDBNull(22) ? null : reader.GetString(22),
-                    StateVersion.From(checked((ulong)reader.GetInt64(23))))));
+                    reader.GetBoolean(22),
+                    reader.IsDBNull(23) ? null : reader.GetString(23),
+                    StateVersion.From(checked((ulong)reader.GetInt64(24))))));
         }
 
         return occurrences;
@@ -565,10 +568,10 @@ public sealed partial class AlarmStore
                 $"""
                 INSERT INTO {AlarmMigrations.Schema}.definition (
                     scope_id, epoch, definition_id, point_id, name, direction, threshold,
-                    hysteresis, raise_delay_ticks, clear_delay_ticks, enabled)
+                    hysteresis, raise_delay_ticks, clear_delay_ticks, enabled, priority)
                 VALUES (
                     @scope_id, @epoch, @definition_id, @point_id, @name, @direction, @threshold,
-                    @hysteresis, @raise_delay_ticks, @clear_delay_ticks, @enabled);
+                    @hysteresis, @raise_delay_ticks, @clear_delay_ticks, @enabled, @priority);
                 """,
                 connection,
                 transaction);
@@ -583,6 +586,7 @@ public sealed partial class AlarmStore
             command.Parameters.AddWithValue("raise_delay_ticks", definition.RaiseDelay.Ticks);
             command.Parameters.AddWithValue("clear_delay_ticks", definition.ClearDelay.Ticks);
             command.Parameters.AddWithValue("enabled", definition.Enabled);
+            command.Parameters.AddWithValue("priority", (short)definition.Priority);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -715,6 +719,7 @@ public sealed partial class AlarmStore
             RaiseDelayTicks = item.RaiseDelay.Ticks,
             ClearDelayTicks = item.ClearDelay.Ticks,
             item.Enabled,
+            Priority = (int)item.Priority,
         });
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(canonical))));
     }

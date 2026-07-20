@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Dispatcher.Alarm;
 using Dispatcher.Core;
 using Dispatcher.Events;
 using Dispatcher.Platform;
@@ -230,6 +231,7 @@ public sealed class EventRealtimeHub : Hub
         record.Version.Value,
         record.Occurrence.OccurrenceId.Value,
         record.Occurrence.PointId.Value,
+        record.Occurrence.Priority.ToString(),
         record.Occurrence.Condition.State.ToString(),
         record.Occurrence.Condition.Version.Value,
         record.Occurrence.Acknowledgement.State.ToString(),
@@ -273,6 +275,7 @@ public static class EventEndpoints
         Guid scopeId,
         Guid[]? pointIds,
         OperationalEventKind[]? kinds,
+        AlarmPriority[]? priorities,
         DateTimeOffset? from,
         DateTimeOffset? to,
         int pageSize,
@@ -285,7 +288,7 @@ public static class EventEndpoints
     {
         var result = await dispatcher.QueryAsync(
             sessions.Resolve(context),
-            Request(scopeId, pointIds, kinds, from, to, pageSize, after, upper),
+            Request(scopeId, pointIds, kinds, priorities, from, to, pageSize, after, upper),
             cancellationToken).ConfigureAwait(false);
         return result.IsSuccess
             ? Results.Ok(new EventPagePayload(
@@ -300,6 +303,7 @@ public static class EventEndpoints
         Guid scopeId,
         Guid[]? pointIds,
         OperationalEventKind[]? kinds,
+        AlarmPriority[]? priorities,
         DateTimeOffset? from,
         DateTimeOffset? to,
         HttpContext context,
@@ -309,7 +313,7 @@ public static class EventEndpoints
     {
         var result = await dispatcher.CountAsync(
             sessions.Resolve(context),
-            Request(scopeId, pointIds, kinds, from, to, 1, null, null),
+            Request(scopeId, pointIds, kinds, priorities, from, to, 1, null, null),
             cancellationToken).ConfigureAwait(false);
         return result.IsSuccess ? Results.Ok(result.Value) : Problem(result.Error!);
     }
@@ -318,6 +322,7 @@ public static class EventEndpoints
         Guid scopeId,
         Guid[]? pointIds,
         OperationalEventKind[]? kinds,
+        AlarmPriority[]? priorities,
         DateTimeOffset? from,
         DateTimeOffset? to,
         int pageSize,
@@ -331,7 +336,8 @@ public static class EventEndpoints
         pageSize,
         after is not null && upper is not null
             ? new EventQueryCursor(new EventJournalPosition(after.Value), new EventJournalPosition(upper.Value))
-            : null);
+            : null,
+        priorities?.ToHashSet());
 
     private static EventPayload ToPayload(OperationalEventRecord record) => new(
         record.EventId.Value,
@@ -339,6 +345,7 @@ public static class EventEndpoints
         record.PointId.Value,
         record.OccurrenceId.Value,
         record.SourceConditionVersion.Value,
+        record.Priority.ToString(),
         record.Kind.ToString(),
         record.OccurredAt,
         record.AcceptedAt);
@@ -360,6 +367,7 @@ public sealed record EventPayload(
     Guid PointId,
     Guid OccurrenceId,
     ulong SourceConditionVersion,
+    string Priority,
     string Kind,
     DateTimeOffset OccurredAt,
     DateTimeOffset AcceptedAt);
@@ -374,6 +382,7 @@ public sealed record OccurrencePayload(
     ulong ProjectionVersion,
     Guid OccurrenceId,
     Guid PointId,
+    string Priority,
     string ConditionState,
     ulong ConditionVersion,
     string AcknowledgementState,

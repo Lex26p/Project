@@ -55,6 +55,14 @@ public enum AlarmAcknowledgementState
     Acknowledged = 2,
 }
 
+public enum AlarmPriority
+{
+    Low = 1,
+    Medium = 2,
+    High = 3,
+    Critical = 4,
+}
+
 public sealed record AlarmDefinition
 {
     public AlarmDefinition(
@@ -66,7 +74,8 @@ public sealed record AlarmDefinition
         long hysteresis,
         TimeSpan raiseDelay,
         TimeSpan clearDelay,
-        bool enabled = true)
+        bool enabled = true,
+        AlarmPriority priority = AlarmPriority.Medium)
     {
         _ = definitionId.Value;
         _ = pointId.Value;
@@ -84,6 +93,11 @@ public sealed record AlarmDefinition
             throw new ArgumentOutOfRangeException(nameof(direction));
         }
 
+        if (!Enum.IsDefined(priority))
+        {
+            throw new ArgumentOutOfRangeException(nameof(priority));
+        }
+
         DefinitionId = definitionId;
         PointId = pointId;
         Name = name.Trim();
@@ -93,6 +107,7 @@ public sealed record AlarmDefinition
         RaiseDelay = raiseDelay;
         ClearDelay = clearDelay;
         Enabled = enabled;
+        Priority = priority;
     }
 
     public AlarmDefinitionId DefinitionId { get; }
@@ -112,6 +127,8 @@ public sealed record AlarmDefinition
     public TimeSpan ClearDelay { get; }
 
     public bool Enabled { get; }
+
+    public AlarmPriority Priority { get; }
 }
 
 public sealed record AlarmDefinitionSet
@@ -180,6 +197,7 @@ public sealed record AlarmOccurrenceSnapshot(
     RevisionNumber DefinitionEpoch,
     AlarmDefinitionId DefinitionId,
     PointId PointId,
+    AlarmPriority Priority,
     DateTimeOffset OpenedAt,
     DateTimeOffset? ClosedAt,
     AlarmConditionFacet Condition,

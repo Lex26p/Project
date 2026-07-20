@@ -79,5 +79,16 @@ public static class EventMigrations
                     BEFORE UPDATE OR DELETE ON {Schema}.projection_change
                     FOR EACH ROW EXECUTE FUNCTION {Schema}.reject_event_mutation();
                 """),
+            new MigrationStep(
+                2,
+                "alarm priority projection",
+                $"""
+                ALTER TABLE {Schema}.journal_event
+                    ADD COLUMN priority smallint NOT NULL DEFAULT 2 CHECK (priority IN (1, 2, 3, 4));
+                ALTER TABLE {Schema}.occurrence_projection
+                    ADD COLUMN priority smallint NOT NULL DEFAULT 2 CHECK (priority IN (1, 2, 3, 4));
+                CREATE INDEX journal_priority_idx
+                    ON {Schema}.journal_event (scope_id, priority DESC, event_position);
+                """),
         ]);
 }

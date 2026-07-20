@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S18` реализован и проверен на Windows x64; остановлено перед `S19`
+**Статус программы:** `S19` реализован и проверен на Windows x64; остановлено перед `S20`
 
-**Последний завершённый пакет:** `S18` — immutable Event Journal, permission-filtered Event Dispatcher, separate occurrence projection и realtime catch-up (`cd8210a` + working tree, commit не создан)
+**Последний завершённый пакет:** `S19` — authorized Alarm actions, maintenance constraints, idempotency/audit/expected-version races, priority/flood/recovery и source links (`8ab0649` + working tree, commit не создан)
 
 ## Следующая работа
 
-`S19` — authorized acknowledge/assign/shelve, maintenance constraints, idempotency/audit/expected-version behavior, alarm flood/recovery/action races/priority tests и dashboard/equipment links из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S20` — Dashboard/Window/Widget/binding model, immutable published runtime manifest with exact dependencies, catalog/favorites/recent/last accessible dashboard и permission-filtered fallback behavior из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S18`: locked restore и format verification green; Release build — 0 warnings/0 errors; 61 unit + 48 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S19`: locked restore и format verification green; Release build — 0 warnings/0 errors; 62 unit + 52 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -110,6 +110,11 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Alarm condition facet version принимается в Event Journal идемпотентно; изменение acknowledgement либо другого occurrence facet продвигает только projection и не мутирует ранее принятый Event record.
 - Event Dispatcher query, filters и counters применяют session и point permissions до формирования rows/counts; hidden points не раскрываются ни payload, ни counters.
 - Persistence-backed occurrence snapshot/catch-up использует bounded cursor window: stale/future cursor возвращает gap, hidden-only changes безопасно продвигают cursor без раскрытия payload, permission change инвалидирует realtime subscription.
+- Alarm acknowledge, assign и shelve требуют отдельные effective permissions и point permission; trusted maintenance constraint может независимо запретить facet action либо ограничить shelving maintenance window.
+- Каждое Alarm action использует subject-scoped idempotency key, exact expected facet version и atomic owner audit; concurrent race допускает ровно один facet advance, а replay не создаёт второй audit.
+- Action timeout после commit остаётся `Unknown` до повторного запроса с тем же idempotency key; reconciliation возвращает durable replay и только затем догоняет Event occurrence projection.
+- Alarm priority фиксируется definition/occurrence и переносится в immutable Event/projection; bounded flood corpus сохраняет все protected journal records и подтверждает priority filtering.
+- Alarm source response передаёт stable Dashboard point-binding key и canonical Equipment route, сохраняя повторную authorization у целевого consumer.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.

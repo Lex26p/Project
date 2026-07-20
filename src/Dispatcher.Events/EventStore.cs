@@ -59,6 +59,7 @@ public sealed partial class EventStore
             DefinitionEpoch = occurrence.DefinitionEpoch.Value,
             DefinitionId = occurrence.DefinitionId.Value,
             PointId = occurrence.PointId.Value,
+            Priority = (int)occurrence.Priority,
             occurrence.OpenedAt,
             occurrence.ClosedAt,
             State = (int)occurrence.Condition.State,
@@ -108,6 +109,7 @@ public sealed partial class EventStore
                 occurrence.PointId,
                 occurrence.OccurrenceId,
                 occurrence.Condition.Version,
+                occurrence.Priority,
                 Kind(occurrence.Condition.State),
                 OccurredAt(occurrence),
                 acceptedAt);
@@ -247,13 +249,16 @@ public sealed partial class EventStore
                    AND point_id = ANY(@point_ids)
                    AND (@from_at IS NULL OR occurred_at >= @from_at)
                    AND (@to_at IS NULL OR occurred_at < @to_at)
-                   AND (cardinality(@kinds) = 0 OR kind = ANY(@kinds))),
+                   AND (cardinality(@kinds) = 0 OR kind = ANY(@kinds))
+                   AND (cardinality(@priorities) = 0 OR priority = ANY(@priorities))),
                 (SELECT count(*) FROM {EventMigrations.Schema}.occurrence_projection
                  WHERE scope_id = @scope_id AND point_id = ANY(@point_ids)
-                   AND condition_state IN (3, 4)),
+                   AND condition_state IN (3, 4)
+                   AND (cardinality(@priorities) = 0 OR priority = ANY(@priorities))),
                 (SELECT count(*) FROM {EventMigrations.Schema}.occurrence_projection
                  WHERE scope_id = @scope_id AND point_id = ANY(@point_ids)
-                   AND condition_state IN (3, 4) AND acknowledgement_state = 1);
+                   AND condition_state IN (3, 4) AND acknowledgement_state = 1
+                   AND (cardinality(@priorities) = 0 OR priority = ANY(@priorities)));
             """,
             connection,
             transaction);
@@ -374,7 +379,7 @@ public sealed partial class EventStore
         await using var command = new NpgsqlCommand(
             $"""
             SELECT event_id, event_position, point_id, occurrence_id, source_condition_version,
-                   kind, occurred_at, accepted_at
+                   priority, kind, occurred_at, accepted_at
             FROM {EventMigrations.Schema}.journal_event
             WHERE scope_id = @scope_id
               AND event_position > @after AND event_position <= @upper
@@ -382,6 +387,7 @@ public sealed partial class EventStore
               AND (@from_at IS NULL OR occurred_at >= @from_at)
               AND (@to_at IS NULL OR occurred_at < @to_at)
               AND (cardinality(@kinds) = 0 OR kind = ANY(@kinds))
+              AND (cardinality(@priorities) = 0 OR priority = ANY(@priorities))
             ORDER BY event_position
             LIMIT @limit;
             """,
@@ -402,9 +408,10 @@ public sealed partial class EventStore
                 PointId.From(reader.GetGuid(2)),
                 AlarmOccurrenceId.From(reader.GetGuid(3)),
                 StateVersion.From(checked((ulong)reader.GetInt64(4))),
-                (OperationalEventKind)reader.GetInt16(5),
-                reader.GetFieldValue<DateTimeOffset>(6),
-                reader.GetFieldValue<DateTimeOffset>(7)));
+                (AlarmPriority)reader.GetInt16(5),
+                (OperationalEventKind)reader.GetInt16(6),
+                reader.GetFieldValue<DateTimeOffset>(7),
+                reader.GetFieldValue<DateTimeOffset>(8)));
         }
 
         return events;
@@ -482,7 +489,7 @@ public sealed partial class EventStore
     {
         await using var command = new NpgsqlCommand(
             $"""
-            SELECT event_id, event_position, point_id, kind, occurred_at, accepted_at, source_fingerprint
+            SELECT event_id, event_position, point_id, priority, kind, occurred_at, accepted_at, source_fingerprint
             FROM {EventMigrations.Schema}.journal_event
             WHERE scope_id = @scope_id AND occurrence_id = @occurrence_id
               AND source_condition_version = @source_condition_version;
@@ -506,10 +513,11 @@ public sealed partial class EventStore
                 PointId.From(reader.GetGuid(2)),
                 occurrenceId,
                 conditionVersion,
-                (OperationalEventKind)reader.GetInt16(3),
-                reader.GetFieldValue<DateTimeOffset>(4),
-                reader.GetFieldValue<DateTimeOffset>(5)),
-            reader.GetString(6));
+                (AlarmPriority)reader.GetInt16(3),
+                (OperationalEventKind)reader.GetInt16(4),
+                reader.GetFieldValue<DateTimeOffset>(5),
+                reader.GetFieldValue<DateTimeOffset>(6)),
+            reader.GetString(7));
     }
 
     private static async Task<ProjectionHead?> ReadProjectionHeadAsync(
@@ -561,17 +569,18 @@ public sealed partial class EventStore
                          $"""
                          INSERT INTO {EventMigrations.Schema}.occurrence_projection (
                              scope_id, occurrence_id, point_id, projection_version,
-                             condition_state, acknowledgement_state, condition_version,
+                             priority, condition_state, acknowledgement_state, condition_version,
                              acknowledgement_version, assignment_version, shelving_version,
                              suppression_version, fingerprint, snapshot, projected_at)
                          VALUES (
                              @scope_id, @occurrence_id, @point_id, @projection_version,
-                             @condition_state, @acknowledgement_state, @condition_version,
+                             @priority, @condition_state, @acknowledgement_state, @condition_version,
                              @acknowledgement_version, @assignment_version, @shelving_version,
                              @suppression_version, @fingerprint, CAST(@snapshot AS jsonb), @projected_at)
                          ON CONFLICT (scope_id, occurrence_id) DO UPDATE
                          SET point_id = EXCLUDED.point_id,
                              projection_version = EXCLUDED.projection_version,
+                             priority = EXCLUDED.priority,
                              condition_state = EXCLUDED.condition_state,
                              acknowledgement_state = EXCLUDED.acknowledgement_state,
                              condition_version = EXCLUDED.condition_version,
@@ -616,6 +625,7 @@ public sealed partial class EventStore
         command.Parameters.AddWithValue("occurrence_id", occurrence.OccurrenceId.Value);
         command.Parameters.AddWithValue("point_id", occurrence.PointId.Value);
         command.Parameters.AddWithValue("projection_version", checked((long)projection.Version.Value));
+        command.Parameters.AddWithValue("priority", (short)occurrence.Priority);
         command.Parameters.AddWithValue("condition_state", (short)occurrence.Condition.State);
         command.Parameters.AddWithValue("acknowledgement_state", (short)occurrence.Acknowledgement.State);
         command.Parameters.AddWithValue("condition_version", checked((long)occurrence.Condition.Version.Value));
@@ -641,10 +651,10 @@ public sealed partial class EventStore
             $"""
             INSERT INTO {EventMigrations.Schema}.journal_event (
                 scope_id, event_position, event_id, point_id, occurrence_id,
-                source_condition_version, source_fingerprint, kind, occurred_at, accepted_at)
+                source_condition_version, source_fingerprint, priority, kind, occurred_at, accepted_at)
             VALUES (
                 @scope_id, @event_position, @event_id, @point_id, @occurrence_id,
-                @source_condition_version, @source_fingerprint, @kind, @occurred_at, @accepted_at);
+                @source_condition_version, @source_fingerprint, @priority, @kind, @occurred_at, @accepted_at);
             """,
             connection,
             transaction);
@@ -655,6 +665,7 @@ public sealed partial class EventStore
         command.Parameters.AddWithValue("occurrence_id", record.OccurrenceId.Value);
         command.Parameters.AddWithValue("source_condition_version", checked((long)record.SourceConditionVersion.Value));
         command.Parameters.AddWithValue("source_fingerprint", fingerprint);
+        command.Parameters.AddWithValue("priority", (short)record.Priority);
         command.Parameters.AddWithValue("kind", (short)record.Kind);
         command.Parameters.AddWithValue("occurred_at", record.OccurredAt);
         command.Parameters.AddWithValue("accepted_at", record.AcceptedAt);
@@ -800,6 +811,10 @@ public sealed partial class EventStore
             NpgsqlDbType.Array | NpgsqlDbType.Smallint,
             request.Kinds.Select(item => (short)item).ToArray());
         command.Parameters.AddWithValue(
+            "priorities",
+            NpgsqlDbType.Array | NpgsqlDbType.Smallint,
+            request.Priorities?.Select(item => (short)item).ToArray() ?? []);
+        command.Parameters.AddWithValue(
             "from_at",
             NpgsqlDbType.TimestampTz,
             (object?)request.From ?? DBNull.Value);
@@ -865,6 +880,7 @@ public sealed partial class EventStore
         ulong DefinitionEpoch,
         Guid DefinitionId,
         Guid PointId,
+        int Priority,
         DateTimeOffset OpenedAt,
         DateTimeOffset? ClosedAt,
         int ConditionState,
@@ -892,6 +908,7 @@ public sealed partial class EventStore
             occurrence.DefinitionEpoch.Value,
             occurrence.DefinitionId.Value,
             occurrence.PointId.Value,
+            (int)occurrence.Priority,
             occurrence.OpenedAt,
             occurrence.ClosedAt,
             (int)occurrence.Condition.State,
@@ -919,6 +936,7 @@ public sealed partial class EventStore
             RevisionNumber.From(DefinitionEpoch),
             AlarmDefinitionId.From(DefinitionId),
             Dispatcher.Semantics.PointId.From(PointId),
+            (AlarmPriority)Priority,
             OpenedAt,
             ClosedAt,
             new AlarmConditionFacet(

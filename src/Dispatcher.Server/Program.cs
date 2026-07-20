@@ -34,6 +34,7 @@ if (historyEnabled)
         new Dispatcher.History.HistoryQueryLimits(historyMaxPageSize!.Value, historyMaxAggregateBuckets!.Value));
 }
 var eventRole = builder.Configuration["Dispatcher:Events:DatabaseRole"];
+var alarmRole = builder.Configuration["Dispatcher:Alarm:DatabaseRole"];
 var eventMaxPageSize = builder.Configuration.GetValue<int?>("Dispatcher:Events:MaxPageSize");
 var eventRetainedProjectionChanges = builder.Configuration.GetValue<int?>(
     "Dispatcher:Events:RetainedProjectionChanges");
@@ -52,6 +53,10 @@ if (eventEnabled)
             eventMaxPageSize!.Value,
             eventRetainedProjectionChanges!.Value,
             eventMaxFeedChanges!.Value));
+    if (!string.IsNullOrWhiteSpace(alarmRole))
+    {
+        builder.Services.AddAlarmActionsServer(workspaceConnection!, alarmRole!);
+    }
 }
 
 var app = builder.Build();
@@ -71,5 +76,9 @@ if (historyEnabled)
 if (eventEnabled)
 {
     app.MapEventServer();
+    if (!string.IsNullOrWhiteSpace(alarmRole))
+    {
+        app.MapAlarmActionsServer();
+    }
 }
 app.Run();

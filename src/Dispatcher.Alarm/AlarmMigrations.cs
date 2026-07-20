@@ -106,5 +106,45 @@ public static class AlarmMigrations
                     BEFORE UPDATE OR DELETE ON {Schema}.definition
                     FOR EACH ROW EXECUTE FUNCTION {Schema}.reject_definition_mutation();
                 """),
+            new MigrationStep(
+                2,
+                "authorized occurrence facets and action audit",
+                $"""
+                ALTER TABLE {Schema}.definition
+                    ADD COLUMN priority smallint NOT NULL DEFAULT 2 CHECK (priority IN (1, 2, 3, 4));
+                ALTER TABLE {Schema}.occurrence
+                    ADD COLUMN priority smallint NOT NULL DEFAULT 2 CHECK (priority IN (1, 2, 3, 4));
+                CREATE TABLE {Schema}.action_request (
+                    action_id uuid PRIMARY KEY,
+                    scope_id uuid NOT NULL,
+                    occurrence_id uuid NOT NULL REFERENCES {Schema}.occurrence(occurrence_id),
+                    session_id uuid NOT NULL,
+                    subject_id uuid NOT NULL,
+                    idempotency_key text NOT NULL,
+                    request_fingerprint character(64) NOT NULL,
+                    action_kind smallint NOT NULL CHECK (action_kind IN (1, 2, 3)),
+                    constraint_version bigint NOT NULL CHECK (constraint_version > 0),
+                    resulting_facet_version bigint NOT NULL CHECK (resulting_facet_version > 0),
+                    result_snapshot jsonb NOT NULL,
+                    accepted_at timestamp with time zone NOT NULL,
+                    CONSTRAINT alarm_action_idempotency_key UNIQUE (subject_id, idempotency_key)
+                );
+                CREATE INDEX alarm_action_occurrence_idx
+                    ON {Schema}.action_request (scope_id, occurrence_id, accepted_at);
+                CREATE TABLE {Schema}.mutation_audit (
+                    audit_id uuid PRIMARY KEY,
+                    action_id uuid NOT NULL REFERENCES {Schema}.action_request(action_id),
+                    scope_id uuid NOT NULL,
+                    occurrence_id uuid NOT NULL,
+                    session_id uuid NOT NULL,
+                    subject_id uuid NOT NULL,
+                    permission text NOT NULL,
+                    action text NOT NULL,
+                    resulting_facet_version bigint NOT NULL CHECK (resulting_facet_version > 0),
+                    changed_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX alarm_audit_scope_idx
+                    ON {Schema}.mutation_audit (scope_id, changed_at, audit_id);
+                """),
         ]);
 }

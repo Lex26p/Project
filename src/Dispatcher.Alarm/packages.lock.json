@@ -38,6 +38,14 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.platform": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.semantics": {
         "type": "Project"
       }

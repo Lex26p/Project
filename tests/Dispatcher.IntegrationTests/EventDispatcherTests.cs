@@ -222,6 +222,7 @@ public sealed class EventDispatcherTests
             RevisionNumber.Initial,
             DefinitionId,
             pointId,
+            AlarmPriority.Medium,
             Start,
             null,
             new AlarmConditionFacet(

@@ -56,6 +56,7 @@ public sealed record OperationalEventRecord(
     PointId PointId,
     AlarmOccurrenceId OccurrenceId,
     StateVersion SourceConditionVersion,
+    AlarmPriority Priority,
     OperationalEventKind Kind,
     DateTimeOffset OccurredAt,
     DateTimeOffset AcceptedAt);
@@ -105,7 +106,8 @@ public sealed record EventQueryRequest(
     DateTimeOffset? From,
     DateTimeOffset? To,
     int PageSize,
-    EventQueryCursor? Cursor = null);
+    EventQueryCursor? Cursor = null,
+    IReadOnlySet<AlarmPriority>? Priorities = null);
 
 public sealed record EventQueryPage(
     IReadOnlyList<OperationalEventRecord> Events,
