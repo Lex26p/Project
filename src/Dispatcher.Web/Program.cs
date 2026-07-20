@@ -18,5 +18,6 @@ builder.Services.AddTransient<RealtimeWidgetClient>();
 builder.Services.AddTransient<WorkspaceApiClient>();
 builder.Services.AddTransient<RegistryApiClient>();
 builder.Services.AddTransient<HistoryApiClient>();
+builder.Services.AddTransient<DashboardApiClient>();
 
 await builder.Build().RunAsync();

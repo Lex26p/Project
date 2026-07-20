@@ -34,7 +34,8 @@ internal static class DashboardManifestCodec
                     (int)binding.Source,
                     binding.ScopeId.Value,
                     binding.PointId.Value,
-                    binding.RequiredPermission.Value)).ToArray())).ToArray(),
+                    binding.RequiredPermission.Value,
+                    binding.HistorySourceId?.Value)).ToArray())).ToArray(),
             revision.PublishedAt);
         var dependencies = revision.Dependencies
             .OrderBy(item => item.BindingId.Value)
@@ -70,7 +71,8 @@ internal static class DashboardManifestCodec
                     (DashboardBindingSource)binding.Source,
                     RuntimeScopeId.From(binding.ScopeId),
                     PointId.From(binding.PointId),
-                    PermissionCode.From(binding.RequiredPermission))).ToArray())).ToArray(),
+                    PermissionCode.From(binding.RequiredPermission),
+                    binding.HistorySourceId is null ? null : SourceId.From(binding.HistorySourceId.Value))).ToArray())).ToArray(),
             dependencies.Select(item => new DashboardDependency(
                 DashboardBindingId.From(item.BindingId), item.Key, item.Fingerprint)).ToArray(),
             manifest.PublishedAt);
@@ -107,6 +109,12 @@ internal static class DashboardManifestCodec
         }
 
         var dependencyBindings = revision.Dependencies.Select(item => item.BindingId).ToHashSet();
+        if (revision.Windows.SelectMany(item => item.Bindings).Any(binding =>
+                binding.Source == DashboardBindingSource.History && binding.HistorySourceId is null))
+        {
+            throw new ArgumentException("History bindings require an exact source identity.", nameof(revision));
+        }
+
         if (revision.Dependencies.Count == 0 ||
             !dependencyBindings.SetEquals(bindingSet) ||
             revision.Dependencies.Any(item => !bindingSet.Contains(item.BindingId) ||
@@ -131,6 +139,6 @@ internal static class DashboardManifestCodec
     private sealed record WindowDto(Guid WindowId, string Title, WidgetDto[] Widgets, BindingDto[] Bindings);
     private sealed record WidgetDto(Guid WidgetId, string Kind, string Title, Guid[] BindingIds);
     private sealed record BindingDto(
-        Guid BindingId, int Source, Guid ScopeId, Guid PointId, string RequiredPermission);
+        Guid BindingId, int Source, Guid ScopeId, Guid PointId, string RequiredPermission, Guid? HistorySourceId);
     private sealed record DependencyDto(Guid BindingId, string Key, string Fingerprint);
 }

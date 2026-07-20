@@ -75,6 +75,53 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
         Assert.Equal(context.SecondDashboardId, await context.Store.ReadLastDashboardAsync(restricted.SubjectId));
     }
 
+    [Fact]
+    public async Task SubscriptionContainsOnlyVisibleAuthorizedConsumerLinksAndEnforcesCapacity()
+    {
+        await using var context = await DashboardTestContext.CreateAsync(cluster);
+        var revision = context.LinkedRevision();
+        await context.Store.PublishAsync(revision);
+        var authorized = new AuthorizedDashboardService(context.Store, context.Clock);
+        var subscriptions = new DashboardSubscriptionService(
+            authorized,
+            new DashboardRuntimeLimits(maxVisibleWindows: 1, maxBindings: 2));
+        var visibleWindow = revision.Windows[0].WindowId;
+
+        var result = await subscriptions.CreateAsync(
+            context.LinkedSession(includeAlarm: true, includeHistory: true),
+            context.FirstDashboardId,
+            [visibleWindow],
+            CancellationToken.None);
+        Assert.Equal(2, result.Value.Links.Count);
+        Assert.Contains(result.Value.Links, link => link.Source == "Current" && link.Endpoint == "/hubs/runtime");
+        Assert.Contains(result.Value.Links, link => link.Source == "Alarm" && link.Endpoint == "/hubs/events");
+        Assert.DoesNotContain(result.Value.Links, link => link.Source == "History");
+
+        var restricted = await subscriptions.CreateAsync(
+            context.LinkedSession(includeAlarm: false, includeHistory: true),
+            context.FirstDashboardId,
+            [visibleWindow],
+            CancellationToken.None);
+        Assert.Equal("Current", Assert.Single(restricted.Value.Links).Source);
+
+        var tooManyWindows = await subscriptions.CreateAsync(
+            context.LinkedSession(includeAlarm: true, includeHistory: true),
+            context.FirstDashboardId,
+            revision.Windows.Select(window => window.WindowId).ToArray(),
+            CancellationToken.None);
+        Assert.Equal("dashboard.visible_window_capacity", tooManyWindows.Error?.Code.Value);
+
+        var bindingLimited = new DashboardSubscriptionService(
+            authorized,
+            new DashboardRuntimeLimits(maxVisibleWindows: 2, maxBindings: 2));
+        var tooManyBindings = await bindingLimited.CreateAsync(
+            context.LinkedSession(includeAlarm: true, includeHistory: true),
+            context.FirstDashboardId,
+            revision.Windows.Select(window => window.WindowId).ToArray(),
+            CancellationToken.None);
+        Assert.Equal("dashboard.binding_capacity", tooManyBindings.Error?.Code.Value);
+    }
+
     private sealed class DashboardTestContext : IAsyncDisposable
     {
         private DashboardTestContext(TestDatabase database, NpgsqlDataSource dataSource)
@@ -103,6 +150,8 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
             Guid.Parse("d4000000-0000-7000-8000-000000000001"));
         public DashboardBindingId HiddenBindingId { get; } = DashboardBindingId.From(
             Guid.Parse("d4000000-0000-7000-8000-000000000002"));
+        public DashboardBindingId HistoryBindingId { get; } = DashboardBindingId.From(
+            Guid.Parse("d4000000-0000-7000-8000-000000000003"));
 
         public static async Task<DashboardTestContext> CreateAsync(PostgreSqlClusterFixture cluster)
         {
@@ -147,12 +196,90 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
                 Now);
         }
 
+        public DashboardRevision LinkedRevision()
+        {
+            var current = new DashboardBinding(
+                AllowedBindingId,
+                DashboardBindingSource.Current,
+                ScopeId,
+                AllowedPointId,
+                RuntimePermissions.ReadPoint(AllowedPointId));
+            var alarm = new DashboardBinding(
+                HiddenBindingId,
+                DashboardBindingSource.Alarm,
+                ScopeId,
+                HiddenPointId,
+                RuntimePermissions.ReadPoint(HiddenPointId));
+            var history = new DashboardBinding(
+                HistoryBindingId,
+                DashboardBindingSource.History,
+                ScopeId,
+                HiddenPointId,
+                RuntimePermissions.ReadPoint(HiddenPointId),
+                SourceId.From(Guid.Parse("d6000000-0000-7000-8000-000000000001")));
+            var bindings = new[] { current, alarm, history };
+            return new DashboardRevision(
+                FirstDashboardId,
+                DashboardRevisionId.New(),
+                1,
+                "Linked runtime",
+                null,
+                [
+                    new DashboardWindow(
+                        DashboardWindowId.New(),
+                        "Visible",
+                        [new Widget(WidgetId.New(), "runtime", "Runtime", [AllowedBindingId, HiddenBindingId])],
+                        [current, alarm]),
+                    new DashboardWindow(
+                        DashboardWindowId.New(),
+                        "Other",
+                        [new Widget(WidgetId.New(), "trend", "Trend", [HistoryBindingId])],
+                        [history]),
+                ],
+                bindings.Select(binding => new DashboardDependency(
+                    binding.BindingId,
+                    $"point:{binding.PointId.Value:N}:{binding.Source}",
+                    $"revision:{binding.BindingId.Value:N}")).ToArray(),
+                Now);
+        }
+
+        public SessionSnapshot LinkedSession(bool includeAlarm, bool includeHistory)
+        {
+            var permissions = new List<PermissionCode>
+            {
+                DashboardPermissions.CatalogRead,
+                DashboardPermissions.Read(FirstDashboardId),
+                RuntimePermissions.ReadCurrent,
+                RuntimePermissions.ReadPoint(AllowedPointId),
+                RuntimePermissions.ReadPoint(HiddenPointId),
+            };
+            if (includeAlarm)
+            {
+                permissions.Add(EventPermissions.ReadDispatcher);
+            }
+
+            if (includeHistory)
+            {
+                permissions.Add(HistoryPermissions.ReadRange);
+            }
+
+            return new SessionSnapshot(
+                SessionId.New(),
+                SubjectId.New(),
+                PrincipalKind.User,
+                Now.AddMinutes(-1),
+                Now.AddHours(1),
+                new EffectivePermissions(permissions));
+        }
+
         public SessionSnapshot Session(bool readFirst, bool readSecond)
         {
             var permissions = new List<PermissionCode>
             {
                 DashboardPermissions.CatalogRead,
                 DashboardPermissions.Personalize,
+                RuntimePermissions.ReadCurrent,
+                EventPermissions.ReadDispatcher,
                 RuntimePermissions.ReadPoint(AllowedPointId),
             };
             if (readFirst)

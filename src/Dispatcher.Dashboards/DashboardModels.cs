@@ -61,7 +61,8 @@ public sealed record DashboardBinding(
     DashboardBindingSource Source,
     RuntimeScopeId ScopeId,
     PointId PointId,
-    PermissionCode RequiredPermission);
+    PermissionCode RequiredPermission,
+    SourceId? HistorySourceId = null);
 
 public sealed record Widget(
     WidgetId WidgetId,

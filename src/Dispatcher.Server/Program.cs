@@ -59,11 +59,19 @@ if (eventEnabled)
     }
 }
 var dashboardRole = builder.Configuration["Dispatcher:Dashboards:DatabaseRole"];
+var dashboardMaxVisibleWindows = builder.Configuration.GetValue<int?>(
+    "Dispatcher:Dashboards:MaxVisibleWindows");
+var dashboardMaxBindings = builder.Configuration.GetValue<int?>("Dispatcher:Dashboards:MaxBindings");
 var dashboardEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
-                       !string.IsNullOrWhiteSpace(dashboardRole);
+                       !string.IsNullOrWhiteSpace(dashboardRole) &&
+                       dashboardMaxVisibleWindows > 0 &&
+                       dashboardMaxBindings > 0;
 if (dashboardEnabled)
 {
-    builder.Services.AddDashboardServer(workspaceConnection!, dashboardRole!);
+    builder.Services.AddDashboardServer(
+        workspaceConnection!,
+        dashboardRole!,
+        new DashboardRuntimeLimits(dashboardMaxVisibleWindows!.Value, dashboardMaxBindings!.Value));
 }
 
 var app = builder.Build();

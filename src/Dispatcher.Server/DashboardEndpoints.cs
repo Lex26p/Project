@@ -53,7 +53,8 @@ public sealed class AuthorizedDashboardService
 
         var allowedBindings = published.Revision.Windows
             .SelectMany(window => window.Bindings)
-            .Where(binding => access.Value.Session.Permissions.Allows(binding.RequiredPermission))
+            .Where(binding => access.Value.Session.Permissions.Allows(binding.RequiredPermission) &&
+                              CanReadSource(access.Value.Session.Permissions, binding.Source))
             .Select(binding => binding.BindingId)
             .ToHashSet();
         var windows = published.Revision.Windows.Select(window =>
@@ -73,6 +74,15 @@ public sealed class AuthorizedDashboardService
             .ToArray();
         return Result.Success(published.Revision with { Windows = windows, Dependencies = dependencies });
     }
+
+    private static bool CanReadSource(EffectivePermissions permissions, DashboardBindingSource source) =>
+        source switch
+        {
+            DashboardBindingSource.Current => permissions.Allows(RuntimePermissions.ReadCurrent),
+            DashboardBindingSource.Alarm => permissions.Allows(EventPermissions.ReadDispatcher),
+            DashboardBindingSource.History => permissions.Allows(HistoryPermissions.ReadRange),
+            _ => false,
+        };
 
     public async Task<Result<DashboardId?>> ResolveLandingAsync(
         SessionSnapshot? session,
@@ -153,16 +163,20 @@ public static class DashboardEndpoints
     public static IServiceCollection AddDashboardServer(
         this IServiceCollection services,
         string connectionString,
-        string databaseRole)
+        string databaseRole,
+        DashboardRuntimeLimits runtimeLimits)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseRole);
+        ArgumentNullException.ThrowIfNull(runtimeLimits);
         services.TryAddSingleton(_ => NpgsqlDataSource.Create(connectionString));
         services.AddSingleton(sp => new DashboardStore(
             sp.GetRequiredService<NpgsqlDataSource>(),
             databaseRole,
             sp.GetRequiredService<IWallClock>()));
         services.AddSingleton<AuthorizedDashboardService>();
+        services.AddSingleton(runtimeLimits);
+        services.AddSingleton<DashboardSubscriptionService>();
         return services;
     }
 
@@ -172,6 +186,7 @@ public static class DashboardEndpoints
         group.MapGet("/", ReadCatalogAsync);
         group.MapGet("/landing", ResolveLandingAsync);
         group.MapGet("/{dashboardId:guid}", ReadManifestAsync);
+        group.MapPost("/{dashboardId:guid}/subscriptions", CreateSubscriptionAsync);
         group.MapPut("/{dashboardId:guid}/favorite", SetFavoriteAsync);
         group.MapPost("/{dashboardId:guid}/opened", RecordOpenedAsync);
         return endpoints;
@@ -228,6 +243,22 @@ public static class DashboardEndpoints
         return result.IsSuccess ? Results.NoContent() : Problem(result.Error!);
     }
 
+    private static async Task<IResult> CreateSubscriptionAsync(
+        Guid dashboardId,
+        DashboardSubscriptionRequest request,
+        HttpContext context,
+        RequestSessionResolver sessions,
+        DashboardSubscriptionService subscriptions,
+        CancellationToken cancellationToken)
+    {
+        var result = await subscriptions.CreateAsync(
+            sessions.Resolve(context),
+            DashboardId.From(dashboardId),
+            request.VisibleWindowIds.Select(DashboardWindowId.From).ToArray(),
+            cancellationToken).ConfigureAwait(false);
+        return result.IsSuccess ? Results.Ok(result.Value) : Problem(result.Error!);
+    }
+
     private static async Task<IResult> RecordOpenedAsync(
         Guid dashboardId,
         HttpContext context,
@@ -265,6 +296,7 @@ public static class DashboardEndpoints
             "session.anonymous" or "session.revoked" or "session.expired" => StatusCodes.Status401Unauthorized,
             "permission.denied" => StatusCodes.Status403Forbidden,
             "dashboard.not_found" => StatusCodes.Status404NotFound,
+            "dashboard.window_not_found" => StatusCodes.Status404NotFound,
             _ => StatusCodes.Status400BadRequest,
         },
         title: error.Code.Value,
@@ -272,6 +304,7 @@ public static class DashboardEndpoints
 }
 
 public sealed record DashboardFavoriteRequest(bool Favorite);
+public sealed record DashboardSubscriptionRequest(IReadOnlyList<Guid> VisibleWindowIds);
 public sealed record DashboardCatalogPayload(
     Guid DashboardId, string Name, string? Description, bool IsFavorite, DateTimeOffset? LastOpenedAt);
 public sealed record DashboardLandingPayload(Guid? DashboardId);

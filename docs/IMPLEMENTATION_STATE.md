@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S20` реализован и проверен на Windows x64; остановлено перед `S21`
+**Статус программы:** `S21` реализован и проверен на Windows x64; остановлено перед `S22`
 
-**Последний завершённый пакет:** `S20` — Dashboard/Window/Widget/binding model, immutable whole-revision publication with exact dependencies, authorized catalog/personal state и access-loss fallback (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S21` — visible/authorized Dashboard subscription manifest, Current/Alarm/History consumer links, partial/stale widget state, coalescing/hidden-tab и explicit reconnect/resync behavior (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S21` — visible/authorized window subscription manifest, Current/Alarm/History links, per-widget partial/stale state, coalescing, hidden-tab policy и reconnect/resync из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S22` — Dashboard/Mimic draft/validate/publish/rollback lifecycles, bounded SVG intake/sanitization/binding validation, editor permission/audit и atomic publication impact из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S20`: solution build — 0 warnings/0 errors; 63 unit + 54 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S21`: solution build — 0 warnings/0 errors; 66 unit + 55 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -119,6 +119,11 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Dashboard revision публикуется и восстанавливается только целиком; Window является каноническим экранным контрактом без отдельной `{screen}` domain entity, а exact dependencies детерминированно fingerprinted и полностью покрывают bindings.
 - Server фильтрует catalog по Dashboard permission, а published manifest — по binding permission до формирования windows/widgets/bindings/dependencies; hidden binding отсутствует во всех выдаваемых metadata.
 - При потере доступа last-accessible Dashboard заменяется первым разрешённым favorite/recent/catalog candidate и новый fallback сохраняется; недоступный Dashboard не раскрывается в catalog либо landing response.
+- Dashboard subscription manifest строится только для явно visible windows уже permission-filtered published revision; отдельные limits на visible windows и bindings fail closed до создания consumer links.
+- Current и Alarm bindings ссылаются на существующие scoped realtime boundaries, а History binding содержит exact source identity и использует только HTTP History endpoint; device polling не зеркалируется в Web и History не переносится в realtime.
+- Web Dashboard runtime хранит client-local binding state и агрегирует его в `Ready`/`Partial`/`Stale` widget state; disconnect либо protected gap требует authorized resnapshot.
+- Hidden tab прекращает current polling/render и coalesce только latest current per binding; Alarm protected transitions сохраняются по position без coalescing, а исчерпание bounded client buffer создаёт явный gap/resync вместо silent loss.
+- Dashboard runtime state и capacity изолированы per client: медленный/hidden consumer не блокирует Core и не меняет cursor/state другого пользователя; production numeric limits остаются конфигурационными и не квалифицированы.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.
