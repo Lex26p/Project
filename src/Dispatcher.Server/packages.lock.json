@@ -8,6 +8,15 @@
         "resolved": "10.0.3",
         "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
       },
+      "dispatcher.alarm": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.configuration": {
         "type": "Project",
         "dependencies": {
@@ -33,6 +42,16 @@
           "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.Persistence": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
+      "dispatcher.events": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Alarm": "[1.0.0, )",
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }

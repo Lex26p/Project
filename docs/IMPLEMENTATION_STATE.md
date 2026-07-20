@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S17` реализован и проверен на Windows x64; остановлено перед `S18`
+**Статус программы:** `S18` реализован и проверен на Windows x64; остановлено перед `S19`
 
-**Последний завершённый пакет:** `S17` — versioned Alarm definitions, post-`RuntimeCut` local evaluation, independent occurrence facets и durable hysteresis/timers (`9b52c0c` + working tree, commit не создан)
+**Последний завершённый пакет:** `S18` — immutable Event Journal, permission-filtered Event Dispatcher, separate occurrence projection и realtime catch-up (`cd8210a` + working tree, commit не создан)
 
 ## Следующая работа
 
-`S18` — immutable Event Journal acceptance/position, Event Dispatcher query/filter/counters, separate occurrence projection/realtime catch-up и permission/gap behavior из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S19` — authorized acknowledge/assign/shelve, maintenance constraints, idempotency/audit/expected-version behavior, alarm flood/recovery/action races/priority tests и dashboard/equipment links из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S17`: locked restore и format verification green; Release build — 0 warnings/0 errors; 60 unit + 46 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S18`: locked restore и format verification green; Release build — 0 warnings/0 errors; 61 unit + 48 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -106,6 +106,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Alarm evaluator принимает только принятый `RuntimeCutAcceptance` с соответствующим post-cut current snapshot; raw adapter не имеет API создания occurrence, а stale/replayed evaluation position не создаёт второго перехода.
 - У occurrence раздельно хранятся condition, acknowledgement, assignment, shelving и suppression facets с независимыми versions; local condition evaluation изменяет только condition facet.
 - High/low threshold nucleus использует explicit hysteresis и durable raise/clear timers; pending/active state переживает restart без silent clear либо duplicate occurrence.
+- `MOD-EVT` владеет отдельной PostgreSQL schema: immutable Event Journal получает независимую `EventJournalPosition`, а rebuildable occurrence projection — отдельную `OccurrenceProjectionVersion`.
+- Alarm condition facet version принимается в Event Journal идемпотентно; изменение acknowledgement либо другого occurrence facet продвигает только projection и не мутирует ранее принятый Event record.
+- Event Dispatcher query, filters и counters применяют session и point permissions до формирования rows/counts; hidden points не раскрываются ни payload, ни counters.
+- Persistence-backed occurrence snapshot/catch-up использует bounded cursor window: stale/future cursor возвращает gap, hidden-only changes безопасно продвигают cursor без раскрытия payload, permission change инвалидирует realtime subscription.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.
@@ -113,7 +117,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 ## Provisional
 
 - exact .NET 10 SDK feature-band/patch beyond the repository baseline;
-- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm owners;
+- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event owners;
 - production process topology;
 - protocol isolation mechanism;
 - IAM/IdP mechanism;

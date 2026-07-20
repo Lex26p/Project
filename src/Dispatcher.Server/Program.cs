@@ -33,6 +33,26 @@ if (historyEnabled)
         historyRole!,
         new Dispatcher.History.HistoryQueryLimits(historyMaxPageSize!.Value, historyMaxAggregateBuckets!.Value));
 }
+var eventRole = builder.Configuration["Dispatcher:Events:DatabaseRole"];
+var eventMaxPageSize = builder.Configuration.GetValue<int?>("Dispatcher:Events:MaxPageSize");
+var eventRetainedProjectionChanges = builder.Configuration.GetValue<int?>(
+    "Dispatcher:Events:RetainedProjectionChanges");
+var eventMaxFeedChanges = builder.Configuration.GetValue<int?>("Dispatcher:Events:MaxFeedChanges");
+var eventEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
+                   !string.IsNullOrWhiteSpace(eventRole) &&
+                   eventMaxPageSize > 0 &&
+                   eventRetainedProjectionChanges > 0 &&
+                   eventMaxFeedChanges > 0;
+if (eventEnabled)
+{
+    builder.Services.AddEventServer(
+        workspaceConnection!,
+        eventRole!,
+        new Dispatcher.Events.EventDispatcherLimits(
+            eventMaxPageSize!.Value,
+            eventRetainedProjectionChanges!.Value,
+            eventMaxFeedChanges!.Value));
+}
 
 var app = builder.Build();
 app.MapDispatcherServer();
@@ -47,5 +67,9 @@ if (registryEnabled)
 if (historyEnabled)
 {
     app.MapHistoryServer();
+}
+if (eventEnabled)
+{
+    app.MapEventServer();
 }
 app.Run();
