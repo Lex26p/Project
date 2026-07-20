@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** Windows x64 scope `S26` реализован и проверен; Linux qualification не выполнялась по указанию пользователя; остановлено перед `S27`
+**Статус программы:** `S27` реализован и проверен на Windows x64; остановлено перед `S28`
 
-**Последний завершённый пакет:** Windows x64 scope `S26` — общий staging→publish→activate→current→History/Alarm→Web путь Modbus TCP/SNMP read-only, reconnect/process-crash recovery, frozen read-only contracts и отдельные protocol qualification records (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S27` — mandatory/personal notification policy composition, subscriptions, schedules/quiet periods, absence/coverage, channel preferences, durable personal inbox/read state и reauthorized source links (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S27` — mandatory/personal notification policy composition, subscriptions, schedule/quiet periods/absence/coverage/channel preferences, personal inbox/read state и повторная authorization source links из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S28` — initial SMTP production adapter либо ADR-equivalent provider, delivery obligations/provider attempts/retry/escalation/terminal outcomes, channel test/substitution acceptance/realtime inbox counters и outage/backlog/restart/secret tests из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат; `IG-13` остаётся Open до provider code.
 
-Windows x64 evidence для `S26`: solution build — 0 warnings/0 errors; 89 unit + 58 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S27`: affected projects compiled without warnings/errors; 91 unit + 59 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -80,6 +80,11 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `Dispatcher.ProtocolCommissioning` строит immutable activation plan только из опубликованной и распределённой whole-scope revision с повторной проверкой manifest fingerprint; binding generation равна revision number, а source/point identities уникальны для обоих adapters.
 - Protocol process continuity явно переводит scope в `DegradedProcessUnavailable`; восстановление допускает только более новую session generation, поэтому прежний process не получает duplicate authority.
 - Modbus TCP и SNMP имеют отдельные frozen read-only contract fingerprints и отдельные qualification records; без `LinuxX64` обе записи остаются `WindowsQualifiedPlatformPending` и не закрывают `DG-07`.
+- `MOD-NOT` владеет отдельной PostgreSQL schema для versioned mandatory policy, personal settings, subscriptions и durable inbox; provider attempts/delivery tables отсутствуют до `S28`.
+- Notification composition поддерживает только утверждённые minimum-priority/point subscriptions, UTC schedules, quiet periods, direct absence coverage и channel preferences без generic rules engine или HR calendar integration.
+- Mandatory route игнорирует personal disable/quiet/schedule и при active absence сохраняет исходного recipient, добавляя coverage recipient; personal route может быть подавлен либо перенаправлен coverage.
+- Inbox acceptance idempotent per recipient/Event и переживает restart; изменение read state меняет только Notification version/read timestamp и не вызывает Alarm acknowledgement.
+- Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.
 - `MOD-WSP` разделяет Account и Person, владеет PostgreSQL schema/migrations для profile/preferences/Home/favorites/recent и пишет preference audit атомарно с mutation.

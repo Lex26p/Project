@@ -10,6 +10,12 @@ if (workspaceEnabled)
 {
     builder.Services.AddWorkspaceServer(workspaceConnection!, workspaceRole!);
 }
+var notificationRole = builder.Configuration["Dispatcher:Notifications:DatabaseRole"];
+var notificationsEnabled = workspaceEnabled && !string.IsNullOrWhiteSpace(notificationRole);
+if (notificationsEnabled)
+{
+    builder.Services.AddNotificationServer(workspaceConnection!, notificationRole!);
+}
 var facilityRole = builder.Configuration["Dispatcher:Facility:DatabaseRole"];
 var equipmentRole = builder.Configuration["Dispatcher:Equipment:DatabaseRole"];
 var registryEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
@@ -93,6 +99,10 @@ app.MapDispatcherServer();
 if (workspaceEnabled)
 {
     app.MapWorkspaceServer();
+}
+if (notificationsEnabled)
+{
+    app.MapNotificationServer();
 }
 if (registryEnabled)
 {

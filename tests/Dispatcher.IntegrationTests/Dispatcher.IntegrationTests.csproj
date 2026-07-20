@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\Dispatcher.ProtocolCommissioning\Dispatcher.ProtocolCommissioning.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Protocols\Dispatcher.Protocols.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Modbus\Dispatcher.Modbus.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Notifications\Dispatcher.Notifications.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Snmp\Dispatcher.Snmp.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.History\Dispatcher.History.csproj" />

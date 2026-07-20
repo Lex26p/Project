@@ -6,6 +6,7 @@
     <ProjectReference Include="..\Dispatcher.Configuration\Dispatcher.Configuration.csproj" />
     <ProjectReference Include="..\Dispatcher.Dashboards\Dispatcher.Dashboards.csproj" />
     <ProjectReference Include="..\Dispatcher.Events\Dispatcher.Events.csproj" />
+    <ProjectReference Include="..\Dispatcher.Notifications\Dispatcher.Notifications.csproj" />
     <PackageReference Include="Npgsql" />
   </ItemGroup>
   <ItemGroup>
