@@ -1,17 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Npgsql" />
-  </ItemGroup>
-  <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Configuration\Dispatcher.Configuration.csproj" />
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\Dispatcher.Modbus\Dispatcher.Modbus.csproj" />
     <ProjectReference Include="..\Dispatcher.Protocols\Dispatcher.Protocols.csproj" />
-    <ProjectReference Include="..\Dispatcher.ProtocolCommissioning\Dispatcher.ProtocolCommissioning.csproj" />
-    <ProjectReference Include="..\Dispatcher.Snmp\Dispatcher.Snmp.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+    <ProjectReference Include="..\Dispatcher.Snmp\Dispatcher.Snmp.csproj" />
   </ItemGroup>
 </Project>

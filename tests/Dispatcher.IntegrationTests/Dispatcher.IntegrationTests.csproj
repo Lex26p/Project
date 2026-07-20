@@ -17,6 +17,10 @@
     <ProjectReference Include="..\..\src\Dispatcher.Events\Dispatcher.Events.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Platform\Dispatcher.Platform.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.ProtocolCommissioning\Dispatcher.ProtocolCommissioning.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Protocols\Dispatcher.Protocols.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Modbus\Dispatcher.Modbus.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Snmp\Dispatcher.Snmp.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.History\Dispatcher.History.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Server\Dispatcher.Server.csproj" />

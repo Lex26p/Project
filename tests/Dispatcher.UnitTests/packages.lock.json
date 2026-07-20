@@ -472,6 +472,17 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.protocolcommissioning": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Configuration": "[1.0.0, )",
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Modbus": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Snmp": "[1.0.0, )"
+        }
+      },
       "dispatcher.protocols": {
         "type": "Project",
         "dependencies": {
@@ -484,6 +495,7 @@
         "dependencies": {
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Modbus": "[1.0.0, )",
+          "Dispatcher.ProtocolCommissioning": "[1.0.0, )",
           "Dispatcher.Protocols": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Dispatcher.Snmp": "[1.0.0, )",

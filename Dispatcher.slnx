@@ -5,6 +5,7 @@
   <Project Path="src/Dispatcher.Core/Dispatcher.Core.csproj" />
   <Project Path="src/Dispatcher.Modbus/Dispatcher.Modbus.csproj" />
   <Project Path="src/Dispatcher.Protocols/Dispatcher.Protocols.csproj" />
+  <Project Path="src/Dispatcher.ProtocolCommissioning/Dispatcher.ProtocolCommissioning.csproj" />
   <Project Path="src/Dispatcher.RuntimeHost/Dispatcher.RuntimeHost.csproj" />
   <Project Path="src/Dispatcher.Snmp/Dispatcher.Snmp.csproj" />
   <Project Path="src/Dispatcher.Dashboards/Dispatcher.Dashboards.csproj" />

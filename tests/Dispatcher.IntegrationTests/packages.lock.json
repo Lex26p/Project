@@ -201,6 +201,14 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.modbus": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )"
+        }
+      },
       "dispatcher.persistence": {
         "type": "Project",
         "dependencies": {
@@ -213,6 +221,24 @@
           "Dispatcher.Persistence": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
+        }
+      },
+      "dispatcher.protocolcommissioning": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Configuration": "[1.0.0, )",
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Modbus": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Snmp": "[1.0.0, )"
+        }
+      },
+      "dispatcher.protocols": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )"
         }
       },
       "dispatcher.semantics": {
@@ -244,6 +270,14 @@
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
+        }
+      },
+      "dispatcher.snmp": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )"
         }
       },
       "dispatcher.web": {
