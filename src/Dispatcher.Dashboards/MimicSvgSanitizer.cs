@@ -6,7 +6,7 @@ using System.Xml.Linq;
 
 namespace Dispatcher.Dashboards;
 
-internal static class MimicSvgSanitizer
+public static class MimicSvgSanitizer
 {
     private static readonly HashSet<string> AllowedElements = new(StringComparer.Ordinal)
     {
@@ -135,6 +135,34 @@ internal static class MimicSvgSanitizer
         var json = JsonSerializer.Serialize(dto);
         var dependenciesJson = JsonSerializer.Serialize(dependencies);
         return (json, Hash(json), dependenciesJson, Hash(dependenciesJson));
+    }
+
+    public static string Sanitize(MimicDraftContent content, SvgIntakeLimits limits)
+    {
+        var normalized = Normalize(content, limits);
+        return JsonSerializer.Deserialize<MimicDto>(normalized.Json)?.Svg
+            ?? throw new ArgumentException("Sanitized SVG is empty.", nameof(content));
+    }
+
+    internal static MimicDraftContent Decode(string contentJson, string dependenciesJson)
+    {
+        var content = JsonSerializer.Deserialize<MimicDto>(contentJson)
+            ?? throw new InvalidOperationException("Mimic content is empty.");
+        var dependencies = JsonSerializer.Deserialize<DependencyDto[]>(dependenciesJson) ?? [];
+        return new MimicDraftContent(
+            content.Name,
+            content.Svg,
+            content.Bindings.Select(binding => new DashboardBinding(
+                DashboardBindingId.From(binding.BindingId),
+                (DashboardBindingSource)binding.Source,
+                Dispatcher.Core.RuntimeScopeId.From(binding.ScopeId),
+                Dispatcher.Semantics.PointId.From(binding.PointId),
+                Dispatcher.Platform.PermissionCode.From(binding.RequiredPermission),
+                binding.HistorySourceId is null
+                    ? null
+                    : Dispatcher.Core.SourceId.From(binding.HistorySourceId.Value))).ToArray(),
+            dependencies.Select(item => new DashboardDependency(
+                DashboardBindingId.From(item.BindingId), item.Key, item.Fingerprint)).ToArray());
     }
 
     private static string Hash(string value) =>

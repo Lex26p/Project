@@ -1,0 +1,152 @@
+@page "/mimic-editor/{MimicId:guid}"
+@inject EditorApiClient Api
+
+<PageTitle>SVG Mimic Editor</PageTitle>
+
+@if (accessDenied)
+{
+    <p role="alert">This Mimic editor is not available.</p>
+}
+else if (!loaded)
+{
+    <p>Loading Mimic editor…</p>
+}
+else
+{
+    <h1>SVG Mimic Editor</h1>
+    <p>Mimic: @MimicId</p>
+    <label>Name <input value="@name" @oninput="ChangeName" /></label>
+    <label>SVG content <textarea value="@svg" @oninput="ChangeSvg"></textarea></label>
+    <button type="button" @onclick="AddBinding">Add binding</button>
+    @foreach (var binding in bindings)
+    {
+        <fieldset @key="binding.BindingId">
+            <legend>Binding @binding.BindingId</legend>
+            <label>Scope <input value="@binding.ScopeId" @onchange="args => ChangeScope(binding, args)" /></label>
+            <label>Point <input value="@binding.PointId" @onchange="args => ChangePoint(binding, args)" /></label>
+            <label>Dependency fingerprint <input value="@binding.Fingerprint" @oninput="args => ChangeFingerprint(binding, args)" /></label>
+        </fieldset>
+    }
+    <div>
+        <button type="button" @onclick="PreviewAsync">Preview</button>
+        <button type="button" @onclick="SaveAsync">Save</button>
+        <button type="button" disabled="@(workflow.Revision is null || workflow.IsUnsaved)" @onclick="ValidateAsync">Validate</button>
+        <button type="button" disabled="@(!workflow.IsValidated)" @onclick="PublishAsync">Publish</button>
+    </div>
+    @if (preview is not null)
+    {
+        <section aria-label="Sanitized Mimic preview">@((MarkupString)preview)</section>
+    }
+    @if (workflow.IsUnsaved) { <p role="status">Unsaved changes.</p> }
+    @if (workflow.HasConflict) { <p role="alert">The Mimic draft changed concurrently. Reload before saving.</p> }
+    @if (!string.IsNullOrEmpty(status)) { <p role="status">@status</p> }
+}
+
+@code {
+    [Parameter] public Guid MimicId { get; set; }
+    private readonly EditorWorkflowState workflow = new();
+    private readonly List<BindingForm> bindings = [];
+    private string name = "New Mimic";
+    private string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+    private string? preview;
+    private string? status;
+    private bool loaded;
+    private bool accessDenied;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loaded = false;
+        try
+        {
+            var draft = await Api.ReadMimicAsync(MimicId);
+            bindings.Clear();
+            if (draft is not null)
+            {
+                name = draft.Document.Name;
+                svg = draft.Document.Svg;
+                var dependencies = draft.Document.Dependencies.ToDictionary(item => item.BindingId);
+                bindings.AddRange(draft.Document.Bindings.Select(binding => new BindingForm(
+                    binding.BindingId, binding.ScopeId, binding.PointId,
+                    binding.RequiredPermission, dependencies[binding.BindingId].Fingerprint)));
+                workflow.Load(draft.Revision);
+            }
+            else workflow.Load(null);
+        }
+        catch (EditorAccessDeniedException) { accessDenied = true; }
+        loaded = true;
+    }
+
+    private void ChangeName(ChangeEventArgs args) { name = Text(args); workflow.MarkChanged(); preview = null; }
+    private void ChangeSvg(ChangeEventArgs args) { svg = Text(args); workflow.MarkChanged(); preview = null; }
+    private void ChangeScope(BindingForm item, ChangeEventArgs args) { if (Guid.TryParse(Text(args), out var id)) item.ScopeId = id; workflow.MarkChanged(); }
+    private void ChangePoint(BindingForm item, ChangeEventArgs args) { if (Guid.TryParse(Text(args), out var id)) item.PointId = id; workflow.MarkChanged(); }
+    private void ChangeFingerprint(BindingForm item, ChangeEventArgs args) { item.Fingerprint = Text(args); workflow.MarkChanged(); }
+
+    private void AddBinding()
+    {
+        var pointId = Guid.NewGuid();
+        bindings.Add(new BindingForm(
+            Guid.NewGuid(), Guid.NewGuid(), pointId,
+            $"runtime.point.p{pointId:N}.read", $"revision:{pointId:N}"));
+        workflow.MarkChanged();
+    }
+
+    private async Task PreviewAsync() => await RunAsync(async () =>
+    {
+        preview = (await Api.PreviewMimicAsync(MimicId, Document())).SanitizedSvg;
+        status = "Sanitized preview ready.";
+    });
+
+    private async Task SaveAsync() => await RunAsync(async () =>
+    {
+        workflow.Saved(await Api.SaveMimicAsync(
+            MimicId, new SaveMimicEditorRequest(workflow.Revision?.Version, Document())));
+        status = "Mimic draft saved.";
+    });
+
+    private async Task ValidateAsync() => await RunAsync(async () =>
+    {
+        var revision = RequiredRevision();
+        workflow.Validated(await Api.ValidateMimicAsync(
+            MimicId, new EditorRevisionRequest(revision.RevisionId, revision.Version)));
+        status = "Exact Mimic revision validated.";
+    });
+
+    private async Task PublishAsync() => await RunAsync(async () =>
+    {
+        var revision = RequiredRevision();
+        workflow.Published(await Api.PublishMimicAsync(
+            MimicId, new EditorRevisionRequest(revision.RevisionId, revision.Version)));
+        status = "Mimic published.";
+    });
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        try { await action(); }
+        catch (EditorConflictException) { workflow.MarkConflict(); status = null; }
+        catch (HttpRequestException exception) { status = exception.Message; }
+    }
+
+    private MimicEditorDocumentPayload Document() => new(
+        name,
+        svg,
+        bindings.Select(binding => new EditorBindingPayload(
+            binding.BindingId, "Current", binding.ScopeId, binding.PointId,
+            binding.RequiredPermission, null)).ToArray(),
+        bindings.Select(binding => new EditorDependencyPayload(
+            binding.BindingId, $"point:{binding.PointId:N}", binding.Fingerprint)).ToArray());
+
+    private EditorRevisionPayload RequiredRevision() => workflow.Revision
+        ?? throw new InvalidOperationException("Save the draft first.");
+    private static string Text(ChangeEventArgs args) => args.Value?.ToString() ?? string.Empty;
+
+    private sealed class BindingForm(
+        Guid bindingId, Guid scopeId, Guid pointId, string requiredPermission, string fingerprint)
+    {
+        public Guid BindingId { get; } = bindingId;
+        public Guid ScopeId { get; set; } = scopeId;
+        public Guid PointId { get; set; } = pointId;
+        public string RequiredPermission { get; } = requiredPermission;
+        public string Fingerprint { get; set; } = fingerprint;
+    }
+}

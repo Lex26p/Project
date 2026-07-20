@@ -63,6 +63,14 @@ public sealed record DashboardAuthoringState(
     Guid? PublishedRevisionId,
     long Version);
 
+public sealed record DashboardDraftSnapshot(
+    DashboardAuthoringRevisionSnapshot Revision,
+    DashboardDraftContent Content);
+
+public sealed record MimicDraftSnapshot(
+    DashboardAuthoringRevisionSnapshot Revision,
+    MimicDraftContent Content);
+
 public sealed record SvgIntakeLimits
 {
     public SvgIntakeLimits(int maxUtf8Bytes, int maxElements, int maxAttributesPerElement, int maxAttributeLength)
@@ -85,6 +93,7 @@ public sealed record SvgIntakeLimits
 
 public static class DashboardEditorPermissions
 {
+    public static PermissionCode Read(DashboardId id) => Permission(id, "read");
     public static PermissionCode Save(DashboardId id) => Permission(id, "save");
     public static PermissionCode Validate(DashboardId id) => Permission(id, "validate");
     public static PermissionCode Publish(DashboardId id) => Permission(id, "publish");
@@ -95,6 +104,7 @@ public static class DashboardEditorPermissions
 
 public static class MimicEditorPermissions
 {
+    public static PermissionCode Read(MimicId id) => Permission(id, "read");
     public static PermissionCode Save(MimicId id) => Permission(id, "save");
     public static PermissionCode Validate(MimicId id) => Permission(id, "validate");
     public static PermissionCode Publish(MimicId id) => Permission(id, "publish");

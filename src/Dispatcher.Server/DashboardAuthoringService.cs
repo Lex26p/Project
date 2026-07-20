@@ -34,6 +34,15 @@ public sealed class DashboardAuthoringService
             authorization => store.SaveDashboardDraftAsync(
                 authorization, dashboardId, request, cancellationToken));
 
+    public Task<Result<DashboardDraftSnapshot?>> ReadDashboardAsync(
+        SessionSnapshot? session,
+        DashboardId dashboardId,
+        CancellationToken cancellationToken) =>
+        ReadAsync(
+            session,
+            DashboardEditorPermissions.Read(dashboardId),
+            () => store.ReadDashboardDraftAsync(dashboardId, cancellationToken));
+
     public Task<Result<DashboardAuthoringRevisionSnapshot>> SaveMimicAsync(
         SessionSnapshot? session,
         MimicId mimicId,
@@ -44,6 +53,38 @@ public sealed class DashboardAuthoringService
             MimicEditorPermissions.Save(mimicId),
             authorization => store.SaveMimicDraftAsync(
                 authorization, mimicId, request, svgLimits, cancellationToken));
+
+    public Task<Result<MimicDraftSnapshot?>> ReadMimicAsync(
+        SessionSnapshot? session,
+        MimicId mimicId,
+        CancellationToken cancellationToken) =>
+        ReadAsync(
+            session,
+            MimicEditorPermissions.Read(mimicId),
+            () => store.ReadMimicDraftAsync(mimicId, cancellationToken));
+
+    public Result<string> PreviewMimic(
+        SessionSnapshot? session,
+        MimicId mimicId,
+        MimicDraftContent content)
+    {
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MimicEditorPermissions.Read(mimicId), clock);
+        if (authorization.IsFailure)
+        {
+            return Result.Failure<string>(authorization.Error!);
+        }
+
+        try
+        {
+            return Result.Success(MimicSvgSanitizer.Sanitize(content, svgLimits));
+        }
+        catch (ArgumentException exception)
+        {
+            return Result.Failure<string>(new OperationError(
+                ErrorCode.From("dashboard.content_invalid"), exception.Message));
+        }
+    }
 
     public Task<Result<DashboardAuthoringRevisionSnapshot>> ValidateDashboardAsync(
         SessionSnapshot? session,
@@ -140,5 +181,17 @@ public sealed class DashboardAuthoringService
         return authorization.IsSuccess
             ? action(authorization.Value)
             : Task.FromResult(Result.Failure<DashboardAuthoringRevisionSnapshot>(authorization.Error!));
+    }
+
+    private async Task<Result<T?>> ReadAsync<T>(
+        SessionSnapshot? session,
+        PermissionCode permission,
+        Func<Task<T?>> read)
+        where T : class
+    {
+        var authorization = SessionAuthorization.AuthorizeAccess(session, permission, clock);
+        return authorization.IsSuccess
+            ? Result.Success(await read().ConfigureAwait(false))
+            : Result.Failure<T?>(authorization.Error!);
     }
 }

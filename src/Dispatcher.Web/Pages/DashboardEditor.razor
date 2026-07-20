@@ -1,0 +1,210 @@
+@page "/dashboard-editor/{DashboardId:guid}"
+@inject EditorApiClient Api
+
+<PageTitle>Dashboard Editor</PageTitle>
+
+@if (accessDenied)
+{
+    <p role="alert">This Dashboard editor is not available.</p>
+}
+else if (!loaded)
+{
+    <p>Loading Dashboard editor…</p>
+}
+else
+{
+    <h1>Dashboard Editor</h1>
+    <p>Dashboard: @DashboardId</p>
+    <label>Name <input value="@name" @oninput="ChangeName" /></label>
+    <label>Description <input value="@description" @oninput="ChangeDescription" /></label>
+    <button type="button" @onclick="AddWindow">Add window</button>
+
+    @foreach (var window in windows)
+    {
+        <section @key="window.WindowId">
+            <h2>Window</h2>
+            <input value="@window.Title" @oninput="args => ChangeWindowTitle(window, args)" />
+            <button type="button" @onclick="() => AddBinding(window)">Add widget binding</button>
+            @foreach (var binding in window.Bindings)
+            {
+                <fieldset @key="binding.BindingId">
+                    <legend>@binding.BindingId</legend>
+                    <label>Widget title <input value="@binding.WidgetTitle" @oninput="args => ChangeWidgetTitle(binding, args)" /></label>
+                    <label>Widget kind <input value="@binding.WidgetKind" @oninput="args => ChangeWidgetKind(binding, args)" /></label>
+                    <label>Source
+                        <select value="@binding.Source" @onchange="args => ChangeSource(binding, args)">
+                            <option>Current</option><option>Alarm</option><option>History</option>
+                        </select>
+                    </label>
+                    <label>Scope <input value="@binding.ScopeId" @onchange="args => ChangeScope(binding, args)" /></label>
+                    <label>Point <input value="@binding.PointId" @onchange="args => ChangePoint(binding, args)" /></label>
+                    <label>History source <input value="@binding.HistorySourceId" @onchange="args => ChangeHistorySource(binding, args)" /></label>
+                    <label>Required permission <input value="@binding.RequiredPermission" @oninput="args => ChangePermission(binding, args)" /></label>
+                    <label>Dependency fingerprint <input value="@binding.DependencyFingerprint" @oninput="args => ChangeFingerprint(binding, args)" /></label>
+                </fieldset>
+            }
+        </section>
+    }
+
+    <div>
+        <button type="button" @onclick="SaveAsync">Save</button>
+        <button type="button" disabled="@(workflow.Revision is null || workflow.IsUnsaved)" @onclick="ValidateAsync">Validate</button>
+        <button type="button" disabled="@(!workflow.IsValidated)" @onclick="PublishAsync">Publish</button>
+    </div>
+    @if (workflow.IsUnsaved) { <p role="status">Unsaved changes.</p> }
+    @if (workflow.HasConflict) { <p role="alert">The draft changed concurrently. Reload before saving.</p> }
+    @if (!string.IsNullOrEmpty(status)) { <p role="status">@status</p> }
+}
+
+@code {
+    [Parameter] public Guid DashboardId { get; set; }
+
+    private readonly EditorWorkflowState workflow = new();
+    private readonly List<WindowForm> windows = [];
+    private string name = "New Dashboard";
+    private string? description;
+    private string? status;
+    private bool loaded;
+    private bool accessDenied;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loaded = false;
+        try
+        {
+            var draft = await Api.ReadDashboardAsync(DashboardId);
+            windows.Clear();
+            if (draft is not null)
+            {
+                name = draft.Document.Name;
+                description = draft.Document.Description;
+                var dependencies = draft.Document.Dependencies.ToDictionary(item => item.BindingId);
+                foreach (var item in draft.Document.Windows)
+                {
+                    var window = new WindowForm(item.WindowId, item.Title);
+                    foreach (var binding in item.Bindings)
+                    {
+                        var widget = item.Widgets.First(widget => widget.BindingIds.Contains(binding.BindingId));
+                        window.Bindings.Add(BindingForm.From(
+                            binding,
+                            widget,
+                            dependencies[binding.BindingId].Fingerprint));
+                    }
+                    windows.Add(window);
+                }
+                workflow.Load(draft.Revision);
+            }
+            else
+            {
+                workflow.Load(null);
+            }
+        }
+        catch (EditorAccessDeniedException)
+        {
+            accessDenied = true;
+        }
+        loaded = true;
+    }
+
+    private void ChangeName(ChangeEventArgs args) { name = Text(args); workflow.MarkChanged(); }
+    private void ChangeDescription(ChangeEventArgs args) { description = Text(args); workflow.MarkChanged(); }
+    private void ChangeWindowTitle(WindowForm item, ChangeEventArgs args) { item.Title = Text(args); workflow.MarkChanged(); }
+    private void ChangeWidgetTitle(BindingForm item, ChangeEventArgs args) { item.WidgetTitle = Text(args); workflow.MarkChanged(); }
+    private void ChangeWidgetKind(BindingForm item, ChangeEventArgs args) { item.WidgetKind = Text(args); workflow.MarkChanged(); }
+    private void ChangeSource(BindingForm item, ChangeEventArgs args) { item.Source = Text(args); workflow.MarkChanged(); }
+    private void ChangePermission(BindingForm item, ChangeEventArgs args) { item.RequiredPermission = Text(args); workflow.MarkChanged(); }
+    private void ChangeFingerprint(BindingForm item, ChangeEventArgs args) { item.DependencyFingerprint = Text(args); workflow.MarkChanged(); }
+    private void ChangeScope(BindingForm item, ChangeEventArgs args) { if (Guid.TryParse(Text(args), out var id)) item.ScopeId = id; workflow.MarkChanged(); }
+    private void ChangePoint(BindingForm item, ChangeEventArgs args) { if (Guid.TryParse(Text(args), out var id)) item.PointId = id; workflow.MarkChanged(); }
+    private void ChangeHistorySource(BindingForm item, ChangeEventArgs args) { item.HistorySourceId = Guid.TryParse(Text(args), out var id) ? id : null; workflow.MarkChanged(); }
+
+    private void AddWindow() { windows.Add(new WindowForm(Guid.NewGuid(), $"Window {windows.Count + 1}")); workflow.MarkChanged(); }
+
+    private void AddBinding(WindowForm window)
+    {
+        var pointId = Guid.NewGuid();
+        window.Bindings.Add(new BindingForm(
+            Guid.NewGuid(), Guid.NewGuid(), "Value", "value", "Current",
+            Guid.NewGuid(), pointId, null, $"runtime.point.p{pointId:N}.read", $"point:{pointId:N}"));
+        workflow.MarkChanged();
+    }
+
+    private async Task SaveAsync() => await RunAsync(async () =>
+    {
+        var revision = await Api.SaveDashboardAsync(
+            DashboardId,
+            new SaveDashboardEditorRequest(workflow.Revision?.Version, Document()));
+        workflow.Saved(revision);
+        status = "Draft saved.";
+    });
+
+    private async Task ValidateAsync() => await RunAsync(async () =>
+    {
+        var revision = RequiredRevision();
+        workflow.Validated(await Api.ValidateDashboardAsync(
+            DashboardId, new EditorRevisionRequest(revision.RevisionId, revision.Version)));
+        status = "Exact revision validated.";
+    });
+
+    private async Task PublishAsync() => await RunAsync(async () =>
+    {
+        var revision = RequiredRevision();
+        workflow.Published(await Api.PublishDashboardAsync(
+            DashboardId, new EditorRevisionRequest(revision.RevisionId, revision.Version)));
+        status = "Dashboard published.";
+    });
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        try { await action(); }
+        catch (EditorConflictException) { workflow.MarkConflict(); status = null; }
+        catch (HttpRequestException exception) { status = exception.Message; }
+    }
+
+    private DashboardEditorDocumentPayload Document() => new(
+        name,
+        description,
+        windows.Select(window => new EditorWindowPayload(
+            window.WindowId,
+            window.Title,
+            window.Bindings.Select(binding => new EditorWidgetPayload(
+                binding.WidgetId, binding.WidgetKind, binding.WidgetTitle, [binding.BindingId])).ToArray(),
+            window.Bindings.Select(binding => binding.Payload()).ToArray())).ToArray(),
+        windows.SelectMany(window => window.Bindings).Select(binding => new EditorDependencyPayload(
+            binding.BindingId, $"point:{binding.PointId:N}:{binding.Source}", binding.DependencyFingerprint)).ToArray());
+
+    private EditorRevisionPayload RequiredRevision() => workflow.Revision
+        ?? throw new InvalidOperationException("Save the draft first.");
+    private static string Text(ChangeEventArgs args) => args.Value?.ToString() ?? string.Empty;
+
+    private sealed class WindowForm(Guid windowId, string title)
+    {
+        public Guid WindowId { get; } = windowId;
+        public string Title { get; set; } = title;
+        public List<BindingForm> Bindings { get; } = [];
+    }
+
+    private sealed class BindingForm(
+        Guid bindingId, Guid widgetId, string widgetTitle, string widgetKind, string source,
+        Guid scopeId, Guid pointId, Guid? historySourceId, string requiredPermission, string dependencyFingerprint)
+    {
+        public Guid BindingId { get; } = bindingId;
+        public Guid WidgetId { get; } = widgetId;
+        public string WidgetTitle { get; set; } = widgetTitle;
+        public string WidgetKind { get; set; } = widgetKind;
+        public string Source { get; set; } = source;
+        public Guid ScopeId { get; set; } = scopeId;
+        public Guid PointId { get; set; } = pointId;
+        public Guid? HistorySourceId { get; set; } = historySourceId;
+        public string RequiredPermission { get; set; } = requiredPermission;
+        public string DependencyFingerprint { get; set; } = dependencyFingerprint;
+
+        public EditorBindingPayload Payload() => new(
+            BindingId, Source, ScopeId, PointId, RequiredPermission, HistorySourceId);
+
+        public static BindingForm From(
+            EditorBindingPayload binding, EditorWidgetPayload widget, string fingerprint) => new(
+            binding.BindingId, widget.WidgetId, widget.Title, widget.Kind, binding.Source,
+            binding.ScopeId, binding.PointId, binding.HistorySourceId, binding.RequiredPermission, fingerprint);
+    }
+}

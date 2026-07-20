@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S22` реализован и проверен на Windows x64; остановлено перед `S22A`
+**Статус программы:** `S22A` реализован и проверен на Windows x64; остановлено перед `S23`
 
-**Последний завершённый пакет:** `S22` — Dashboard/Mimic draft/validate/publish/rollback lifecycle, bounded SVG sanitization, exact binding validation, editor permission/audit и atomic publication impact (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S22A` — отдельные core Web workflows Dashboard Editor и SVG Mimic Editor, exact revision save/validate/publish, sanitized preview и explicit unsaved/conflict/direct-link permission behavior (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S22A` — core Web workflows Dashboard Editor и SVG Mimic Editor, отдельные routes/entities, preview/validate/save/publish и explicit unsaved/conflict states из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S23` — protocol source/diagnostic contract, отдельный Core/runtime host с workload identity/secret resolution/bounded parser-I/O/lifecycle supervision и Simulator parity suite; закрывает `IG-06` и фиксирует protocol-specific `DG-07` evidence plan из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S22`: solution build — 0 warnings/0 errors; 66 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S22A`: solution build — 0 warnings/0 errors; 68 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -129,7 +129,12 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Dashboard publish в одной owner transaction создаёт immutable whole revision, переключает runtime pointer и пишет editor audit; после commit все subscription leases прежней revision закрываются и требуют новый authorized manifest.
 - Mimic SVG intake ограничен конфигурируемыми UTF-8 bytes/elements/attributes/value length, запрещает DTD, script, foreign/external namespaces, event handlers, `url(...)`, `javascript:`/`data:` и не принимает arbitrary HTML.
 - Sanitized Mimic SVG требует exact equality объявленных и использованных binding identities, а dependencies полностью покрывают bindings; опубликованный Mimic content защищён PostgreSQL trigger от mutation.
-- Dashboard/Mimic editor mutations используют отдельные resource/action permissions и атомарный owner audit с session/subject/permission/resulting version; Web editor routes и unsaved/conflict UX остаются scope `S22A`.
+- Dashboard/Mimic editor mutations используют отдельные resource/action permissions и атомарный owner audit с session/subject/permission/resulting version.
+- Server предоставляет отдельные permission-checked `/api/dashboard-editor` и `/api/mimic-editor` contracts для read/save/validate/publish и sanitized Mimic preview; optimistic conflict/stale validation представлены как `409`, direct-link denial как `403`.
+- Канонические Web routes `/dashboard-editor/{dashboardId}` и `/mimic-editor/{mimicId}` принадлежат разным entity/workflow; Dashboard editor редактирует windows/widgets/Current-Alarm-History bindings и exact dependencies, включая обязательный History source.
+- SVG Mimic Editor редактирует отдельные SVG content/bindings/dependencies, показывает только Server-sanitized preview и публикует только exact сохранённую и validated revision.
+- Общий editor workflow state явно различает loaded/saved, unsaved, validated и conflict; любое изменение снимает готовность publish, а `409` требует reload/reconcile вместо скрытого overwrite.
+- Dashboard и Mimic direct routes проверяют отдельные read permissions до выдачи draft content; permission одной editor entity не открывает другую.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.

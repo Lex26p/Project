@@ -155,6 +155,14 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
             context.FirstDashboardId,
             new SaveDashboardDraftRequest(context.Draft("Changed"), validated.Value.Version),
             CancellationToken.None);
+        var direct = await authoring.ReadDashboardAsync(
+            editor, context.FirstDashboardId, CancellationToken.None);
+        Assert.Equal("Changed", direct.Value?.Content.Name);
+        var directDenied = await authoring.ReadDashboardAsync(
+            context.Session(readFirst: true, readSecond: false),
+            context.FirstDashboardId,
+            CancellationToken.None);
+        Assert.Equal("permission.denied", directDenied.Error?.Code.Value);
         var stale = await authoring.PublishDashboardAsync(
             editor,
             context.FirstDashboardId,
@@ -271,6 +279,13 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
             mimicId,
             new SaveMimicDraftRequest(safe, null),
             CancellationToken.None);
+        var read = await authoring.ReadMimicAsync(editor, mimicId, CancellationToken.None);
+        Assert.Contains("data-binding-id", read.Value!.Content.Svg, StringComparison.Ordinal);
+        var preview = authoring.PreviewMimic(editor, mimicId, safe);
+        Assert.Contains("<rect", preview.Value, StringComparison.Ordinal);
+        var crossEntityDenied = await authoring.ReadMimicAsync(
+            context.DashboardEditorSession(), mimicId, CancellationToken.None);
+        Assert.Equal("permission.denied", crossEntityDenied.Error?.Code.Value);
         var validated = await authoring.ValidateMimicAsync(
             editor, mimicId, saved.Value.RevisionId, saved.Value.Version, CancellationToken.None);
         var published = await authoring.PublishMimicAsync(
@@ -472,6 +487,7 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
         }
 
         public SessionSnapshot DashboardEditorSession() => SessionWithPermissions([
+            DashboardEditorPermissions.Read(FirstDashboardId),
             DashboardEditorPermissions.Save(FirstDashboardId),
             DashboardEditorPermissions.Validate(FirstDashboardId),
             DashboardEditorPermissions.Publish(FirstDashboardId),
@@ -479,6 +495,7 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
         ]);
 
         public static SessionSnapshot MimicEditorSession(MimicId mimicId) => SessionWithPermissions([
+            MimicEditorPermissions.Read(mimicId),
             MimicEditorPermissions.Save(mimicId),
             MimicEditorPermissions.Validate(mimicId),
             MimicEditorPermissions.Publish(mimicId),

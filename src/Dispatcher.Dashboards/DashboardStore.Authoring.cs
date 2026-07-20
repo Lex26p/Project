@@ -286,6 +286,54 @@ public sealed partial class DashboardStore
                 resource.PublishedRevisionId, resource.Version);
     }
 
+    public async Task<DashboardDraftSnapshot?> ReadDashboardDraftAsync(
+        DashboardId dashboardId,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await ReadDraftAsync(
+            dashboardId.Value, DashboardAuthoringKind.Dashboard, cancellationToken).ConfigureAwait(false);
+        if (stored is null)
+        {
+            return null;
+        }
+
+        var revision = DashboardManifestCodec.Decode(stored.ContentJson, stored.DependenciesJson);
+        return new DashboardDraftSnapshot(
+            stored.Snapshot,
+            new DashboardDraftContent(
+                revision.Name, revision.Description, revision.Windows, revision.Dependencies));
+    }
+
+    public async Task<MimicDraftSnapshot?> ReadMimicDraftAsync(
+        MimicId mimicId,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await ReadDraftAsync(
+            mimicId.Value, DashboardAuthoringKind.Mimic, cancellationToken).ConfigureAwait(false);
+        return stored is null
+            ? null
+            : new MimicDraftSnapshot(
+                stored.Snapshot,
+                MimicSvgSanitizer.Decode(stored.ContentJson, stored.DependenciesJson));
+    }
+
+    private async Task<StoredRevision?> ReadDraftAsync(
+        Guid resourceId,
+        DashboardAuthoringKind kind,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var resource = await ReadResourceAsync(connection, transaction, resourceId, cancellationToken).ConfigureAwait(false);
+        var stored = resource?.Kind == kind && resource.DraftRevisionId is not null
+            ? await ReadStoredRevisionAsync(
+                connection, transaction, resource.DraftRevisionId.Value, false, cancellationToken).ConfigureAwait(false)
+            : null;
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return stored;
+    }
+
     private async Task<Result<DashboardAuthoringRevisionSnapshot>> SaveDraftAsync(
         AuthorizedMutation authorization,
         Guid resourceId,

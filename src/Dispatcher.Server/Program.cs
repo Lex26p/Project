@@ -113,5 +113,6 @@ if (eventEnabled)
 if (dashboardEnabled)
 {
     app.MapDashboardServer();
+    app.MapDashboardAuthoringServer();
 }
 app.Run();
