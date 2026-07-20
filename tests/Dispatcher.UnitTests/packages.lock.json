@@ -402,6 +402,16 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.dashboards": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.equipment": {
         "type": "Project",
         "dependencies": {

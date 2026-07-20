@@ -3,6 +3,7 @@
   <Project Path="src/Dispatcher.Persistence/Dispatcher.Persistence.csproj" />
   <Project Path="src/Dispatcher.Platform/Dispatcher.Platform.csproj" />
   <Project Path="src/Dispatcher.Core/Dispatcher.Core.csproj" />
+  <Project Path="src/Dispatcher.Dashboards/Dispatcher.Dashboards.csproj" />
   <Project Path="src/Dispatcher.Alarm/Dispatcher.Alarm.csproj" />
   <Project Path="src/Dispatcher.Events/Dispatcher.Events.csproj" />
   <Project Path="src/Dispatcher.History/Dispatcher.History.csproj" />

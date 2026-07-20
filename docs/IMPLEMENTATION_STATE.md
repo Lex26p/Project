@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S19` реализован и проверен на Windows x64; остановлено перед `S20`
+**Статус программы:** `S20` реализован и проверен на Windows x64; остановлено перед `S21`
 
-**Последний завершённый пакет:** `S19` — authorized Alarm actions, maintenance constraints, idempotency/audit/expected-version races, priority/flood/recovery и source links (`8ab0649` + working tree, commit не создан)
+**Последний завершённый пакет:** `S20` — Dashboard/Window/Widget/binding model, immutable whole-revision publication with exact dependencies, authorized catalog/personal state и access-loss fallback (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S20` — Dashboard/Window/Widget/binding model, immutable published runtime manifest with exact dependencies, catalog/favorites/recent/last accessible dashboard и permission-filtered fallback behavior из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S21` — visible/authorized window subscription manifest, Current/Alarm/History links, per-widget partial/stale state, coalescing, hidden-tab policy и reconnect/resync из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S19`: locked restore и format verification green; Release build — 0 warnings/0 errors; 62 unit + 52 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S20`: solution build — 0 warnings/0 errors; 63 unit + 54 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -115,6 +115,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Action timeout после commit остаётся `Unknown` до повторного запроса с тем же idempotency key; reconciliation возвращает durable replay и только затем догоняет Event occurrence projection.
 - Alarm priority фиксируется definition/occurrence и переносится в immutable Event/projection; bounded flood corpus сохраняет все protected journal records и подтверждает priority filtering.
 - Alarm source response передаёт stable Dashboard point-binding key и canonical Equipment route, сохраняя повторную authorization у целевого consumer.
+- `MOD-DSH` владеет отдельной PostgreSQL schema для Dashboard catalog, immutable published revisions и dashboard-specific favorite/recent/last-accessible state; Home остаётся отдельным `MOD-WSP` workspace.
+- Dashboard revision публикуется и восстанавливается только целиком; Window является каноническим экранным контрактом без отдельной `{screen}` domain entity, а exact dependencies детерминированно fingerprinted и полностью покрывают bindings.
+- Server фильтрует catalog по Dashboard permission, а published manifest — по binding permission до формирования windows/widgets/bindings/dependencies; hidden binding отсутствует во всех выдаваемых metadata.
+- При потере доступа last-accessible Dashboard заменяется первым разрешённым favorite/recent/catalog candidate и новый fallback сохраняется; недоступный Dashboard не раскрывается в catalog либо landing response.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.
@@ -122,7 +126,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 ## Provisional
 
 - exact .NET 10 SDK feature-band/patch beyond the repository baseline;
-- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event owners;
+- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event/Dashboard owners;
 - production process topology;
 - protocol isolation mechanism;
 - IAM/IdP mechanism;

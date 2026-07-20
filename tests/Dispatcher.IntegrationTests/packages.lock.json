@@ -153,6 +153,16 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.dashboards": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.equipment": {
         "type": "Project",
         "dependencies": {
@@ -213,6 +223,7 @@
         "dependencies": {
           "Dispatcher.Configuration": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Dashboards": "[1.0.0, )",
           "Dispatcher.Equipment": "[1.0.0, )",
           "Dispatcher.Events": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",

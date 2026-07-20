@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Dispatcher.Configuration\Dispatcher.Configuration.csproj" />
+    <ProjectReference Include="..\Dispatcher.Dashboards\Dispatcher.Dashboards.csproj" />
     <ProjectReference Include="..\Dispatcher.Events\Dispatcher.Events.csproj" />
     <PackageReference Include="Npgsql" />
   </ItemGroup>

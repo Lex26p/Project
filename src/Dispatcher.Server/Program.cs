@@ -58,6 +58,13 @@ if (eventEnabled)
         builder.Services.AddAlarmActionsServer(workspaceConnection!, alarmRole!);
     }
 }
+var dashboardRole = builder.Configuration["Dispatcher:Dashboards:DatabaseRole"];
+var dashboardEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
+                       !string.IsNullOrWhiteSpace(dashboardRole);
+if (dashboardEnabled)
+{
+    builder.Services.AddDashboardServer(workspaceConnection!, dashboardRole!);
+}
 
 var app = builder.Build();
 app.MapDispatcherServer();
@@ -80,5 +87,9 @@ if (eventEnabled)
     {
         app.MapAlarmActionsServer();
     }
+}
+if (dashboardEnabled)
+{
+    app.MapDashboardServer();
 }
 app.Run();
