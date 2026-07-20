@@ -2,6 +2,7 @@ namespace Dispatcher.Web;
 
 public sealed record DashboardSubscriptionRequest(IReadOnlyList<Guid> VisibleWindowIds);
 public sealed record DashboardSubscriptionPayload(
+    Guid SubscriptionId,
     Guid DashboardId,
     Guid RevisionId,
     IReadOnlyList<DashboardSubscriptionWindowPayload> Windows,
@@ -12,6 +13,7 @@ public sealed record DashboardSubscriptionWindowPayload(
 public sealed record DashboardSubscriptionWidgetPayload(Guid WidgetId, IReadOnlyList<Guid> BindingIds);
 public sealed record DashboardSubscriptionLinkPayload(
     Guid BindingId, string Source, Guid ScopeId, Guid PointId, string Endpoint);
+public sealed record DashboardSubscriptionStatusPayload(bool IsCurrent);
 
 public enum DashboardBindingAvailability
 {

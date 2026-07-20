@@ -164,11 +164,13 @@ public static class DashboardEndpoints
         this IServiceCollection services,
         string connectionString,
         string databaseRole,
-        DashboardRuntimeLimits runtimeLimits)
+        DashboardRuntimeLimits runtimeLimits,
+        SvgIntakeLimits svgIntakeLimits)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseRole);
         ArgumentNullException.ThrowIfNull(runtimeLimits);
+        ArgumentNullException.ThrowIfNull(svgIntakeLimits);
         services.TryAddSingleton(_ => NpgsqlDataSource.Create(connectionString));
         services.AddSingleton(sp => new DashboardStore(
             sp.GetRequiredService<NpgsqlDataSource>(),
@@ -176,7 +178,10 @@ public static class DashboardEndpoints
             sp.GetRequiredService<IWallClock>()));
         services.AddSingleton<AuthorizedDashboardService>();
         services.AddSingleton(runtimeLimits);
+        services.AddSingleton<DashboardSubscriptionGenerationStore>();
         services.AddSingleton<DashboardSubscriptionService>();
+        services.AddSingleton(svgIntakeLimits);
+        services.AddSingleton<DashboardAuthoringService>();
         return services;
     }
 
@@ -187,6 +192,7 @@ public static class DashboardEndpoints
         group.MapGet("/landing", ResolveLandingAsync);
         group.MapGet("/{dashboardId:guid}", ReadManifestAsync);
         group.MapPost("/{dashboardId:guid}/subscriptions", CreateSubscriptionAsync);
+        group.MapGet("/subscriptions/{subscriptionId:guid}/status", ReadSubscriptionStatus);
         group.MapPut("/{dashboardId:guid}/favorite", SetFavoriteAsync);
         group.MapPost("/{dashboardId:guid}/opened", RecordOpenedAsync);
         return endpoints;
@@ -242,6 +248,14 @@ public static class DashboardEndpoints
             .ConfigureAwait(false);
         return result.IsSuccess ? Results.NoContent() : Problem(result.Error!);
     }
+
+    private static IResult ReadSubscriptionStatus(
+        Guid subscriptionId,
+        HttpContext context,
+        RequestSessionResolver sessions,
+        DashboardSubscriptionService subscriptions) =>
+        Results.Ok(new DashboardSubscriptionStatusPayload(
+            subscriptions.IsCurrent(sessions.Resolve(context), subscriptionId)));
 
     private static async Task<IResult> CreateSubscriptionAsync(
         Guid dashboardId,
@@ -305,6 +319,7 @@ public static class DashboardEndpoints
 
 public sealed record DashboardFavoriteRequest(bool Favorite);
 public sealed record DashboardSubscriptionRequest(IReadOnlyList<Guid> VisibleWindowIds);
+public sealed record DashboardSubscriptionStatusPayload(bool IsCurrent);
 public sealed record DashboardCatalogPayload(
     Guid DashboardId, string Name, string? Description, bool IsFavorite, DateTimeOffset? LastOpenedAt);
 public sealed record DashboardLandingPayload(Guid? DashboardId);

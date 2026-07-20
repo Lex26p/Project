@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S21` реализован и проверен на Windows x64; остановлено перед `S22`
+**Статус программы:** `S22` реализован и проверен на Windows x64; остановлено перед `S22A`
 
-**Последний завершённый пакет:** `S21` — visible/authorized Dashboard subscription manifest, Current/Alarm/History consumer links, partial/stale widget state, coalescing/hidden-tab и explicit reconnect/resync behavior (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S22` — Dashboard/Mimic draft/validate/publish/rollback lifecycle, bounded SVG sanitization, exact binding validation, editor permission/audit и atomic publication impact (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S22` — Dashboard/Mimic draft/validate/publish/rollback lifecycles, bounded SVG intake/sanitization/binding validation, editor permission/audit и atomic publication impact из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S22A` — core Web workflows Dashboard Editor и SVG Mimic Editor, отдельные routes/entities, preview/validate/save/publish и explicit unsaved/conflict states из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S21`: solution build — 0 warnings/0 errors; 66 unit + 55 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S22`: solution build — 0 warnings/0 errors; 66 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -124,6 +124,12 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Web Dashboard runtime хранит client-local binding state и агрегирует его в `Ready`/`Partial`/`Stale` widget state; disconnect либо protected gap требует authorized resnapshot.
 - Hidden tab прекращает current polling/render и coalesce только latest current per binding; Alarm protected transitions сохраняются по position без coalescing, а исчерпание bounded client buffer создаёт явный gap/resync вместо silent loss.
 - Dashboard runtime state и capacity изолированы per client: медленный/hidden consumer не блокирует Core и не меняет cursor/state другого пользователя; production numeric limits остаются конфигурационными и не квалифицированы.
+- Dashboard и Mimic являются отдельными authoring resources с optimistic draft version, immutable published revisions и отдельными `save`/`validate`/`publish`/`rollback` transitions; draft никогда не меняет runtime manifest.
+- Editor save инвалидирует validation; validate фиксирует exact content/dependency fingerprints, stale revision не публикуется, а rollback копирует опубликованный snapshot в новую непроверенную revision без перемещения active pointer.
+- Dashboard publish в одной owner transaction создаёт immutable whole revision, переключает runtime pointer и пишет editor audit; после commit все subscription leases прежней revision закрываются и требуют новый authorized manifest.
+- Mimic SVG intake ограничен конфигурируемыми UTF-8 bytes/elements/attributes/value length, запрещает DTD, script, foreign/external namespaces, event handlers, `url(...)`, `javascript:`/`data:` и не принимает arbitrary HTML.
+- Sanitized Mimic SVG требует exact equality объявленных и использованных binding identities, а dependencies полностью покрывают bindings; опубликованный Mimic content защищён PostgreSQL trigger от mutation.
+- Dashboard/Mimic editor mutations используют отдельные resource/action permissions и атомарный owner audit с session/subject/permission/resulting version; Web editor routes и unsaved/conflict UX остаются scope `S22A`.
 - Общая build policy: nullable, analyzers, code style, warnings as errors и deterministic build.
 - Unit/integration test entry points и Windows x64 CI.
 - Implementation sequence и sprint catalog.

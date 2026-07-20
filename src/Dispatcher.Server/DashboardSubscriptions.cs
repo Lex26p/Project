@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Dispatcher.Dashboards;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
@@ -22,13 +23,16 @@ public sealed class DashboardSubscriptionService
 {
     private readonly AuthorizedDashboardService dashboards;
     private readonly DashboardRuntimeLimits limits;
+    private readonly DashboardSubscriptionGenerationStore generations;
 
     public DashboardSubscriptionService(
         AuthorizedDashboardService dashboards,
-        DashboardRuntimeLimits limits)
+        DashboardRuntimeLimits limits,
+        DashboardSubscriptionGenerationStore generations)
     {
         this.dashboards = dashboards;
         this.limits = limits;
+        this.generations = generations;
     }
 
     public async Task<Result<DashboardSubscriptionPayload>> CreateAsync(
@@ -65,7 +69,10 @@ public sealed class DashboardSubscriptionService
         }
 
         var links = bindings.Select(ToLink).ToArray();
+        var subscriptionId = generations.Open(
+            session!.Id, manifest.Value.DashboardId, manifest.Value.RevisionId);
         return Result.Success(new DashboardSubscriptionPayload(
+            subscriptionId,
             manifest.Value.DashboardId.Value,
             manifest.Value.RevisionId.Value,
             windows.Select(window => new DashboardSubscriptionWindowPayload(
@@ -75,6 +82,9 @@ public sealed class DashboardSubscriptionService
                     widget.BindingIds.Select(id => id.Value).ToArray())).ToArray())).ToArray(),
             links));
     }
+
+    public bool IsCurrent(SessionSnapshot? session, Guid subscriptionId) =>
+        session is not null && generations.IsCurrent(subscriptionId, session.Id);
 
     private static DashboardSubscriptionLinkPayload ToLink(DashboardBinding binding) => new(
         binding.BindingId.Value,
@@ -95,7 +105,37 @@ public sealed class DashboardSubscriptionService
         Result.Failure<DashboardSubscriptionPayload>(new OperationError(ErrorCode.From(code), message));
 }
 
+public sealed record DashboardSubscriptionGeneration(
+    SessionId SessionId,
+    DashboardId DashboardId,
+    DashboardRevisionId RevisionId);
+
+public sealed class DashboardSubscriptionGenerationStore
+{
+    private readonly ConcurrentDictionary<Guid, DashboardSubscriptionGeneration> subscriptions = new();
+
+    public Guid Open(SessionId sessionId, DashboardId dashboardId, DashboardRevisionId revisionId)
+    {
+        var subscriptionId = Guid.CreateVersion7();
+        subscriptions[subscriptionId] = new DashboardSubscriptionGeneration(sessionId, dashboardId, revisionId);
+        return subscriptionId;
+    }
+
+    public bool IsCurrent(Guid subscriptionId, SessionId sessionId) =>
+        subscriptions.TryGetValue(subscriptionId, out var subscription) && subscription.SessionId == sessionId;
+
+    public void ClosePreviousGenerations(DashboardId dashboardId, DashboardRevisionId revisionId)
+    {
+        foreach (var item in subscriptions.Where(item =>
+                     item.Value.DashboardId == dashboardId && item.Value.RevisionId != revisionId))
+        {
+            subscriptions.TryRemove(item.Key, out _);
+        }
+    }
+}
+
 public sealed record DashboardSubscriptionPayload(
+    Guid SubscriptionId,
     Guid DashboardId,
     Guid RevisionId,
     IReadOnlyList<DashboardSubscriptionWindowPayload> Windows,

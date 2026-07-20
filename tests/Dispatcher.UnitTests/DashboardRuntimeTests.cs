@@ -92,6 +92,7 @@ public sealed class DashboardRuntimeTests
         var windowId = Guid.Parse("e3000000-0000-7000-8000-000000000001");
         var scopeId = Guid.Parse("e4000000-0000-7000-8000-000000000001");
         return new DashboardSubscriptionPayload(
+            Guid.Parse("e0000000-0000-7000-8000-000000000001"),
             Guid.Parse("e5000000-0000-7000-8000-000000000001"),
             Guid.Parse("e6000000-0000-7000-8000-000000000001"),
             [new DashboardSubscriptionWindowPayload(

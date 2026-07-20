@@ -62,16 +62,30 @@ var dashboardRole = builder.Configuration["Dispatcher:Dashboards:DatabaseRole"];
 var dashboardMaxVisibleWindows = builder.Configuration.GetValue<int?>(
     "Dispatcher:Dashboards:MaxVisibleWindows");
 var dashboardMaxBindings = builder.Configuration.GetValue<int?>("Dispatcher:Dashboards:MaxBindings");
+var mimicMaxSvgBytes = builder.Configuration.GetValue<int?>("Dispatcher:Mimics:MaxSvgBytes");
+var mimicMaxElements = builder.Configuration.GetValue<int?>("Dispatcher:Mimics:MaxElements");
+var mimicMaxAttributesPerElement = builder.Configuration.GetValue<int?>(
+    "Dispatcher:Mimics:MaxAttributesPerElement");
+var mimicMaxAttributeLength = builder.Configuration.GetValue<int?>("Dispatcher:Mimics:MaxAttributeLength");
 var dashboardEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
                        !string.IsNullOrWhiteSpace(dashboardRole) &&
                        dashboardMaxVisibleWindows > 0 &&
-                       dashboardMaxBindings > 0;
+                       dashboardMaxBindings > 0 &&
+                       mimicMaxSvgBytes > 0 &&
+                       mimicMaxElements > 0 &&
+                       mimicMaxAttributesPerElement > 0 &&
+                       mimicMaxAttributeLength > 0;
 if (dashboardEnabled)
 {
     builder.Services.AddDashboardServer(
         workspaceConnection!,
         dashboardRole!,
-        new DashboardRuntimeLimits(dashboardMaxVisibleWindows!.Value, dashboardMaxBindings!.Value));
+        new DashboardRuntimeLimits(dashboardMaxVisibleWindows!.Value, dashboardMaxBindings!.Value),
+        new Dispatcher.Dashboards.SvgIntakeLimits(
+            mimicMaxSvgBytes!.Value,
+            mimicMaxElements!.Value,
+            mimicMaxAttributesPerElement!.Value,
+            mimicMaxAttributeLength!.Value));
 }
 
 var app = builder.Build();
