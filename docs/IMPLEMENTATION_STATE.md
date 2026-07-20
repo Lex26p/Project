@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S24` реализован и проверен на Windows x64; остановлено перед `S25`
+**Статус программы:** `S25` реализован и проверен на Windows x64; остановлено перед `S26`
 
-**Последний завершённый пакет:** `S24` — Modbus TCP read-only non-production configuration/acquisition, Unit ID/address/type/endian validation, partial response semantics, connection/sample diagnostics, bounded disconnect retry и stale-generation fencing (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S25` — SNMP v2c read-only non-production configuration/acquisition, canonical OID/numeric normalization, bounded BER/UDP, timeout/error/quality mapping, connection/sample diagnostics и reference-only community replacement/restart (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S25` — approved SNMP read-only profile, OID/value normalization, timeout/error/quality mapping, bounded response parsing, connection test/sample poll и secret masking/replacement/restart evidence из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S26` — staging→publish→activate→current→History/Alarm→Web для Modbus TCP/SNMP read-only, multi-device/reconnect/process-crash recovery, заявленная deployment qualification и отдельные protocol qualification records из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S24`: solution build — 0 warnings/0 errors; 80 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S25`: solution build — 0 warnings/0 errors; 86 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -48,7 +48,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 `S23` фиксирует план, но не закрывает protocol-specific `DG-07`:
 
 - `S24 / Modbus TCP read-only` — evidence collected: configuration validation, partial-response semantics, diagnostic/current isolation, disconnect/retry/stale-generation fencing и exact supported function-code surface `FC03/FC04` без write function codes. Production qualification ещё отсутствует до `S26`.
-- `S25 / SNMP read-only`: approved profile/OID normalization, timeout/error/quality mapping, bounded malformed-response parsing, secret masking/replacement/restart и доказательство отсутствия SET.
+- `S25 / SNMP read-only` — evidence collected: exact v2c GET-only profile, canonical OID/numeric normalization, timeout/PDU/per-OID quality mapping, bounded malformed-response isolation, reference-only community masking/replacement/restart и exact request PDU surface без SET. Production qualification ещё отсутствует до `S26`.
 - `S26 / separate qualification records`: для Modbus TCP read-only и SNMP read-only отдельно выполнить staging→publish→activate→current→History/Alarm→Web, multi-device/reconnect/process-crash recovery и заявленную deployment qualification. Только после этого `DG-07` может закрываться раздельно для двух profiles.
 
 ## Stable
@@ -72,6 +72,11 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Modbus configuration валидирует bounded point/register capacities, Unit ID `0..255`, port, zero-based register address, signed/unsigned 16/32-bit type и explicit byte/word order.
 - Modbus MBAP transport использует bounded response size и retry policy; partial protocol exception сохраняет valid observations, а failed point становится explicit `Bad/Stale` без отклонения valid cut.
 - Modbus `ConnectionTest` и `SamplePoll` используют diagnostic surface без source-position/current/Alarm mutation; late acquisition после смены binding/session generation fenced до Core ingress.
+- `Dispatcher.Snmp` реализует только `NonProductionV2cReadOnly` SNMP profile с exact GET request PDU surface; SET, traps и SNMP v3 отсутствуют.
+- SNMP configuration хранит только community secret reference, canonical bounded OID и declared numeric type; raw community разрешается per-operation, очищается после request encoding и не входит в configuration/diagnostic/current contracts.
+- Bounded BER parser проверяет v2c envelope, echoed community, request ID, GetResponse PDU, ordered OID set, value tags и response shape; malformed datagram изолируется без source-position advance.
+- SNMP Integer32/Counter32/Gauge32/TimeTicks/Counter64 нормализуются в canonical runtime integer при проверенном range; PDU/per-OID errors становятся explicit `Bad/Stale`, timeout проходит bounded retry policy.
+- SNMP `ConnectionTest` и `SamplePoll` не меняют source position/current/Alarm; замена community по прежней reference применяется на следующей операции и после recreation runtime source.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.
 - `MOD-WSP` разделяет Account и Person, владеет PostgreSQL schema/migrations для profile/preferences/Home/favorites/recent и пишет preference audit атомарно с mutation.

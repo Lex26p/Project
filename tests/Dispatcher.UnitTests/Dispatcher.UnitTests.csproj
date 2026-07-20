@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\src\Dispatcher.Modbus\Dispatcher.Modbus.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Protocols\Dispatcher.Protocols.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.RuntimeHost\Dispatcher.RuntimeHost.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Snmp\Dispatcher.Snmp.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Web\Dispatcher.Web.csproj" />

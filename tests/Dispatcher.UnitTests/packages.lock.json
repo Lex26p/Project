@@ -483,8 +483,10 @@
         "type": "Project",
         "dependencies": {
           "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Modbus": "[1.0.0, )",
           "Dispatcher.Protocols": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Snmp": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }
       },
@@ -500,6 +502,14 @@
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
+        }
+      },
+      "dispatcher.snmp": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )"
         }
       },
       "dispatcher.web": {
