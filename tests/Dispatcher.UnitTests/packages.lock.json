@@ -450,6 +450,14 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.modbus": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )"
+        }
+      },
       "dispatcher.persistence": {
         "type": "Project",
         "dependencies": {

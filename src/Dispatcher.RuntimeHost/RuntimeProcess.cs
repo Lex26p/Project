@@ -20,7 +20,11 @@ public sealed class RuntimeProcess
     public Result RegisterProtocolSource(SourceId sourceId, ProtocolSourceController controller) =>
         protocols.Register(sourceId, controller);
 
-    public Result ActivateBinding(SourceBinding binding) => core.ActivateBinding(binding);
+    public Result ActivateBinding(SourceBinding binding)
+    {
+        var protocolActivated = protocols.ActivateBinding(binding);
+        return protocolActivated.IsSuccess ? core.ActivateBinding(binding) : protocolActivated;
+    }
 
     public async Task<Result<RuntimeIngressResult>> AcquireAsync(
         ProtocolSourceRequest request,

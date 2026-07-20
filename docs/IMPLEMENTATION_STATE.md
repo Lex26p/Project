@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S23` реализован и проверен на Windows x64; остановлено перед `S24`
+**Статус программы:** `S24` реализован и проверен на Windows x64; остановлено перед `S25`
 
-**Последний завершённый пакет:** `S23` — protocol source/diagnostic contracts, отдельный от ASP.NET Server Core/runtime executable host, workload identity и secret resolution boundary, bounded parser/I/O, lifecycle supervision и Simulator semantic parity suite (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S24` — Modbus TCP read-only non-production configuration/acquisition, Unit ID/address/type/endian validation, partial response semantics, connection/sample diagnostics, bounded disconnect retry и stale-generation fencing (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S24` — Modbus TCP read-only configuration/acquisition в non-production profile, Unit ID/address/type/endian validation, partial response semantics, connection test/sample poll и disconnect/retry/stale-generation evidence из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S25` — approved SNMP read-only profile, OID/value normalization, timeout/error/quality mapping, bounded response parsing, connection test/sample poll и secret masking/replacement/restart evidence из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S23`: solution build — 0 warnings/0 errors; 74 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S24`: solution build — 0 warnings/0 errors; 80 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -47,7 +47,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 
 `S23` фиксирует план, но не закрывает protocol-specific `DG-07`:
 
-- `S24 / Modbus TCP read-only`: configuration validation, partial-response semantics, diagnostic/current isolation, disconnect/retry/stale-generation fencing и доказательство отсутствия write function codes.
+- `S24 / Modbus TCP read-only` — evidence collected: configuration validation, partial-response semantics, diagnostic/current isolation, disconnect/retry/stale-generation fencing и exact supported function-code surface `FC03/FC04` без write function codes. Production qualification ещё отсутствует до `S26`.
 - `S25 / SNMP read-only`: approved profile/OID normalization, timeout/error/quality mapping, bounded malformed-response parsing, secret masking/replacement/restart и доказательство отсутствия SET.
 - `S26 / separate qualification records`: для Modbus TCP read-only и SNMP read-only отдельно выполнить staging→publish→activate→current→History/Alarm→Web, multi-device/reconnect/process-crash recovery и заявленную deployment qualification. Только после этого `DG-07` может закрываться раздельно для двух profiles.
 
@@ -68,6 +68,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `Dispatcher.RuntimeHost` является отдельным от ASP.NET Server executable process: protocol acquisition проходит только через `RuntimeProcess` в Core ingress, а diagnostics не создаёт `RuntimeCut` и не меняет current/Alarm.
 - Protocol workload identity проверяется при регистрации source; raw secret доступен только внутри short-lived zeroed lease, отсутствует в serializable contracts/Web boundary и runtime log messages.
 - Protocol I/O ограничен explicit timeout/response bytes/concurrency, parser output — explicit observation capacity; lifecycle stop закрывает admission и дожидается bounded in-flight reads.
+- `Dispatcher.Modbus` реализует только `NonProductionReadOnly` Modbus TCP profile с exact read function-code surface `FC03`/`FC04`; write functions/API отсутствуют.
+- Modbus configuration валидирует bounded point/register capacities, Unit ID `0..255`, port, zero-based register address, signed/unsigned 16/32-bit type и explicit byte/word order.
+- Modbus MBAP transport использует bounded response size и retry policy; partial protocol exception сохраняет valid observations, а failed point становится explicit `Bad/Stale` без отклонения valid cut.
+- Modbus `ConnectionTest` и `SamplePoll` используют diagnostic surface без source-position/current/Alarm mutation; late acquisition после смены binding/session generation fenced до Core ingress.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.
 - `MOD-WSP` разделяет Account и Person, владеет PostgreSQL schema/migrations для profile/preferences/Home/favorites/recent и пишет preference audit атомарно с mutation.

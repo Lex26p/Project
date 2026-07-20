@@ -118,6 +118,7 @@ public sealed class ProtocolRuntimeContractTests
         using var controller = Controller(transport, new StaticParser([Observation(binding, 1)]));
         var supervisor = new ProtocolRuntimeSupervisor(Workload, maxSources: 1);
         Assert.True(supervisor.Register(SourceId, controller).IsSuccess);
+        Assert.True(supervisor.ActivateBinding(binding).IsSuccess);
         Assert.True(supervisor.Start().IsSuccess);
         var active = supervisor.AcquireAsync(new ProtocolSourceRequest(binding, 1, null));
         await transport.Entered.Task.WaitAsync(TimeSpan.FromSeconds(1));

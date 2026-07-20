@@ -33,13 +33,20 @@ public enum ProtocolReadPurpose
     Diagnostic = 2,
 }
 
+public enum ProtocolDiagnosticMode
+{
+    ConnectionTest = 1,
+    SamplePoll = 2,
+}
+
 public sealed record ProtocolTransportRequest(
     ProtocolReadPurpose Purpose,
     SourceBinding Binding,
     ulong? ScheduleSequence,
     ProtocolWorkloadIdentity WorkloadIdentity,
     ProtocolSecretLease? Secret,
-    int MaxResponseBytes);
+    int MaxResponseBytes,
+    ProtocolDiagnosticMode? DiagnosticMode);
 
 public interface IReadOnlyProtocolTransport
 {
@@ -53,6 +60,22 @@ public interface IProtocolObservationParser
     Result<IReadOnlyList<SourceObservation>> Parse(SourceBinding binding, ReadOnlyMemory<byte> response);
 }
 
+public sealed record ProtocolDiagnosticSample(
+    PointId PointId,
+    long Value,
+    Unit Unit,
+    DataQuality Quality,
+    string Code);
+
+public sealed record ProtocolDiagnosticBatch(
+    IReadOnlyList<ProtocolDiagnosticSample> Samples,
+    bool Partial);
+
+public interface IProtocolDiagnosticParser
+{
+    Result<ProtocolDiagnosticBatch> ParseDiagnostic(ReadOnlyMemory<byte> response);
+}
+
 public sealed record ProtocolSourceRequest(
     SourceBinding Binding,
     ulong ScheduleSequence,
@@ -60,7 +83,8 @@ public sealed record ProtocolSourceRequest(
 
 public sealed record ProtocolDiagnosticRequest(
     SourceBinding Binding,
-    ProtocolSecretReference? SecretReference);
+    ProtocolSecretReference? SecretReference,
+    ProtocolDiagnosticMode Mode = ProtocolDiagnosticMode.SamplePoll);
 
 public enum ProtocolDiagnosticStatus
 {
@@ -68,13 +92,19 @@ public enum ProtocolDiagnosticStatus
     Rejected = 2,
 }
 
-public sealed record ProtocolDiagnosticResult(ProtocolDiagnosticStatus Status, int ResponseBytes, string Code);
+public sealed record ProtocolDiagnosticResult(
+    ProtocolDiagnosticStatus Status,
+    int ResponseBytes,
+    string Code,
+    IReadOnlyList<ProtocolDiagnosticSample> Samples,
+    bool Partial);
 
 public sealed class ProtocolSourceController : IDisposable
 {
     private readonly IReadOnlyProtocolTransport transport;
     private readonly IProtocolObservationParser parser;
     private readonly IProtocolSecretResolver secretResolver;
+    private readonly IProtocolDiagnosticParser? diagnosticParser;
     private readonly ProtocolIoLimits limits;
     private readonly SemaphoreSlim operations;
 
@@ -83,7 +113,8 @@ public sealed class ProtocolSourceController : IDisposable
         IReadOnlyProtocolTransport transport,
         IProtocolObservationParser parser,
         IProtocolSecretResolver secretResolver,
-        ProtocolIoLimits limits)
+        ProtocolIoLimits limits,
+        IProtocolDiagnosticParser? diagnosticParser = null)
     {
         _ = workloadIdentity.Value ?? throw new ArgumentException("Workload identity must be defined.", nameof(workloadIdentity));
         ArgumentNullException.ThrowIfNull(transport);
@@ -95,6 +126,7 @@ public sealed class ProtocolSourceController : IDisposable
         this.parser = parser;
         this.secretResolver = secretResolver;
         this.limits = limits;
+        this.diagnosticParser = diagnosticParser;
         operations = new SemaphoreSlim(limits.MaxConcurrentOperations, limits.MaxConcurrentOperations);
     }
 
@@ -111,6 +143,7 @@ public sealed class ProtocolSourceController : IDisposable
             request.Binding,
             request.ScheduleSequence,
             request.SecretReference,
+            null,
             cancellationToken).ConfigureAwait(false);
         if (response.IsFailure)
         {
@@ -150,13 +183,53 @@ public sealed class ProtocolSourceController : IDisposable
             request.Binding,
             null,
             request.SecretReference,
+            request.Mode,
             cancellationToken).ConfigureAwait(false);
-        return response.IsSuccess
-            ? Result.Success(new ProtocolDiagnosticResult(
+        if (response.IsFailure)
+        {
+            return Result.Failure<ProtocolDiagnosticResult>(response.Error!);
+        }
+
+        if (request.Mode == ProtocolDiagnosticMode.ConnectionTest || diagnosticParser is null)
+        {
+            return Result.Success(new ProtocolDiagnosticResult(
                 ProtocolDiagnosticStatus.Reachable,
                 response.Value.Length,
-                "protocol.diagnostic_reachable"))
-            : Result.Failure<ProtocolDiagnosticResult>(response.Error!);
+                "protocol.diagnostic_reachable",
+                [],
+                false));
+        }
+
+        Result<ProtocolDiagnosticBatch> parsed;
+        try
+        {
+            parsed = diagnosticParser.ParseDiagnostic(response.Value);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            return Failure<ProtocolDiagnosticResult>(
+                "protocol.diagnostic_parse_failed",
+                "The diagnostic parser rejected hostile or malformed input.");
+        }
+
+        if (parsed.IsFailure)
+        {
+            return Result.Failure<ProtocolDiagnosticResult>(parsed.Error!);
+        }
+
+        if (parsed.Value.Samples.Count > limits.MaxObservations)
+        {
+            return Failure<ProtocolDiagnosticResult>(
+                "protocol.observation_limit",
+                "The diagnostic response exceeds the observation limit.");
+        }
+
+        return Result.Success(new ProtocolDiagnosticResult(
+            ProtocolDiagnosticStatus.Reachable,
+            response.Value.Length,
+            parsed.Value.Partial ? "protocol.diagnostic_partial" : "protocol.diagnostic_reachable",
+            parsed.Value.Samples,
+            parsed.Value.Partial));
     }
 
     public void Dispose() => operations.Dispose();
@@ -166,6 +239,7 @@ public sealed class ProtocolSourceController : IDisposable
         SourceBinding binding,
         ulong? scheduleSequence,
         ProtocolSecretReference? secretReference,
+        ProtocolDiagnosticMode? diagnosticMode,
         CancellationToken cancellationToken)
     {
         if (!await operations.WaitAsync(TimeSpan.Zero, cancellationToken).ConfigureAwait(false))
@@ -179,12 +253,30 @@ public sealed class ProtocolSourceController : IDisposable
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(limits.Timeout);
-            using var secret = secretReference is null
-                ? null
-                : await secretResolver.ResolveAsync(
-                    secretReference.Value,
-                    WorkloadIdentity,
-                    timeout.Token).ConfigureAwait(false);
+            ProtocolSecretLease? resolvedSecret;
+            try
+            {
+                resolvedSecret = secretReference is null
+                    ? null
+                    : await secretResolver.ResolveAsync(
+                        secretReference.Value,
+                        WorkloadIdentity,
+                        timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return Failure<ReadOnlyMemory<byte>>(
+                    "protocol.io_timeout",
+                    "The bounded protocol I/O deadline elapsed.");
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                return Failure<ReadOnlyMemory<byte>>(
+                    "protocol.secret_unavailable",
+                    "The protocol secret reference could not be resolved for this workload.");
+            }
+
+            using var secret = resolvedSecret;
             ReadOnlyMemory<byte> response;
             try
             {
@@ -195,7 +287,8 @@ public sealed class ProtocolSourceController : IDisposable
                         scheduleSequence,
                         WorkloadIdentity,
                         secret,
-                        limits.MaxResponseBytes),
+                        limits.MaxResponseBytes,
+                        diagnosticMode),
                     timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -203,6 +296,12 @@ public sealed class ProtocolSourceController : IDisposable
                 return Failure<ReadOnlyMemory<byte>>(
                     "protocol.io_timeout",
                     "The bounded protocol I/O deadline elapsed.");
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                return Failure<ReadOnlyMemory<byte>>(
+                    "protocol.io_failed",
+                    "The bounded protocol I/O operation failed.");
             }
 
             if (response.Length > limits.MaxResponseBytes)

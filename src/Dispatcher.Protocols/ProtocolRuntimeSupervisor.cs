@@ -23,6 +23,7 @@ public sealed class ProtocolRuntimeSupervisor
     private readonly ProtocolWorkloadIdentity workloadIdentity;
     private readonly int maxSources;
     private readonly Dictionary<SourceId, ProtocolSourceController> sources = [];
+    private readonly Dictionary<SourceId, SourceBinding> activeBindings = [];
     private ProtocolSupervisorState state = ProtocolSupervisorState.Created;
     private int inFlight;
     private TaskCompletionSource? drained;
@@ -79,15 +80,57 @@ public sealed class ProtocolRuntimeSupervisor
         }
     }
 
+    public Result ActivateBinding(SourceBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        lock (sync)
+        {
+            if (state is ProtocolSupervisorState.Draining or ProtocolSupervisorState.Stopped)
+            {
+                return Failure("protocol.lifecycle_state", "Protocol binding cannot activate during shutdown.");
+            }
+
+            if (!sources.ContainsKey(binding.SourceId))
+            {
+                return Failure("protocol.source_unknown", "Protocol source is not registered.");
+            }
+
+            if (activeBindings.TryGetValue(binding.SourceId, out var active))
+            {
+                if (active == binding)
+                {
+                    return Result.Success();
+                }
+
+                var newer = binding.BindingGeneration > active.BindingGeneration ||
+                            (binding.BindingGeneration == active.BindingGeneration &&
+                             binding.SessionGeneration > active.SessionGeneration);
+                if (!newer)
+                {
+                    return Failure("protocol.binding_stale", "Protocol source binding generation is stale.");
+                }
+            }
+
+            activeBindings[binding.SourceId] = binding;
+            return Result.Success();
+        }
+    }
+
     public Task<Result<RuntimeCut>> AcquireAsync(
         ProtocolSourceRequest request,
         CancellationToken cancellationToken = default) =>
-        ExecuteAsync(request.Binding.SourceId, controller => controller.AcquireAsync(request, cancellationToken));
+        ExecuteBoundAsync(
+            request.Binding,
+            controller => controller.AcquireAsync(request, cancellationToken),
+            fenceCompletion: true);
 
     public Task<Result<ProtocolDiagnosticResult>> DiagnoseAsync(
         ProtocolDiagnosticRequest request,
         CancellationToken cancellationToken = default) =>
-        ExecuteAsync(request.Binding.SourceId, controller => controller.DiagnoseAsync(request, cancellationToken));
+        ExecuteBoundAsync(
+            request.Binding,
+            controller => controller.DiagnoseAsync(request, cancellationToken),
+            fenceCompletion: false);
 
     public async Task<Result> StopAsync(CancellationToken cancellationToken = default)
     {
@@ -126,9 +169,10 @@ public sealed class ProtocolRuntimeSupervisor
         }
     }
 
-    private async Task<Result<TValue>> ExecuteAsync<TValue>(
-        SourceId sourceId,
-        Func<ProtocolSourceController, Task<Result<TValue>>> operation)
+    private async Task<Result<TValue>> ExecuteBoundAsync<TValue>(
+        SourceBinding binding,
+        Func<ProtocolSourceController, Task<Result<TValue>>> operation,
+        bool fenceCompletion)
     {
         ProtocolSourceController controller;
         lock (sync)
@@ -138,9 +182,14 @@ public sealed class ProtocolRuntimeSupervisor
                 return Failure<TValue>("protocol.not_accepting", "Protocol runtime is not accepting operations.");
             }
 
-            if (!sources.TryGetValue(sourceId, out controller!))
+            if (!sources.TryGetValue(binding.SourceId, out controller!))
             {
                 return Failure<TValue>("protocol.source_unknown", "Protocol source is not registered.");
+            }
+
+            if (!activeBindings.TryGetValue(binding.SourceId, out var active) || active != binding)
+            {
+                return Failure<TValue>("protocol.binding_stale", "Protocol operation binding is not active.");
             }
 
             inFlight = checked(inFlight + 1);
@@ -148,7 +197,14 @@ public sealed class ProtocolRuntimeSupervisor
 
         try
         {
-            return await operation(controller).ConfigureAwait(false);
+            var result = await operation(controller).ConfigureAwait(false);
+            lock (sync)
+            {
+                return fenceCompletion &&
+                       (!activeBindings.TryGetValue(binding.SourceId, out var active) || active != binding)
+                    ? Failure<TValue>("protocol.binding_stale", "Late protocol response belongs to a stale binding.")
+                    : result;
+            }
         }
         finally
         {
