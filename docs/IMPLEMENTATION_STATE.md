@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S22A` реализован и проверен на Windows x64; остановлено перед `S23`
+**Статус программы:** `S23` реализован и проверен на Windows x64; остановлено перед `S24`
 
-**Последний завершённый пакет:** `S22A` — отдельные core Web workflows Dashboard Editor и SVG Mimic Editor, exact revision save/validate/publish, sanitized preview и explicit unsaved/conflict/direct-link permission behavior (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S23` — protocol source/diagnostic contracts, отдельный от ASP.NET Server Core/runtime executable host, workload identity и secret resolution boundary, bounded parser/I/O, lifecycle supervision и Simulator semantic parity suite (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S23` — protocol source/diagnostic contract, отдельный Core/runtime host с workload identity/secret resolution/bounded parser-I/O/lifecycle supervision и Simulator parity suite; закрывает `IG-06` и фиксирует protocol-specific `DG-07` evidence plan из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S24` — Modbus TCP read-only configuration/acquisition в non-production profile, Unit ID/address/type/endian validation, partial response semantics, connection test/sample poll и disconnect/retry/stale-generation evidence из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S22A`: solution build — 0 warnings/0 errors; 68 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S23`: solution build — 0 warnings/0 errors; 74 unit + 57 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -34,7 +34,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 | `IG-04` Session/security nucleus | Closed | `ADR-005`; anonymous/revoke/expiry/permission denial, gated test identity, audit/idempotency и durable job tests green |
 | `IG-04P` Production AuthN | Open | Закрыть до production login в `S35` |
 | `IG-05` Web/realtime transport | Closed | `ADR-006`; authorized HTTP snapshot и scoped SignalR bootstrap/delta, gap/reconnect/resnapshot, permission invalidation и slow-consumer/render-cadence tests green |
-| `IG-06` Protocol isolation | Open | Закрыть `S23` |
+| `IG-06` Protocol isolation | Closed | Отдельный non-ASP.NET Core/runtime process, exact workload identity, reference-only secret resolution, bounded I/O/parser surface, lifecycle drain/isolation и Simulator parity contract tests green |
 | `IG-07` Command security | Open | Закрыть до `S37` |
 | `IG-08` Physical write | Not authorized / deny | Только решение пользователя и scoped qualification gates перед `S39`; full `DG-08` и final production enablement не раньше `S43` |
 | `IG-09` Extraction | Not justified / remain in current deployable | Открывать только по evidence и ADR |
@@ -42,6 +42,14 @@ Linux x64 build/test/load не выполнялись по прямому ука
 | `IG-11` Product maturity | Not authorized for provisional scope | Только отдельное решение пользователя |
 | `IG-12` Terminal enrollment | Open | Закрыть до production identity в `S33` |
 | `IG-13` Notification provider | Open | Закрыть до provider code в `S28`; default SMTP |
+
+## `DG-07` evidence plan — Open
+
+`S23` фиксирует план, но не закрывает protocol-specific `DG-07`:
+
+- `S24 / Modbus TCP read-only`: configuration validation, partial-response semantics, diagnostic/current isolation, disconnect/retry/stale-generation fencing и доказательство отсутствия write function codes.
+- `S25 / SNMP read-only`: approved profile/OID normalization, timeout/error/quality mapping, bounded malformed-response parsing, secret masking/replacement/restart и доказательство отсутствия SET.
+- `S26 / separate qualification records`: для Modbus TCP read-only и SNMP read-only отдельно выполнить staging→publish→activate→current→History/Alarm→Web, multi-device/reconnect/process-crash recovery и заявленную deployment qualification. Только после этого `DG-07` может закрываться раздельно для двух profiles.
 
 ## Stable
 
@@ -56,6 +64,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Platform nucleus использует structured activities/metrics, database readiness и lease-based durable jobs без workflow engine.
 - Simulator генерирует deterministic observations по seed/config и не получает mutable Core current.
 - Core владеет scope admission/current, scoped snapshot/delta и canonical golden trace; restart сохраняет configured identities.
+- `Dispatcher.Protocols` задаёт только read-only transport, source normalization и отдельную diagnostics surface; contracts не содержат write/command API и не зависят от Server/Alarm.
+- `Dispatcher.RuntimeHost` является отдельным от ASP.NET Server executable process: protocol acquisition проходит только через `RuntimeProcess` в Core ingress, а diagnostics не создаёт `RuntimeCut` и не меняет current/Alarm.
+- Protocol workload identity проверяется при регистрации source; raw secret доступен только внутри short-lived zeroed lease, отсутствует в serializable contracts/Web boundary и runtime log messages.
+- Protocol I/O ограничен explicit timeout/response bytes/concurrency, parser output — explicit observation capacity; lifecycle stop закрывает admission и дожидается bounded in-flight reads.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.
 - `MOD-WSP` разделяет Account и Person, владеет PostgreSQL schema/migrations для profile/preferences/Home/favorites/recent и пишет preference audit атомарно с mutation.

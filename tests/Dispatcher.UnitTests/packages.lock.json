@@ -464,6 +464,22 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.protocols": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )"
+        }
+      },
+      "dispatcher.runtimehost": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Protocols": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.semantics": {
         "type": "Project"
       },
