@@ -16,6 +16,43 @@ if (notificationsEnabled)
 {
     builder.Services.AddNotificationServer(workspaceConnection!, notificationRole!);
 }
+var smtpHost = builder.Configuration["Dispatcher:Notifications:Smtp:Host"];
+var smtpPort = builder.Configuration.GetValue<int?>("Dispatcher:Notifications:Smtp:Port");
+var smtpTls = builder.Configuration.GetValue<bool?>("Dispatcher:Notifications:Smtp:Tls");
+var smtpSender = builder.Configuration["Dispatcher:Notifications:Smtp:SenderAddress"];
+var smtpUser = builder.Configuration["Dispatcher:Notifications:Smtp:UserName"];
+var smtpCredentialReference = builder.Configuration["Dispatcher:Notifications:Smtp:CredentialReference"];
+var smtpTimeoutSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Notifications:Smtp:TimeoutSeconds");
+var smtpMaxAttempts = builder.Configuration.GetValue<int?>("Dispatcher:Notifications:Smtp:MaxAttempts");
+var smtpRetryDelays = builder.Configuration
+    .GetSection("Dispatcher:Notifications:Smtp:RetryDelaySeconds")
+    .Get<int[]>();
+var smtpEnabled = notificationsEnabled &&
+                  !string.IsNullOrWhiteSpace(smtpHost) &&
+                  smtpPort is > 0 and <= 65535 &&
+                  smtpTls == true &&
+                  !string.IsNullOrWhiteSpace(smtpSender) &&
+                  !string.IsNullOrWhiteSpace(smtpUser) &&
+                  !string.IsNullOrWhiteSpace(smtpCredentialReference) &&
+                  smtpTimeoutSeconds > 0 &&
+                  smtpMaxAttempts > 0 &&
+                  smtpRetryDelays?.Length == smtpMaxAttempts - 1;
+if (smtpEnabled)
+{
+    builder.Services.AddSmtpNotificationProvider(
+        new Dispatcher.Notifications.SmtpProviderConfiguration(
+            Dispatcher.Notifications.SmtpProviderProfile.Production,
+            smtpHost!,
+            smtpPort!.Value,
+            tls: true,
+            smtpSender!,
+            smtpUser!,
+            Dispatcher.Notifications.NotificationSecretReference.From(smtpCredentialReference!),
+            TimeSpan.FromSeconds(smtpTimeoutSeconds!.Value)),
+        new Dispatcher.Notifications.NotificationDeliveryPolicy(
+            smtpMaxAttempts!.Value,
+            smtpRetryDelays!.Select(value => TimeSpan.FromSeconds(value)).ToArray()));
+}
 var facilityRole = builder.Configuration["Dispatcher:Facility:DatabaseRole"];
 var equipmentRole = builder.Configuration["Dispatcher:Equipment:DatabaseRole"];
 var registryEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&

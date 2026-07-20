@@ -4,6 +4,7 @@ using Dispatcher.Events;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
 using Dispatcher.Workspace;
+using System.Net.Mail;
 
 namespace Dispatcher.Notifications;
 
@@ -177,14 +178,17 @@ public sealed record PersonalNotificationSettings
         NotificationSchedule? schedule,
         IReadOnlyCollection<NotificationQuietPeriod> quietPeriods,
         NotificationAbsence? absence,
-        IReadOnlyCollection<NotificationChannelPreference> channelPreferences)
+        IReadOnlyCollection<NotificationChannelPreference> channelPreferences,
+        string? emailAddress = null)
     {
         _ = personId.Value;
         ArgumentNullException.ThrowIfNull(quietPeriods);
         ArgumentNullException.ThrowIfNull(channelPreferences);
         if (absence?.CoveragePersonId == personId ||
             channelPreferences.Any(item => !Enum.IsDefined(item.Channel)) ||
-            channelPreferences.Select(item => item.Channel).Distinct().Count() != channelPreferences.Count)
+            channelPreferences.Select(item => item.Channel).Distinct().Count() != channelPreferences.Count ||
+            emailAddress is not null &&
+            (emailAddress.Length > 320 || !MailAddress.TryCreate(emailAddress, out _)))
         {
             throw new ArgumentException("Personal notification settings are invalid.");
         }
@@ -195,6 +199,7 @@ public sealed record PersonalNotificationSettings
         QuietPeriods = quietPeriods.ToArray();
         Absence = absence;
         ChannelPreferences = channelPreferences.OrderBy(item => item.Channel).ToArray();
+        EmailAddress = emailAddress?.Trim();
     }
 
     public PersonId PersonId { get; }
@@ -203,6 +208,7 @@ public sealed record PersonalNotificationSettings
     public IReadOnlyList<NotificationQuietPeriod> QuietPeriods { get; }
     public NotificationAbsence? Absence { get; }
     public IReadOnlyList<NotificationChannelPreference> ChannelPreferences { get; }
+    public string? EmailAddress { get; }
 }
 
 public sealed record NotificationSubscription

@@ -64,7 +64,21 @@ public sealed class NotificationService
     public async Task<Result<NotificationAcceptance>> RouteEventAsync(
         OperationalEventRecord operationalEvent,
         string title,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        await RouteEventCoreAsync(operationalEvent, title, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<Result<NotificationAcceptance>> RouteEventWithDeliveryAsync(
+        OperationalEventRecord operationalEvent,
+        string title,
+        NotificationDeliveryStore deliveryStore,
+        CancellationToken cancellationToken = default) =>
+        await RouteEventCoreAsync(operationalEvent, title, deliveryStore, cancellationToken).ConfigureAwait(false);
+
+    private async Task<Result<NotificationAcceptance>> RouteEventCoreAsync(
+        OperationalEventRecord operationalEvent,
+        string title,
+        NotificationDeliveryStore? deliveryStore,
+        CancellationToken cancellationToken)
     {
         var candidate = NotificationCandidate.FromOperationalEvent(operationalEvent, title);
         var policy = await store.ReadPolicyAsync(candidate.ScopeId, cancellationToken).ConfigureAwait(false);
@@ -81,8 +95,34 @@ public sealed class NotificationService
             .Distinct()
             .ToArray();
         var settings = await store.ReadSettingsAsync(persons, cancellationToken).ConfigureAwait(false);
+        var coveragePersons = settings.Values
+            .Where(value => value.Absence is not null)
+            .Select(value => value.Absence!.CoveragePersonId)
+            .Where(personId => !settings.ContainsKey(personId))
+            .Distinct()
+            .ToArray();
+        if (coveragePersons.Length > 0)
+        {
+            settings = await store.ReadSettingsAsync(
+                persons.Concat(coveragePersons).Distinct().ToArray(),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         var routes = NotificationPolicyComposer.Compose(policy, subscriptions, settings, candidate, clock.GetUtcNow());
-        return await store.AcceptAsync(candidate, routes, cancellationToken).ConfigureAwait(false);
+        var acceptance = await store.AcceptAsync(candidate, routes, cancellationToken).ConfigureAwait(false);
+        if (acceptance.IsFailure || deliveryStore is null)
+        {
+            return acceptance;
+        }
+
+        var obligations = await deliveryStore.EnsureObligationsAsync(
+            candidate,
+            routes,
+            settings,
+            cancellationToken).ConfigureAwait(false);
+        return obligations.IsFailure
+            ? Result.Failure<NotificationAcceptance>(obligations.Error!)
+            : Result.Success(acceptance.Value with { DeliveryObligations = obligations.Value });
     }
 
     public async Task<Result<IReadOnlyList<NotificationInboxItem>>> ReadInboxAsync(
@@ -115,6 +155,40 @@ public sealed class NotificationService
                 itemId,
                 expectedVersion,
                 cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<Result<NotificationInboxCounterSnapshot>> ReadCounterSnapshotAsync(
+        NotificationUserContext? context,
+        CancellationToken cancellationToken = default)
+    {
+        var authorization = AuthorizePersonal(
+            context,
+            context?.PersonId,
+            NotificationPermissions.InboxRead,
+            mutation: false);
+        return authorization.IsFailure
+            ? Result.Failure<NotificationInboxCounterSnapshot>(authorization.Error!)
+            : Result.Success(await store.ReadCounterSnapshotAsync(
+                context!.PersonId,
+                cancellationToken).ConfigureAwait(false));
+    }
+
+    public async Task<Result<NotificationInboxCounterFeed>> ReadCounterFeedAsync(
+        NotificationUserContext? context,
+        ulong cursor,
+        CancellationToken cancellationToken = default)
+    {
+        var authorization = AuthorizePersonal(
+            context,
+            context?.PersonId,
+            NotificationPermissions.InboxRead,
+            mutation: false);
+        return authorization.IsFailure
+            ? Result.Failure<NotificationInboxCounterFeed>(authorization.Error!)
+            : Result.Success(await store.ReadCounterFeedAsync(
+                context!.PersonId,
+                cursor,
+                cancellationToken).ConfigureAwait(false));
     }
 
     public async Task<Result<NotificationSourceLink>> OpenSourceLinkAsync(

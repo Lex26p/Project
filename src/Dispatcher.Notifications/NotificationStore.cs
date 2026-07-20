@@ -13,7 +13,23 @@ namespace Dispatcher.Notifications;
 
 public sealed record NotificationAcceptance(
     IReadOnlyList<NotificationRoute> Routes,
-    IReadOnlyList<NotificationInboxItem> InboxItems);
+    IReadOnlyList<NotificationInboxItem> InboxItems,
+    IReadOnlyList<NotificationDeliveryObligation> DeliveryObligations);
+
+public sealed record NotificationInboxCounterSnapshot(ulong Cursor, long TotalCount, long UnreadCount);
+
+public enum NotificationCounterFeedKind
+{
+    NoChange = 1,
+    Delta = 2,
+    Gap = 3,
+}
+
+public sealed record NotificationInboxCounterFeed(
+    NotificationCounterFeedKind Kind,
+    ulong From,
+    ulong To,
+    IReadOnlyList<NotificationInboxCounterSnapshot> Changes);
 
 public sealed class NotificationStore
 {
@@ -300,11 +316,18 @@ public sealed class NotificationStore
             else
             {
                 items.Add(item);
+                await AdvanceCounterAsync(
+                    connection,
+                    transaction,
+                    item.RecipientId,
+                    totalDelta: 1,
+                    unreadDelta: 1,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return Result.Success(new NotificationAcceptance(routes, items));
+        return Result.Success(new NotificationAcceptance(routes, items, []));
     }
 
     public async Task<IReadOnlyList<NotificationInboxItem>> ReadInboxAsync(
@@ -379,8 +402,92 @@ public sealed class NotificationStore
         update.Parameters.AddWithValue("recipient_id", recipientId.Value);
         update.Parameters.AddWithValue("item_id", itemId.Value);
         await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await AdvanceCounterAsync(
+            connection,
+            transaction,
+            recipientId,
+            totalDelta: 0,
+            unreadDelta: -1,
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Result.Success(updated);
+    }
+
+    public async Task<NotificationInboxCounterSnapshot> ReadCounterSnapshotAsync(
+        PersonId recipientId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"SELECT cursor, total_count, unread_count FROM {NotificationMigrations.Schema}.inbox_counter_state WHERE person_id = @person_id;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("person_id", recipientId.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new NotificationInboxCounterSnapshot(
+                checked((ulong)reader.GetInt64(0)),
+                reader.GetInt64(1),
+                reader.GetInt64(2))
+            : new NotificationInboxCounterSnapshot(0, 0, 0);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return snapshot;
+    }
+
+    public async Task<NotificationInboxCounterFeed> ReadCounterFeedAsync(
+        PersonId recipientId,
+        ulong cursor,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var stateCommand = new NpgsqlCommand(
+            $"SELECT cursor FROM {NotificationMigrations.Schema}.inbox_counter_state WHERE person_id = @person_id;",
+            connection,
+            transaction);
+        stateCommand.Parameters.AddWithValue("person_id", recipientId.Value);
+        var currentValue = await stateCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        var current = currentValue is null ? 0UL : checked((ulong)(long)currentValue);
+        if (cursor > current)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new NotificationInboxCounterFeed(NotificationCounterFeedKind.Gap, cursor, current, []);
+        }
+
+        if (cursor == current)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new NotificationInboxCounterFeed(NotificationCounterFeedKind.NoChange, cursor, current, []);
+        }
+
+        await using var changesCommand = new NpgsqlCommand(
+            $"""
+            SELECT cursor, total_count, unread_count
+            FROM {NotificationMigrations.Schema}.inbox_counter_change
+            WHERE person_id = @person_id AND cursor > @cursor
+            ORDER BY cursor;
+            """,
+            connection,
+            transaction);
+        changesCommand.Parameters.AddWithValue("person_id", recipientId.Value);
+        changesCommand.Parameters.AddWithValue("cursor", checked((long)cursor));
+        var changes = new List<NotificationInboxCounterSnapshot>();
+        await using var reader = await changesCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            changes.Add(new NotificationInboxCounterSnapshot(
+                checked((ulong)reader.GetInt64(0)),
+                reader.GetInt64(1),
+                reader.GetInt64(2)));
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new NotificationInboxCounterFeed(NotificationCounterFeedKind.Delta, cursor, current, changes);
     }
 
     private async Task<IReadOnlyList<T>> ReadSnapshotsAsync<T>(
@@ -428,6 +535,61 @@ public sealed class NotificationStore
         command.Parameters.AddWithValue("key", key);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null ? null : checked((ulong)(long)value);
+    }
+
+    private async Task AdvanceCounterAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        PersonId recipientId,
+        int totalDelta,
+        int unreadDelta,
+        CancellationToken cancellationToken)
+    {
+        await using var ensure = new NpgsqlCommand(
+            $"INSERT INTO {NotificationMigrations.Schema}.inbox_counter_state (person_id) VALUES (@person_id) ON CONFLICT DO NOTHING;",
+            connection,
+            transaction);
+        ensure.Parameters.AddWithValue("person_id", recipientId.Value);
+        await ensure.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await using var update = new NpgsqlCommand(
+            $"""
+            UPDATE {NotificationMigrations.Schema}.inbox_counter_state
+            SET cursor = cursor + 1,
+                total_count = total_count + @total_delta,
+                unread_count = unread_count + @unread_delta
+            WHERE person_id = @person_id
+            RETURNING cursor, total_count, unread_count;
+            """,
+            connection,
+            transaction);
+        update.Parameters.AddWithValue("person_id", recipientId.Value);
+        update.Parameters.AddWithValue("total_delta", totalDelta);
+        update.Parameters.AddWithValue("unread_delta", unreadDelta);
+        long cursor;
+        long total;
+        long unread;
+        await using (var reader = await update.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            cursor = reader.GetInt64(0);
+            total = reader.GetInt64(1);
+            unread = reader.GetInt64(2);
+        }
+
+        await using var change = new NpgsqlCommand(
+            $"""
+            INSERT INTO {NotificationMigrations.Schema}.inbox_counter_change
+                (person_id, cursor, total_count, unread_count, changed_at)
+            VALUES (@person_id, @cursor, @total_count, @unread_count, @changed_at);
+            """,
+            connection,
+            transaction);
+        change.Parameters.AddWithValue("person_id", recipientId.Value);
+        change.Parameters.AddWithValue("cursor", cursor);
+        change.Parameters.AddWithValue("total_count", total);
+        change.Parameters.AddWithValue("unread_count", unread);
+        change.Parameters.AddWithValue("changed_at", clock.GetUtcNow());
+        await change.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task UpsertSnapshotAsync(
@@ -569,7 +731,8 @@ public sealed class NotificationStore
         ScheduleDto? Schedule,
         ScheduleDto[] QuietPeriods,
         AbsenceDto? Absence,
-        Dictionary<int, bool> Channels)
+        Dictionary<int, bool> Channels,
+        string? EmailAddress = null)
     {
         public static SettingsDto From(PersonalNotificationSettings value) => new(
             value.PersonId.Value,
@@ -578,7 +741,8 @@ public sealed class NotificationStore
             value.QuietPeriods.Select(period => ScheduleDto.From(period.Schedule)).ToArray(),
             value.Absence is null ? null : new AbsenceDto(
                 value.Absence.StartsAt, value.Absence.EndsAt, value.Absence.CoveragePersonId.Value),
-            value.ChannelPreferences.ToDictionary(item => (int)item.Channel, item => item.Enabled));
+            value.ChannelPreferences.ToDictionary(item => (int)item.Channel, item => item.Enabled),
+            value.EmailAddress);
 
         public PersonalNotificationSettings ToModel() => new(
             global::Dispatcher.Workspace.PersonId.From(PersonId),
@@ -589,7 +753,8 @@ public sealed class NotificationStore
                 Absence.StartsAt,
                 Absence.EndsAt,
                 global::Dispatcher.Workspace.PersonId.From(Absence.CoveragePersonId)),
-            Channels.Select(item => new NotificationChannelPreference((NotificationChannel)item.Key, item.Value)).ToArray());
+            Channels.Select(item => new NotificationChannelPreference((NotificationChannel)item.Key, item.Value)).ToArray(),
+            EmailAddress);
     }
 
     private sealed record SubscriptionDto(

@@ -4,6 +4,8 @@ using Dispatcher.Semantics;
 using Dispatcher.Workspace;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
+using Microsoft.AspNetCore.SignalR;
+using System.Collections.Concurrent;
 
 namespace Dispatcher.Server;
 
@@ -63,6 +65,29 @@ public sealed class AuthorizedNotificationInbox
             : await notifications.OpenSourceLinkAsync(context.Value, itemId, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<Result<NotificationInboxCounterSnapshot>> ReadCountersAsync(
+        SessionSnapshot? session,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await ResolveAsync(session, NotificationPermissions.InboxRead, cancellationToken)
+            .ConfigureAwait(false);
+        return context.IsFailure
+            ? Result.Failure<NotificationInboxCounterSnapshot>(context.Error!)
+            : await notifications.ReadCounterSnapshotAsync(context.Value, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<Result<NotificationInboxCounterFeed>> PollCountersAsync(
+        SessionSnapshot? session,
+        ulong cursor,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await ResolveAsync(session, NotificationPermissions.InboxRead, cancellationToken)
+            .ConfigureAwait(false);
+        return context.IsFailure
+            ? Result.Failure<NotificationInboxCounterFeed>(context.Error!)
+            : await notifications.ReadCounterFeedAsync(context.Value, cursor, cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<Result<NotificationUserContext>> ResolveAsync(
         SessionSnapshot? session,
         PermissionCode permission,
@@ -100,8 +125,30 @@ public static class NotificationEndpoints
             sp.GetRequiredService<NpgsqlDataSource>(),
             databaseRole,
             sp.GetRequiredService<IWallClock>()));
+        services.AddSingleton(sp => new NotificationDeliveryStore(
+            sp.GetRequiredService<NpgsqlDataSource>(),
+            databaseRole,
+            sp.GetRequiredService<IWallClock>()));
         services.AddSingleton<NotificationService>();
         services.AddSingleton<AuthorizedNotificationInbox>();
+        services.AddSingleton<NotificationCounterSubscriptionStore>();
+        return services;
+    }
+
+    public static IServiceCollection AddSmtpNotificationProvider(
+        this IServiceCollection services,
+        SmtpProviderConfiguration configuration,
+        NotificationDeliveryPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(policy);
+        services.AddSingleton(configuration);
+        services.AddSingleton(policy);
+        services.AddSingleton<INotificationSecretResolver, EnvironmentNotificationSecretResolver>();
+        services.AddSingleton<ISmtpClientAdapter, SystemSmtpClientAdapter>();
+        services.AddSingleton<SmtpNotificationProvider>();
+        services.AddSingleton<NotificationDeliveryWorker>();
         return services;
     }
 
@@ -139,6 +186,7 @@ public static class NotificationEndpoints
                 sessions.Resolve(context),
                 NotificationInboxItemId.From(itemId),
                 cancellationToken).ConfigureAwait(false)));
+        endpoints.MapHub<NotificationCounterHub>("/hubs/notification-counters");
         return endpoints;
     }
 
@@ -157,3 +205,97 @@ public static class NotificationEndpoints
 }
 
 public sealed record MarkNotificationReadRequest(ulong ExpectedVersion);
+
+public sealed record NotificationCounterPayload(ulong Cursor, long TotalCount, long UnreadCount);
+
+public sealed record NotificationCounterPollPayload(
+    string Kind,
+    ulong From,
+    ulong To,
+    IReadOnlyList<NotificationCounterPayload> Changes);
+
+public sealed record NotificationCounterSubscription(SessionId SessionId, ulong Cursor);
+
+public sealed class NotificationCounterSubscriptionStore
+{
+    private readonly ConcurrentDictionary<string, NotificationCounterSubscription> subscriptions = new();
+    public void Set(string connectionId, NotificationCounterSubscription subscription) =>
+        subscriptions[connectionId] = subscription;
+    public bool TryGet(string connectionId, out NotificationCounterSubscription? subscription) =>
+        subscriptions.TryGetValue(connectionId, out subscription);
+    public void Remove(string connectionId) => subscriptions.TryRemove(connectionId, out _);
+}
+
+public sealed class NotificationCounterHub : Hub
+{
+    private readonly RequestSessionResolver sessions;
+    private readonly AuthorizedNotificationInbox inbox;
+    private readonly NotificationCounterSubscriptionStore subscriptions;
+
+    public NotificationCounterHub(
+        RequestSessionResolver sessions,
+        AuthorizedNotificationInbox inbox,
+        NotificationCounterSubscriptionStore subscriptions)
+    {
+        this.sessions = sessions;
+        this.inbox = inbox;
+        this.subscriptions = subscriptions;
+    }
+
+    public async Task<NotificationCounterPayload> Bootstrap()
+    {
+        var session = sessions.Resolve(Context.GetHttpContext());
+        var result = await inbox.ReadCountersAsync(session, Context.ConnectionAborted).ConfigureAwait(false);
+        if (result.IsFailure)
+        {
+            throw new HubException(result.Error!.Code.Value);
+        }
+
+        subscriptions.Set(Context.ConnectionId, new NotificationCounterSubscription(session!.Id, result.Value.Cursor));
+        return ToPayload(result.Value);
+    }
+
+    public async Task<NotificationCounterPollPayload> Poll(ulong cursor)
+    {
+        if (!subscriptions.TryGet(Context.ConnectionId, out var subscription) || subscription!.Cursor != cursor)
+        {
+            subscriptions.Remove(Context.ConnectionId);
+            return new NotificationCounterPollPayload(NotificationCounterFeedKind.Gap.ToString(), cursor, cursor, []);
+        }
+
+        var session = sessions.Resolve(Context.GetHttpContext());
+        if (session is null || session.Id != subscription.SessionId)
+        {
+            subscriptions.Remove(Context.ConnectionId);
+            return new NotificationCounterPollPayload("PermissionInvalidated", cursor, cursor, []);
+        }
+
+        var result = await inbox.PollCountersAsync(session, cursor, Context.ConnectionAborted).ConfigureAwait(false);
+        if (result.IsFailure)
+        {
+            subscriptions.Remove(Context.ConnectionId);
+            return new NotificationCounterPollPayload("PermissionInvalidated", cursor, cursor, []);
+        }
+
+        if (result.Value.Kind == NotificationCounterFeedKind.Gap)
+        {
+            subscriptions.Remove(Context.ConnectionId);
+            return ToPayload(result.Value);
+        }
+
+        subscriptions.Set(Context.ConnectionId, subscription with { Cursor = result.Value.To });
+        return ToPayload(result.Value);
+    }
+
+    public override Task OnDisconnectedAsync(Exception? exception)
+    {
+        subscriptions.Remove(Context.ConnectionId);
+        return base.OnDisconnectedAsync(exception);
+    }
+
+    private static NotificationCounterPayload ToPayload(NotificationInboxCounterSnapshot value) =>
+        new(value.Cursor, value.TotalCount, value.UnreadCount);
+
+    private static NotificationCounterPollPayload ToPayload(NotificationInboxCounterFeed value) =>
+        new(value.Kind.ToString(), value.From, value.To, value.Changes.Select(ToPayload).ToArray());
+}

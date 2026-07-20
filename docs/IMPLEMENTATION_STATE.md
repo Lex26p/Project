@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 20 июля 2026 года
-**Статус программы:** `S27` реализован и проверен на Windows x64; остановлено перед `S28`
+**Статус программы:** `S28` реализован и проверен на Windows x64; остановлено перед `S29`
 
-**Последний завершённый пакет:** `S27` — mandatory/personal notification policy composition, subscriptions, schedules/quiet periods, absence/coverage, channel preferences, durable personal inbox/read state и reauthorized source links (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S28` — SMTP production adapter, durable delivery obligations/provider attempts, retry/escalation/terminal outcomes, controlled channel qualification, substitution delivery acceptance и realtime inbox counters (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S28` — initial SMTP production adapter либо ADR-equivalent provider, delivery obligations/provider attempts/retry/escalation/terminal outcomes, channel test/substitution acceptance/realtime inbox counters и outage/backlog/restart/secret tests из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат; `IG-13` остаётся Open до provider code.
+`S29` — Incident identity/summary/coordinator/source link и create/link commands, My Work assignment projection, approved accept/transfer/return task scope, independence/permissions и rebuildability checks из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S27`: affected projects compiled without warnings/errors; 91 unit + 59 integration tests green. Integration tests использовали отдельный временный PostgreSQL cluster без Docker.
+Windows x64 evidence для `S28`: affected projects compiled without warnings/errors; 94 unit + 61 integration tests green. Controlled SMTP qualification использовала loopback SMTP server, integration tests — отдельный временный PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -41,7 +41,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 | `IG-10` Production operations | Open | Bounded baseline до operations code в `S41`; final AR-10 consolidation по evidence до `S42` |
 | `IG-11` Product maturity | Not authorized for provisional scope | Только отдельное решение пользователя |
 | `IG-12` Terminal enrollment | Open | Закрыть до production identity в `S33` |
-| `IG-13` Notification provider | Open | Закрыть до provider code в `S28`; default SMTP |
+| `IG-13` Notification provider | Closed | `ADR-008`; SMTP adapter, controlled channel qualification, outage/retry/backlog/restart/duplicate acceptance и secret scrubbing tests green |
 
 ## `DG-07` evidence plan — Open
 
@@ -80,10 +80,13 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `Dispatcher.ProtocolCommissioning` строит immutable activation plan только из опубликованной и распределённой whole-scope revision с повторной проверкой manifest fingerprint; binding generation равна revision number, а source/point identities уникальны для обоих adapters.
 - Protocol process continuity явно переводит scope в `DegradedProcessUnavailable`; восстановление допускает только более новую session generation, поэтому прежний process не получает duplicate authority.
 - Modbus TCP и SNMP имеют отдельные frozen read-only contract fingerprints и отдельные qualification records; без `LinuxX64` обе записи остаются `WindowsQualifiedPlatformPending` и не закрывают `DG-07`.
-- `MOD-NOT` владеет отдельной PostgreSQL schema для versioned mandatory policy, personal settings, subscriptions и durable inbox; provider attempts/delivery tables отсутствуют до `S28`.
+- `MOD-NOT` владеет отдельной PostgreSQL schema для versioned mandatory policy, personal settings, subscriptions, durable inbox, delivery obligations, provider attempts и rebuildable inbox counter feed.
 - Notification composition поддерживает только утверждённые minimum-priority/point subscriptions, UTC schedules, quiet periods, direct absence coverage и channel preferences без generic rules engine или HR calendar integration.
 - Mandatory route игнорирует personal disable/quiet/schedule и при active absence сохраняет исходного recipient, добавляя coverage recipient; personal route может быть подавлен либо перенаправлен coverage.
 - Inbox acceptance idempotent per recipient/Event и переживает restart; изменение read state меняет только Notification version/read timestamp и не вызывает Alarm acknowledgement.
+- `ADR-008` фиксирует SMTP как initial production provider: production profile требует TLS и reference-only credential, controlled-test profile разрешает loopback qualification без TLS/auth.
+- Email delivery lease recovery повторно использует active attempt identity; transient failure проходит только явно заданные retry delays, exhaustion становится `EscalationRequired` для mandatory route либо `TerminalFailure` для personal route, не меняя source workflow.
+- Inbox total/unread counters обновляются в той же transaction, что acceptance/read transition, и доступны через permission-checked snapshot и cursor feed с обязательным resnapshot после invalidation.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.
