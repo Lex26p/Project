@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 22 июля 2026 года
-**Статус программы:** `S32` реализован и проверен на Windows x64; остановлено перед `S33`
+**Статус программы:** `S33` реализован и проверен на Windows x64; остановлено перед `S34`
 
-**Последний завершённый пакет:** `S32` — durable forecast materialization, lease-based restart recovery, idempotent scheduled WorkOrder, overdue backlog, Maintenance timeline/cross-links и frozen accepted maintenance nucleus v1 (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S33` — trusted terminal enrollment, operator approval, separate device identity, hash-only credential, terminal fleet/profile/content assignment, block/revoke и presence (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S33` — trusted terminal enrollment/device identity, fleet/profile/content assignment, block/revoke/presence и expiry/replay/recovery race acceptance из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S34` — ограниченный kiosk shell, assigned runtime, heartbeat/sync/offline policy, policy-controlled employee PIN/re-auth и Wallboard command deny из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S32`: affected project compiled without warnings/errors; 94 unit + 65 integration tests green. Forecast acceptance проверил 33 occurrences, concurrent claim, overdue backlog и restart recovery без duplicate WorkOrder на отдельном временном PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S33`: `Dispatcher.Terminals` compiled without warnings/errors; 94 unit + 66 integration tests green. `IG-12` acceptance проверил challenge/credential expiry, concurrent one-time exchange/replay, block/revoke, restart recovery, header-only identity, hash-only storage и separate identities under shared profile на отдельном временном PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -40,7 +40,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 | `IG-09` Extraction | Not justified / remain in current deployable | Открывать только по evidence и ADR |
 | `IG-10` Production operations | Open | Bounded baseline до operations code в `S41`; final AR-10 consolidation по evidence до `S42` |
 | `IG-11` Product maturity | Not authorized for provisional scope | Только отдельное решение пользователя |
-| `IG-12` Terminal enrollment | Open | Закрыть до production identity в `S33` |
+| `IG-12` Terminal enrollment | Closed | `ADR-009`; opaque 256-bit credential, challenge lifetime/approval, hash-only storage, expiry/replay/revoke/recovery и query-string denial tests green |
 | `IG-13` Notification provider | Closed | `ADR-008`; SMTP adapter, controlled channel qualification, outage/retry/backlog/restart/duplicate acceptance и secret scrubbing tests green |
 
 ## `DG-07` evidence plan — Open
@@ -97,6 +97,9 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Forecast materialization сохраняет owner-local durable obligation со стабильными obligation/WorkOrder identities; `FOR UPDATE SKIP LOCKED`, bounded lease и exact command receipt обеспечивают concurrent claim и recovery без duplicate WorkOrder.
 - Maintenance overdue backlog выводится только из незавершённых forecast obligations; timeline использует immutable work audit, а cross-links содержат route и required permissions без shared writes в source owners.
 - Accepted Maintenance nucleus v1 заморожен на источниках `Request|Defect|Forecast` и WorkOrder lifecycle `Assigned→InProgress→Completed→Accepted`; provisional lifecycle и full CMMS scope не добавлены.
+- `ADR-009` фиксирует terminal enrollment baseline: configured-lifetime one-time challenge, explicit operator approval и atomic exchange выдают отдельной device identity opaque 256-bit credential; raw challenge/credential возвращаются один раз, PostgreSQL хранит только SHA-256 hashes.
+- `MOD-TRM` владеет terminal fleet, enrollment, device identity, profile, content assignment и presence; `TerminalId`, `TerminalDeviceIdentityId` и shared `TerminalProfileId` остаются разными identities.
+- Terminal authentication принимает только `Dispatcher-Terminal` authorization header и повторно проверяет durable expiry/revoke/terminal state; query parameter не является identity, blocked/revoked terminal не получает content и не обновляет presence.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.

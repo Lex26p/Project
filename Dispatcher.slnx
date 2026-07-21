@@ -15,6 +15,7 @@
   <Project Path="src/Dispatcher.History/Dispatcher.History.csproj" />
   <Project Path="src/Dispatcher.Incidents/Dispatcher.Incidents.csproj" />
   <Project Path="src/Dispatcher.Maintenance/Dispatcher.Maintenance.csproj" />
+  <Project Path="src/Dispatcher.Terminals/Dispatcher.Terminals.csproj" />
   <Project Path="src/Dispatcher.MyWork/Dispatcher.MyWork.csproj" />
   <Project Path="src/Dispatcher.Configuration/Dispatcher.Configuration.csproj" />
   <Project Path="src/Dispatcher.Simulator/Dispatcher.Simulator.csproj" />
