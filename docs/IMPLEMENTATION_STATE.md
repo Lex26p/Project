@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 21 июля 2026 года
-**Статус программы:** `S30` реализован и проверен на Windows x64; остановлено перед `S31`
+**Статус программы:** `S31` реализован и проверен на Windows x64; остановлено перед `S32`
 
-**Последний завершённый пакет:** `S30` — independent MaintenanceAsset, optional verified Equipment link, versioned asset mutations/audit, immutable link history и approved read-only recurrence/forecast/calendar nucleus без plan CRUD (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S31` — approved Request/Defect/WorkOrder lifecycle, assignment, safety acknowledgement, checklist-gated acceptance, explicit Event→MaintenanceRequest command и permission-filtered My Work projection (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S31` — Request, Defect и WorkOrder approved lifecycle, assignment/checklist/safety/acceptance, explicit Event→MaintenanceRequest command и My Work projection/permissions из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат; неутверждённые lifecycle variants отсутствуют.
+`S32` — scheduler materialization/restart/idempotency, timeline/history/cross-links, overdue/concurrency/recovery/load tests и freeze accepted maintenance nucleus из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S30`: affected projects compiled without warnings/errors; 94 unit + 63 integration tests green. Maintenance acceptance использовал отдельный временный PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S31`: affected projects compiled without warnings/errors; 94 unit + 64 integration tests green. Maintenance work acceptance использовал отдельный временный PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -91,6 +91,9 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `MOD-WRK` владеет только permission-filtered assignment projection: source owner/version остаются явными, одинаковая версия с другим content fail closed, а owner projection полностью rebuildable без mutation Incident task.
 - `MOD-MNT` владеет independent MaintenanceAsset identity/version/audit и immutable Equipment link/unlink history; Equipment reference проверяется через read contract, а отсутствие Equipment/telemetry не ограничивает asset lifecycle.
 - Approved maintenance plan nucleus представлен immutable plan/recurrence contract и read-only calendar query, создающий только distinct forecast entries; plan CRUD/designer и WorkOrder materialization отсутствуют до утверждённых `S31–S32`/`IG-11` границ.
+- Maintenance Request имеет только `Submitted→Approved→Converted`, Defect — `Reported→Confirmed→Converted`, WorkOrder — `Assigned→InProgress→Completed→Accepted`; pause/resume/close variants отсутствуют, каждый переход versioned, idempotent и audited.
+- Event→MaintenanceRequest выполняется отдельной permission-checked command и сохраняет reauthorized source link без Alarm acknowledgement mutation; Request/Defect conversion и WorkOrder creation атомарны внутри `MOD-MNT` owner.
+- WorkOrder start требует safety acknowledgement при заданных safety fields, acceptance блокируется незавершённым mandatory checklist, а assignment публикуется в `MOD-WRK` только как permission-filtered source projection.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.

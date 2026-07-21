@@ -42,6 +42,16 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.equipment": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Facilities": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.events": {
         "type": "Project",
         "dependencies": {
@@ -52,11 +62,35 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.facilities": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.incidents": {
         "type": "Project",
         "dependencies": {
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Events": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
+      "dispatcher.maintenance": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Alarm": "[1.0.0, )",
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Equipment": "[1.0.0, )",
+          "Dispatcher.Events": "[1.0.0, )",
+          "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.Persistence": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",

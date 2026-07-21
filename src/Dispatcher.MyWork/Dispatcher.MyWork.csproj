@@ -3,6 +3,7 @@
   <ItemGroup><PackageReference Include="Npgsql" /></ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Dispatcher.Incidents\Dispatcher.Incidents.csproj" />
+    <ProjectReference Include="..\Dispatcher.Maintenance\Dispatcher.Maintenance.csproj" />
     <ProjectReference Include="..\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
     <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />

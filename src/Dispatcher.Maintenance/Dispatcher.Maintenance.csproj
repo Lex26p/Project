@@ -2,10 +2,14 @@
   <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup><PackageReference Include="Npgsql" /></ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Alarm\Dispatcher.Alarm.csproj" />
+    <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
+    <ProjectReference Include="..\Dispatcher.Events\Dispatcher.Events.csproj" />
     <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
     <ProjectReference Include="..\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
     <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+    <ProjectReference Include="..\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
   </ItemGroup>
 </Project>
