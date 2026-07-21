@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.History\Dispatcher.History.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Incidents\Dispatcher.Incidents.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Maintenance\Dispatcher.Maintenance.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.MyWork\Dispatcher.MyWork.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Server\Dispatcher.Server.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />

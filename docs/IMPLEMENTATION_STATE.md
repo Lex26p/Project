@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 21 июля 2026 года
-**Статус программы:** `S29` реализован и проверен на Windows x64; остановлено перед `S30`
+**Статус программы:** `S30` реализован и проверен на Windows x64; остановлено перед `S31`
 
-**Последний завершённый пакет:** `S29` — Incident identity/summary/coordinator/source links, idempotent create/link/task commands, approved accept/transfer/return transitions и permission-filtered rebuildable My Work assignment projection (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S30` — independent MaintenanceAsset, optional verified Equipment link, versioned asset mutations/audit, immutable link history и approved read-only recurrence/forecast/calendar nucleus без plan CRUD (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S30` — independent MaintenanceAsset с optional Equipment link, approved read-only plan nucleus/recurrence/forecast/calendar queries, asset mutations/revision/audit и link/unlink из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат; полный plan CRUD остаётся запрещён до `IG-11`.
+`S31` — Request, Defect и WorkOrder approved lifecycle, assignment/checklist/safety/acceptance, explicit Event→MaintenanceRequest command и My Work projection/permissions из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат; неутверждённые lifecycle variants отсутствуют.
 
-Windows x64 evidence для `S29`: affected projects compiled without warnings/errors; 94 unit + 62 integration tests green. Incident/My Work acceptance использовал отдельный временный PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S30`: affected projects compiled without warnings/errors; 94 unit + 63 integration tests green. Maintenance acceptance использовал отдельный временный PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -89,6 +89,8 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Inbox total/unread counters обновляются в той же transaction, что acceptance/read transition, и доступны через permission-checked snapshot и cursor feed с обязательным resnapshot после invalidation.
 - `MOD-INC` владеет отдельной PostgreSQL schema для Incident identity/summary/coordinator, explicit Event source links, approved Incident task scope, idempotent command receipts и atomic mutation audit; Incident creation/link/task transitions не изменяют Alarm acknowledgement.
 - `MOD-WRK` владеет только permission-filtered assignment projection: source owner/version остаются явными, одинаковая версия с другим content fail closed, а owner projection полностью rebuildable без mutation Incident task.
+- `MOD-MNT` владеет independent MaintenanceAsset identity/version/audit и immutable Equipment link/unlink history; Equipment reference проверяется через read contract, а отсутствие Equipment/telemetry не ограничивает asset lifecycle.
+- Approved maintenance plan nucleus представлен immutable plan/recurrence contract и read-only calendar query, создающий только distinct forecast entries; plan CRUD/designer и WorkOrder materialization отсутствуют до утверждённых `S31–S32`/`IG-11` границ.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.
