@@ -201,12 +201,35 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.incidents": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Events": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.modbus": {
         "type": "Project",
         "dependencies": {
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Protocols": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )"
+        }
+      },
+      "dispatcher.mywork": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Incidents": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
         }
       },
       "dispatcher.notifications": {
@@ -265,6 +288,7 @@
           "Dispatcher.Events": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.History": "[1.0.0, )",
+          "Dispatcher.Notifications": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Dispatcher.Simulator": "[1.0.0, )",

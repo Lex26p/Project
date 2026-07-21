@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
-**Обновлено:** 20 июля 2026 года
-**Статус программы:** `S28` реализован и проверен на Windows x64; остановлено перед `S29`
+**Обновлено:** 21 июля 2026 года
+**Статус программы:** `S29` реализован и проверен на Windows x64; остановлено перед `S30`
 
-**Последний завершённый пакет:** `S28` — SMTP production adapter, durable delivery obligations/provider attempts, retry/escalation/terminal outcomes, controlled channel qualification, substitution delivery acceptance и realtime inbox counters (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S29` — Incident identity/summary/coordinator/source links, idempotent create/link/task commands, approved accept/transfer/return transitions и permission-filtered rebuildable My Work assignment projection (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S29` — Incident identity/summary/coordinator/source link и create/link commands, My Work assignment projection, approved accept/transfer/return task scope, independence/permissions и rebuildability checks из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S30` — independent MaintenanceAsset с optional Equipment link, approved read-only plan nucleus/recurrence/forecast/calendar queries, asset mutations/revision/audit и link/unlink из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат; полный plan CRUD остаётся запрещён до `IG-11`.
 
-Windows x64 evidence для `S28`: affected projects compiled without warnings/errors; 94 unit + 61 integration tests green. Controlled SMTP qualification использовала loopback SMTP server, integration tests — отдельный временный PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S29`: affected projects compiled without warnings/errors; 94 unit + 62 integration tests green. Incident/My Work acceptance использовал отдельный временный PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -87,6 +87,8 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `ADR-008` фиксирует SMTP как initial production provider: production profile требует TLS и reference-only credential, controlled-test profile разрешает loopback qualification без TLS/auth.
 - Email delivery lease recovery повторно использует active attempt identity; transient failure проходит только явно заданные retry delays, exhaustion становится `EscalationRequired` для mandatory route либо `TerminalFailure` для personal route, не меняя source workflow.
 - Inbox total/unread counters обновляются в той же transaction, что acceptance/read transition, и доступны через permission-checked snapshot и cursor feed с обязательным resnapshot после invalidation.
+- `MOD-INC` владеет отдельной PostgreSQL schema для Incident identity/summary/coordinator, explicit Event source links, approved Incident task scope, idempotent command receipts и atomic mutation audit; Incident creation/link/task transitions не изменяют Alarm acknowledgement.
+- `MOD-WRK` владеет только permission-filtered assignment projection: source owner/version остаются явными, одинаковая версия с другим content fail closed, а owner projection полностью rebuildable без mutation Incident task.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.

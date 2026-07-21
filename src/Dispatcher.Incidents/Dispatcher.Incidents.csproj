@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup><PackageReference Include="Npgsql" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\Dispatcher.Events\Dispatcher.Events.csproj" />
+    <ProjectReference Include="..\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
+    <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
+    <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+    <ProjectReference Include="..\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
+  </ItemGroup>
+</Project>
