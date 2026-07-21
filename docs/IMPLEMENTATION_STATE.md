@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
-**Обновлено:** 21 июля 2026 года
-**Статус программы:** `S31` реализован и проверен на Windows x64; остановлено перед `S32`
+**Обновлено:** 22 июля 2026 года
+**Статус программы:** `S32` реализован и проверен на Windows x64; остановлено перед `S33`
 
-**Последний завершённый пакет:** `S31` — approved Request/Defect/WorkOrder lifecycle, assignment, safety acknowledgement, checklist-gated acceptance, explicit Event→MaintenanceRequest command и permission-filtered My Work projection (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S32` — durable forecast materialization, lease-based restart recovery, idempotent scheduled WorkOrder, overdue backlog, Maintenance timeline/cross-links и frozen accepted maintenance nucleus v1 (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S32` — scheduler materialization/restart/idempotency, timeline/history/cross-links, overdue/concurrency/recovery/load tests и freeze accepted maintenance nucleus из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S33` — trusted terminal enrollment/device identity, fleet/profile/content assignment, block/revoke/presence и expiry/replay/recovery race acceptance из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S31`: affected projects compiled without warnings/errors; 94 unit + 64 integration tests green. Maintenance work acceptance использовал отдельный временный PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S32`: affected project compiled without warnings/errors; 94 unit + 65 integration tests green. Forecast acceptance проверил 33 occurrences, concurrent claim, overdue backlog и restart recovery без duplicate WorkOrder на отдельном временном PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -90,10 +90,13 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `MOD-INC` владеет отдельной PostgreSQL schema для Incident identity/summary/coordinator, explicit Event source links, approved Incident task scope, idempotent command receipts и atomic mutation audit; Incident creation/link/task transitions не изменяют Alarm acknowledgement.
 - `MOD-WRK` владеет только permission-filtered assignment projection: source owner/version остаются явными, одинаковая версия с другим content fail closed, а owner projection полностью rebuildable без mutation Incident task.
 - `MOD-MNT` владеет independent MaintenanceAsset identity/version/audit и immutable Equipment link/unlink history; Equipment reference проверяется через read contract, а отсутствие Equipment/telemetry не ограничивает asset lifecycle.
-- Approved maintenance plan nucleus представлен immutable plan/recurrence contract и read-only calendar query, создающий только distinct forecast entries; plan CRUD/designer и WorkOrder materialization отсутствуют до утверждённых `S31–S32`/`IG-11` границ.
+- Approved maintenance plan nucleus представлен immutable plan/recurrence contract и read-only calendar query, создающий distinct forecast entries; plan CRUD/designer отсутствуют за принятой границей.
 - Maintenance Request имеет только `Submitted→Approved→Converted`, Defect — `Reported→Confirmed→Converted`, WorkOrder — `Assigned→InProgress→Completed→Accepted`; pause/resume/close variants отсутствуют, каждый переход versioned, idempotent и audited.
 - Event→MaintenanceRequest выполняется отдельной permission-checked command и сохраняет reauthorized source link без Alarm acknowledgement mutation; Request/Defect conversion и WorkOrder creation атомарны внутри `MOD-MNT` owner.
 - WorkOrder start требует safety acknowledgement при заданных safety fields, acceptance блокируется незавершённым mandatory checklist, а assignment публикуется в `MOD-WRK` только как permission-filtered source projection.
+- Forecast materialization сохраняет owner-local durable obligation со стабильными obligation/WorkOrder identities; `FOR UPDATE SKIP LOCKED`, bounded lease и exact command receipt обеспечивают concurrent claim и recovery без duplicate WorkOrder.
+- Maintenance overdue backlog выводится только из незавершённых forecast obligations; timeline использует immutable work audit, а cross-links содержат route и required permissions без shared writes в source owners.
+- Accepted Maintenance nucleus v1 заморожен на источниках `Request|Defect|Forecast` и WorkOrder lifecycle `Assigned→InProgress→Completed→Accepted`; provisional lifecycle и full CMMS scope не добавлены.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.

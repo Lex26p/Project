@@ -128,5 +128,42 @@ public static class MaintenanceMigrations
         );
         CREATE INDEX work_audit_entity_idx
             ON {Schema}.work_mutation_audit (entity_kind, entity_id, changed_at, audit_id);
+        """),
+        new MigrationStep(3, "durable forecast materialization and maintenance history", $"""
+        ALTER TABLE {Schema}.work_order DROP CONSTRAINT work_order_source_kind_check;
+        ALTER TABLE {Schema}.work_order
+            ADD CONSTRAINT work_order_source_kind_check CHECK (source_kind IN (1, 2, 3));
+        CREATE TABLE {Schema}.forecast_materialization (
+            obligation_id uuid PRIMARY KEY,
+            work_order_id uuid NOT NULL UNIQUE,
+            plan_id uuid NOT NULL,
+            asset_id uuid NOT NULL REFERENCES {Schema}.asset(asset_id),
+            scope_id uuid NOT NULL,
+            plan_revision bigint NOT NULL CHECK (plan_revision > 0),
+            title text NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 500),
+            due_on date NOT NULL,
+            assigned_person_id uuid NOT NULL,
+            permit_required boolean NOT NULL,
+            isolation_required boolean NOT NULL,
+            safety_instructions text NULL CHECK (safety_instructions IS NULL OR length(safety_instructions) <= 1000),
+            checklist jsonb NOT NULL,
+            fingerprint character(64) NOT NULL,
+            state smallint NOT NULL CHECK (state IN (1, 2, 3)),
+            claimed_by text NULL,
+            lease_until timestamp with time zone NULL,
+            attempts integer NOT NULL CHECK (attempts >= 0),
+            created_at timestamp with time zone NOT NULL,
+            completed_at timestamp with time zone NULL,
+            CONSTRAINT forecast_plan_due_once UNIQUE (plan_id, due_on),
+            CONSTRAINT forecast_claim_pair CHECK (
+                (claimed_by IS NULL AND lease_until IS NULL) OR
+                (claimed_by IS NOT NULL AND lease_until IS NOT NULL)),
+            CONSTRAINT forecast_completion_state CHECK (
+                (completed_at IS NULL AND state IN (1, 2)) OR
+                (completed_at IS NOT NULL AND state = 3))
+        );
+        CREATE INDEX forecast_due_claim_idx
+            ON {Schema}.forecast_materialization (due_on, lease_until, obligation_id)
+            WHERE completed_at IS NULL;
         """)]);
 }

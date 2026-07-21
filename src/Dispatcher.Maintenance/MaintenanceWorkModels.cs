@@ -47,7 +47,7 @@ public readonly record struct WorkOrderChecklistItemId
 public enum MaintenanceRequestState { Submitted = 1, Approved = 2, Converted = 3 }
 public enum MaintenanceDefectState { Reported = 1, Confirmed = 2, Converted = 3 }
 public enum MaintenanceWorkOrderState { Assigned = 1, InProgress = 2, Completed = 3, Accepted = 4 }
-public enum MaintenanceWorkSourceKind { Request = 1, Defect = 2 }
+public enum MaintenanceWorkSourceKind { Request = 1, Defect = 2, Forecast = 3 }
 
 public sealed record MaintenanceEventSourceLink(
     OperationalEventId EventId,
@@ -159,6 +159,53 @@ public sealed record CreateWorkOrderFromDefect(
     IReadOnlyCollection<NewWorkOrderChecklistItem> Checklist,
     StateVersion ExpectedSourceVersion,
     string IdempotencyKey);
+
+public sealed record CreateWorkOrderFromForecast(
+    MaintenanceWorkOrderId WorkOrderId,
+    MaintenanceForecastObligationId ObligationId,
+    MaintenanceAssetId AssetId,
+    FacilityScopeId ScopeId,
+    string Summary,
+    PersonId AssignedPersonId,
+    WorkOrderSafetyFields Safety,
+    IReadOnlyCollection<NewWorkOrderChecklistItem> Checklist,
+    string IdempotencyKey);
+
+public sealed record MaintenanceTimelineEntry(
+    string EntityKind,
+    Guid EntityId,
+    string Action,
+    StateVersion ResultingVersion,
+    DateTimeOffset ChangedAt);
+
+public sealed record MaintenanceCrossLink(
+    string Route,
+    IReadOnlyList<PermissionCode> RequiredPermissions);
+
+public static class MaintenanceCrossLinks
+{
+    public static MaintenanceCrossLink SourceFor(MaintenanceWorkOrderSnapshot workOrder) =>
+        workOrder.SourceKind switch
+        {
+            MaintenanceWorkSourceKind.Request => new(
+                $"/maintenance/requests/{workOrder.SourceId}",
+                [MaintenancePermissions.Read(workOrder.ScopeId)]),
+            MaintenanceWorkSourceKind.Defect => new(
+                $"/maintenance/defects/{workOrder.SourceId}",
+                [MaintenancePermissions.Read(workOrder.ScopeId)]),
+            MaintenanceWorkSourceKind.Forecast => new(
+                $"/maintenance/forecast/{workOrder.SourceId}",
+                [MaintenancePermissions.Read(workOrder.ScopeId)]),
+            _ => throw new ArgumentOutOfRangeException(nameof(workOrder)),
+        };
+}
+
+public static class MaintenanceNucleusContract
+{
+    public const int Version = 1;
+    public const string Lifecycle = "Assigned>InProgress>Completed>Accepted";
+    public const string Sources = "Request|Defect|Forecast";
+}
 
 public sealed record TransitionMaintenanceWorkOrder(
     MaintenanceWorkOrderId WorkOrderId,

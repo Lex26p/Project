@@ -255,6 +255,78 @@ public sealed class MaintenanceWorkStore
             request.Summary, request.AssignedPersonId, request.Safety, request.Checklist,
             request.ExpectedSourceVersion, request.IdempotencyKey, cancellationToken);
 
+    public async Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> CreateWorkOrderAsync(
+        AuthorizedMutation authorization,
+        CreateWorkOrderFromForecast request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Safety);
+        ArgumentNullException.ThrowIfNull(request.Checklist);
+        var validation = ValidateCreate(
+            authorization, MaintenanceWorkPermissions.Manage(request.ScopeId), request.Summary, request.IdempotencyKey);
+        if (validation.IsFailure || request.Safety.AcknowledgedAt is not null ||
+            request.Safety.Instructions?.Length > 1000 ||
+            request.Checklist.Select(value => value.ItemId).Distinct().Count() != request.Checklist.Count ||
+            request.Checklist.Any(value => string.IsNullOrWhiteSpace(value.Description) || value.Description.Length > 500))
+        {
+            return validation.IsFailure
+                ? Result.Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(validation.Error!)
+                : Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(
+                    "maintenance.work_order_invalid", "Work order safety or checklist is invalid.");
+        }
+
+        const string action = "create-work-order-forecast";
+        var fingerprint = Fingerprint(JsonSerializer.Serialize(new
+        {
+            WorkOrderId = request.WorkOrderId.Value, ObligationId = request.ObligationId.Value,
+            AssetId = request.AssetId.Value, ScopeId = request.ScopeId.Value,
+            Summary = request.Summary.Trim(), AssignedPerson = request.AssignedPersonId.Value,
+            request.Safety, Checklist = request.Checklist.OrderBy(value => value.ItemId.Value),
+        }));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var replay = await ReadReceiptAsync<WorkOrderDto>(
+            connection, transaction, request.IdempotencyKey, action, fingerprint, cancellationToken).ConfigureAwait(false);
+        if (replay.IsFailure)
+        {
+            return Result.Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(replay.Error!);
+        }
+
+        if (replay.Value.Value is not null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return Replayed(replay.Value.Value.ToModel());
+        }
+
+        var now = UtcNow();
+        var dto = new WorkOrderDto(
+            request.WorkOrderId.Value, request.AssetId.Value, request.ScopeId.Value,
+            (int)MaintenanceWorkSourceKind.Forecast, request.ObligationId.Value,
+            request.Summary.Trim(), request.AssignedPersonId.Value, (int)MaintenanceWorkOrderState.Assigned,
+            request.Safety.PermitRequired, request.Safety.IsolationRequired,
+            request.Safety.Instructions?.Trim(), null, StateVersion.Initial.Value,
+            request.Checklist.OrderBy(value => value.ItemId.Value)
+                .Select(value => new ChecklistDto(value.ItemId.Value, value.Description.Trim(), value.Mandatory, null, null))
+                .ToList(), now, now);
+        try
+        {
+            await InsertWorkOrderAsync(connection, transaction, dto, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            return Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(
+                "maintenance.forecast_materialized", "Forecast obligation already has a work order.");
+        }
+
+        await WriteReceiptAndAuditAsync(
+            connection, transaction, request.IdempotencyKey, action, fingerprint, "work-order", dto,
+            authorization, dto.ScopeId, dto.WorkOrderId, dto.Version, now, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return Applied(dto.ToModel());
+    }
+
     public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> StartWorkOrderAsync(
         AuthorizedMutation authorization, PersonId actor, TransitionMaintenanceWorkOrder request,
         CancellationToken cancellationToken = default) =>
@@ -392,6 +464,35 @@ public sealed class MaintenanceWorkStore
         var value = await ReadWorkOrderDtoAsync(connection, transaction, workOrderId, false, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return value?.ToModel();
+    }
+
+    public async Task<IReadOnlyList<MaintenanceTimelineEntry>> ReadTimelineAsync(
+        Guid entityId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT entity_kind, entity_id, action, resulting_version, changed_at
+            FROM {MaintenanceMigrations.Schema}.work_mutation_audit
+            WHERE entity_id = @id
+            ORDER BY changed_at, audit_id;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("id", entityId);
+        var result = new List<MaintenanceTimelineEntry>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(new MaintenanceTimelineEntry(
+                reader.GetString(0), reader.GetGuid(1), reader.GetString(2),
+                StateVersion.From(checked((ulong)reader.GetInt64(3))),
+                reader.GetFieldValue<DateTimeOffset>(4)));
+        }
+
+        await reader.CloseAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<long> CountAuditAsync(Guid entityId, CancellationToken cancellationToken = default)
