@@ -192,6 +192,22 @@ if (administrationEnabled)
             administrationMaximumAuditPageSize!.Value,
             administrationRetainedAuditTail!.Value));
 }
+var commandRole = builder.Configuration["Dispatcher:Command:DatabaseRole"];
+var commandSimulatorRole = builder.Configuration["Dispatcher:Simulator:DatabaseRole"];
+var commandMaximumLeaseSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Command:MaximumLeaseLifetimeSeconds");
+var commandStepUpRequired = builder.Configuration.GetValue<bool?>("Dispatcher:Command:StepUpRequired");
+var commandStepUpSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Command:StepUpLifetimeSeconds");
+var commandEnabled = identityEnabled && !string.IsNullOrWhiteSpace(commandRole) &&
+                     !string.IsNullOrWhiteSpace(commandSimulatorRole) && commandMaximumLeaseSeconds > 0 &&
+                     commandStepUpRequired is not null && commandStepUpSeconds > 0;
+if (commandEnabled)
+{
+    builder.Services.AddCommandServer(
+        workspaceConnection!, commandRole!, commandSimulatorRole!,
+        new Dispatcher.Command.CommandSecurityPolicy(
+            TimeSpan.FromSeconds(commandMaximumLeaseSeconds!.Value), commandStepUpRequired!.Value,
+            TimeSpan.FromSeconds(commandStepUpSeconds!.Value)));
+}
 
 var app = builder.Build();
 if (identityEnabled && !string.IsNullOrWhiteSpace(identityBootstrapUserName) &&
@@ -222,6 +238,10 @@ if (identityEnabled)
 if (administrationEnabled)
 {
     app.MapAdministrationServer();
+}
+if (commandEnabled)
+{
+    app.MapCommandServer();
 }
 if (workspaceEnabled)
 {

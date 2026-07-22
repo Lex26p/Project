@@ -115,6 +115,28 @@ public sealed class IdentityStore
         return Result.Success(issue);
     }
 
+    public async Task<Result<StepUpAttestation>> VerifyStepUpAsync(
+        SessionSnapshot session, string password, TimeSpan lifetime, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(password);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(lifetime, TimeSpan.Zero);
+        var validation = SessionAuthorization.ValidateSession(session, clock);
+        if (validation.IsFailure) return Result.Failure<StepUpAttestation>(validation.Error!);
+        var now = UtcNow();
+        await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, token).ConfigureAwait(false);
+        var account = await ReadAccountBySubjectAsync(connection, transaction, session.SubjectId.Value, token).ConfigureAwait(false);
+        if (account is null || !account.Enabled || account.LockedUntil > now ||
+            !CryptographicOperations.FixedTimeEquals(
+                account.PasswordHash, PasswordHash(password, account.PasswordSalt, account.PasswordIterations)))
+            return Failure<StepUpAttestation>("identity.step_up_invalid", "Step-up credentials are invalid.");
+        await transaction.CommitAsync(token).ConfigureAwait(false);
+        return Result.Success(new StepUpAttestation(
+            Guid.NewGuid(), session.Id, session.SubjectId, now, now.Add(lifetime)));
+    }
+
     public async Task<Result<SessionSnapshot>> ResolveAccessAsync(
         ProductionAccessPresentation? presentation, CancellationToken token = default)
     {

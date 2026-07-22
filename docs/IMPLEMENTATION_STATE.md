@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 22 июля 2026 года
-**Статус программы:** `S36` реализован и проверен на Windows x64; остановлено перед `S37`
+**Статус программы:** `S37` реализован и проверен на Windows x64; остановлено перед `S38`
 
-**Последний завершённый пакет:** `S36` — owner-linked platform health/faceted readiness, distinct data-quality issues, immutable permission-filtered audit journal/live tail, explicit cursor gaps, bounded overload и read-only operations Web view (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S37` — Simulator-only command security baseline, time-bounded session/subject/scope-bound ControlLease, optional local-password step-up, exact immutable prepare/preflight intent, safety blocking и explicit no-executor boundary (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S37` — Simulator-only command security decisions, time-bounded ControlLease, optional step-up, exact prepare/preflight intent и revoke/expiry/stale/quality/blocking races из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S38` — Simulator CommandExecution owner lifecycle: accepted/rejected/progress/unknown/reconcile, stable command identity/idempotency, audit/realtime/Web confirmation и timeout/restart/duplicate/security races из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S36`: affected Administration/Identity/Server/Web projects compiled without warnings/errors; 95 unit + 69 integration tests green. Acceptance проверил owner-linked health facets, data-quality/Alarm separation, permission filtering before counters/logs, immutable/idempotent audit acceptance, restart/live-tail/gap behavior и bounded view/page overload на отдельном временном PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S37`: affected Command/Identity/Server/Web projects compiled without warnings/errors; 95 unit + 70 integration tests green. Acceptance проверил optional bound step-up, exclusive time-bounded lease, revoke/expiry/session/holder fencing, exact Simulator revision/generation/current/quality/freshness preflight, History deny, versioned safety blocking, immutable/idempotent prepared intent и отсутствие executor/protocol dependency на отдельном временном PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -35,7 +35,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 | `IG-04P` Production AuthN | Closed | `ADR-010`; local PBKDF2 accounts, hash-only opaque access/refresh credentials, durable validation/rotation/revoke, authorization-version invalidation и last-admin protection проверены в `S35` |
 | `IG-05` Web/realtime transport | Closed | `ADR-006`; authorized HTTP snapshot и scoped SignalR bootstrap/delta, gap/reconnect/resnapshot, permission invalidation и slow-consumer/render-cadence tests green |
 | `IG-06` Protocol isolation | Closed | Отдельный non-ASP.NET Core/runtime process, exact workload identity, reference-only secret resolution, bounded I/O/parser surface, lifecycle drain/isolation и Simulator parity contract tests green |
-| `IG-07` Command security | Open | Закрыть до `S37` |
+| `IG-07` Command security | Closed | `ADR-011`; Simulator-only lease/step-up/prepare boundary, revoke/expiry/stale/quality/safety races и отсутствие physical executor проверены в `S37` |
 | `IG-08` Physical write | Not authorized / deny | Только решение пользователя и scoped qualification gates перед `S39`; full `DG-08` и final production enablement не раньше `S43` |
 | `IG-09` Extraction | Not justified / remain in current deployable | Открывать только по evidence и ADR |
 | `IG-10` Production operations | Open | Bounded baseline до operations code в `S41`; final AR-10 consolidation по evidence до `S42` |
@@ -99,6 +99,9 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Accepted Maintenance nucleus v1 заморожен на источниках `Request|Defect|Forecast` и WorkOrder lifecycle `Assigned→InProgress→Completed→Accepted`; provisional lifecycle и full CMMS scope не добавлены.
 - `ADR-009` фиксирует terminal enrollment baseline: configured-lifetime one-time challenge, explicit operator approval и atomic exchange выдают отдельной device identity opaque 256-bit credential; raw challenge/credential возвращаются один раз, PostgreSQL хранит только SHA-256 hashes.
 - `ADR-010` фиксирует initial production AuthN: `MOD-IAM` владеет local accounts, PBKDF2 password material, hash-only opaque access/refresh credentials, durable sessions, roles/groups/access scopes, explicit account grants/denials и authorization-version invalidation.
+- `ADR-011` фиксирует Simulator-only command security boundary: `MOD-CMD` владеет lease, safety guard, immutable prepared intent и audit; protocol/physical executor отсутствует, `IG-08` остаётся deny.
+- ControlLease ограничен временем и exact scope, привязан к session/subject и никогда не заменяет повторную проверку prepare/scope/point permissions; optional step-up является короткой single-use in-memory attestation после повторной локальной password verification.
+- Command prepare допускает только Live mode и фиксирует exact active Simulator revision/number/generation/fingerprint, target/config/unit, current position/value/quality/freshness и safety version; stale или blocked evidence отклоняется до создания intent.
 - Первый administrator создаётся только один раз из write-only startup configuration; empty-account precondition и PostgreSQL advisory lock закрывают повторный bootstrap.
 - Production requests используют только `Dispatcher-Session` authorization header; test session bridge остаётся только Development/Test path, refresh вращает обе credentials, expiry/revoke/account или role change fail closed.
 - Identity administration проверяется backend permission `identity.administration.manage`; impact preview предшествует role permission replacement, final effective administrator нельзя отключить либо лишить authority.
@@ -202,12 +205,12 @@ Linux x64 build/test/load не выполнялись по прямому ука
 ## Provisional
 
 - exact .NET 10 SDK feature-band/patch beyond the repository baseline;
-- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event/Dashboard/Identity/Administration owners;
+- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event/Dashboard/Identity/Administration/Command owners;
 - production process topology;
 - protocol isolation mechanism;
 - external IdP, enterprise provisioning и arbitrary identity integration adapters;
 - numeric capacity/retention/SLO limits;
-- command enablement;
+- Simulator command execution и любое physical command enablement;
 - native/service extraction.
 
 ## Известные риски

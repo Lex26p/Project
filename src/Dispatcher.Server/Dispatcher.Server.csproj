@@ -12,6 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\Dispatcher.Command\Dispatcher.Command.csproj" />
     <ProjectReference Include="..\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
     <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
     <ProjectReference Include="..\Dispatcher.History\Dispatcher.History.csproj" />

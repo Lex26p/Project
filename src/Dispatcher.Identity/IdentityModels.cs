@@ -99,6 +99,24 @@ public sealed record RefreshProductionSession(string RefreshToken);
 public sealed record ProductionSessionIssue(
     IdentityAccountId AccountId, SessionSnapshot Session, string AccessToken, string RefreshToken,
     DateTimeOffset RefreshExpiresAt);
+public sealed class StepUpAttestation
+{
+    internal StepUpAttestation(
+        Guid attestationId, SessionId sessionId, SubjectId subjectId,
+        DateTimeOffset verifiedAt, DateTimeOffset expiresAt)
+    {
+        AttestationId = attestationId;
+        SessionId = sessionId;
+        SubjectId = subjectId;
+        VerifiedAt = verifiedAt;
+        ExpiresAt = expiresAt;
+    }
+    public Guid AttestationId { get; }
+    public SessionId SessionId { get; }
+    public SubjectId SubjectId { get; }
+    public DateTimeOffset VerifiedAt { get; }
+    public DateTimeOffset ExpiresAt { get; }
+}
 public sealed record ProductionAccessPresentation(string Scheme, string Token)
 {
     public const string RequiredScheme = "Dispatcher-Session";

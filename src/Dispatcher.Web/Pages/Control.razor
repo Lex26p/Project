@@ -1,0 +1,84 @@
+@page "/control"
+@inject ControlApiClient Api
+
+<PageTitle>Simulator control</PageTitle>
+
+<h1>Simulator control preparation</h1>
+<p>This page can acquire a time-bounded lease and prepare an exact Simulator intent. It cannot execute a command.</p>
+
+<section aria-label="Command target">
+    <h2>Target evidence</h2>
+    <input @bind="scopeText" placeholder="Runtime scope ID" />
+    <input @bind="pointText" placeholder="Point ID" />
+    <button type="button" @onclick="LoadContextAsync">Load live context</button>
+    @if (context is not null)
+    {
+        <dl>
+            <dt>Active revision</dt><dd>@context.RevisionId / @context.RevisionNumber / generation @context.Generation</dd>
+            <dt>Current</dt><dd>@context.CurrentValue @context.Unit (@context.Quality, @context.Freshness), position @context.CurrentPosition</dd>
+        </dl>
+    }
+</section>
+
+<section aria-label="Control lease">
+    <h2>Control lease</h2>
+    <label>Lifetime, seconds <input @bind="leaseSeconds" type="number" min="1" /></label>
+    <label>Step-up password <input @bind="stepUpPassword" type="password" autocomplete="current-password" /></label>
+    <button type="button" @onclick="AcquireAsync">Acquire lease</button>
+    @if (leaseId is not null)
+    {
+        <p>Lease: @leaseId</p>
+        <button type="button" @onclick="RevokeAsync">Revoke lease</button>
+    }
+</section>
+
+<section aria-label="Command preflight">
+    <h2>Prepare intent</h2>
+    <label>Desired value <input @bind="desiredValue" type="number" /></label>
+    <button type="button" disabled="@(leaseId is null || context is null)" @onclick="PrepareAsync">Prepare exact intent (no execution)</button>
+</section>
+
+@if (!string.IsNullOrEmpty(message)) { <p role="status">@message</p> }
+
+@code {
+    private string scopeText = string.Empty, pointText = string.Empty, stepUpPassword = string.Empty;
+    private int leaseSeconds = 60;
+    private long desiredValue;
+    private Guid? leaseId;
+    private CommandContextPayload? context;
+    private string message = string.Empty;
+
+    private async Task LoadContextAsync()
+    {
+        context = Guid.TryParse(scopeText, out var scope) && Guid.TryParse(pointText, out var point)
+            ? await Api.ReadContextAsync(scope, point) : null;
+        message = context is null ? "Live target context is unavailable or denied." : "Live evidence loaded.";
+    }
+
+    private async Task AcquireAsync()
+    {
+        if (context is null) { message = "Load live context first."; return; }
+        var candidate = Guid.NewGuid();
+        var response = await Api.AcquireLeaseAsync(candidate, context.ScopeId, leaseSeconds, stepUpPassword);
+        stepUpPassword = string.Empty;
+        leaseId = response.IsSuccessStatusCode ? candidate : null;
+        message = response.IsSuccessStatusCode ? "Control lease acquired." : $"Lease rejected ({(int)response.StatusCode}).";
+    }
+
+    private async Task PrepareAsync()
+    {
+        if (context is null || leaseId is null) return;
+        var response = await Api.PrepareAsync(Guid.NewGuid(), leaseId.Value, context, desiredValue);
+        message = response.IsSuccessStatusCode
+            ? "Intent prepared. No execution capability exists in this sprint."
+            : $"Preflight rejected ({(int)response.StatusCode}). Reload live evidence before retrying.";
+    }
+
+    private async Task RevokeAsync()
+    {
+        if (leaseId is null) return;
+        await Api.RevokeLeaseAsync(leaseId.Value);
+        leaseId = null;
+        message = "Control lease revoked.";
+    }
+}
