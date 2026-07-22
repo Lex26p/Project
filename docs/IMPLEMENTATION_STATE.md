@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 22 июля 2026 года
-**Статус программы:** `S33` реализован и проверен на Windows x64; остановлено перед `S34`
+**Статус программы:** `S34` реализован и проверен на Windows x64; остановлено перед `S35`
 
-**Последний завершённый пакет:** `S33` — trusted terminal enrollment, operator approval, separate device identity, hash-only credential, terminal fleet/profile/content assignment, block/revoke и presence (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S34` — assigned Dashboard-only kiosk runtime, separate kiosk shell, heartbeat/sync, explicit offline policy, policy-controlled employee PIN re-auth/attribution и absolute Wallboard/offline command deny (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S34` — ограниченный kiosk shell, assigned runtime, heartbeat/sync/offline policy, policy-controlled employee PIN/re-auth и Wallboard command deny из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S35` — production local AuthN/session lifecycle, account/role/group/scope administration, last-admin protection, inherited settings/overrides и integration diagnostics boundary из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S33`: `Dispatcher.Terminals` compiled without warnings/errors; 94 unit + 66 integration tests green. `IG-12` acceptance проверил challenge/credential expiry, concurrent one-time exchange/replay, block/revoke, restart recovery, header-only identity, hash-only storage и separate identities under shared profile на отдельном временном PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S34`: affected Terminal/Server/Web projects compiled without warnings/errors; 95 unit + 67 integration tests green. Acceptance проверил assigned-only permission-filtered Dashboard manifest, profile drift heartbeat/resync, PBKDF2 PIN re-auth, terminal-only/person attribution, read-only/blank offline behavior, zero command queue и Wallboard command deny на отдельном временном PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -100,6 +100,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `ADR-009` фиксирует terminal enrollment baseline: configured-lifetime one-time challenge, explicit operator approval и atomic exchange выдают отдельной device identity opaque 256-bit credential; raw challenge/credential возвращаются один раз, PostgreSQL хранит только SHA-256 hashes.
 - `MOD-TRM` владеет terminal fleet, enrollment, device identity, profile, content assignment и presence; `TerminalId`, `TerminalDeviceIdentityId` и shared `TerminalProfileId` остаются разными identities.
 - Terminal authentication принимает только `Dispatcher-Terminal` authorization header и повторно проверяет durable expiry/revoke/terminal state; query parameter не является identity, blocked/revoked terminal не получает content и не обновляет presence.
+- Terminal profile явно задаёт `Kiosk|Wallboard`, `Blank|ReadOnlyLastSynchronized`, runtime permissions и необходимость employee re-auth; Server выдаёт только assigned Dashboard manifest после повторной device authentication и существующей binding permission-фильтрации.
+- Канонический Web route `/kiosk` использует отдельный `KioskLayout` без main header, primary navigation и Event Dispatcher; content выбирается только Server assignment, а не client route/query.
+- Employee PIN существует только при profile policy `Required`, хранится как configurable PBKDF2 hash и выдаёт краткоживущую device/profile-version-scoped re-auth; без PIN interaction audit содержит только Terminal/Device identity.
+- Kiosk offline policy либо очищает runtime, либо сохраняет только read-only last synchronized content; pending command queue всегда отсутствует. Wallboard command admission всегда deny, offline command не ставится в очередь.
 - Notification source link хранит exact Event/point permissions и повторно authorizes их при каждом открытии; Server получает `PersonId` только через Workspace `SubjectId → Account → Person`, не из client input.
 - Server выдаёт current snapshot/delta только после session/point authorization; скрытые point и их Core positions не попадают в Web.
 - Один Blazor current-value widget использует snapshot+delta; no-change polling не запускает render, catch-up delta применяет несколько изменений перед одним render request.

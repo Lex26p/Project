@@ -130,6 +130,28 @@ if (dashboardEnabled)
             mimicMaxAttributesPerElement!.Value,
             mimicMaxAttributeLength!.Value));
 }
+var terminalRole = builder.Configuration["Dispatcher:Terminals:DatabaseRole"];
+var terminalChallengeSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Terminals:ChallengeLifetimeSeconds");
+var terminalCredentialSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Terminals:CredentialLifetimeSeconds");
+var terminalPinIterations = builder.Configuration.GetValue<int?>("Dispatcher:Terminals:PinIterations");
+var terminalPinMinimumLength = builder.Configuration.GetValue<int?>("Dispatcher:Terminals:PinMinimumLength");
+var terminalPinMaximumLength = builder.Configuration.GetValue<int?>("Dispatcher:Terminals:PinMaximumLength");
+var terminalReauthenticationSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Terminals:ReauthenticationLifetimeSeconds");
+var terminalsEnabled = dashboardEnabled && !string.IsNullOrWhiteSpace(terminalRole) &&
+                       terminalChallengeSeconds > 0 && terminalCredentialSeconds > 0 &&
+                       terminalPinIterations > 0 && terminalPinMinimumLength >= 4 &&
+                       terminalPinMaximumLength >= terminalPinMinimumLength && terminalReauthenticationSeconds > 0;
+if (terminalsEnabled)
+{
+    builder.Services.AddTerminalRuntimeServer(
+        workspaceConnection!, terminalRole!,
+        new Dispatcher.Terminals.TerminalEnrollmentPolicy(
+            TimeSpan.FromSeconds(terminalChallengeSeconds!.Value),
+            TimeSpan.FromSeconds(terminalCredentialSeconds!.Value)),
+        new Dispatcher.Terminals.TerminalPinPolicy(
+            terminalPinIterations!.Value, terminalPinMinimumLength!.Value, terminalPinMaximumLength!.Value,
+            TimeSpan.FromSeconds(terminalReauthenticationSeconds!.Value)));
+}
 
 var app = builder.Build();
 app.MapDispatcherServer();
@@ -161,5 +183,9 @@ if (dashboardEnabled)
 {
     app.MapDashboardServer();
     app.MapDashboardAuthoringServer();
+}
+if (terminalsEnabled)
+{
+    app.MapTerminalRuntimeServer();
 }
 app.Run();

@@ -1,5 +1,6 @@
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
+using Dispatcher.Workspace;
 
 namespace Dispatcher.Terminals;
 
@@ -42,6 +43,9 @@ public readonly record struct TerminalProfileId
 public enum TerminalState { PendingEnrollment = 1, Active = 2, Blocked = 3, Revoked = 4 }
 public enum TerminalEnrollmentState { PendingApproval = 1, Approved = 2, Consumed = 3, Expired = 4 }
 public enum TerminalContentKind { Dashboard = 1, Mimic = 2 }
+public enum TerminalExperience { Kiosk = 1, Wallboard = 2 }
+public enum TerminalOfflineMode { Blank = 1, ReadOnlyLastSynchronized = 2 }
+public enum TerminalEmployeeReauthentication { NotRequired = 1, Required = 2 }
 
 public sealed record TerminalEnrollmentPolicy
 {
@@ -58,9 +62,39 @@ public sealed record TerminalEnrollmentPolicy
 
 public sealed record TerminalContentAssignment(TerminalContentKind Kind, Guid ContentId);
 
+public sealed record TerminalRuntimePolicy(
+    TerminalExperience Experience,
+    TerminalOfflineMode OfflineMode,
+    TerminalEmployeeReauthentication EmployeeReauthentication,
+    IReadOnlyList<PermissionCode> RuntimePermissions)
+{
+    public static TerminalRuntimePolicy Default { get; } = new(
+        TerminalExperience.Kiosk, TerminalOfflineMode.Blank,
+        TerminalEmployeeReauthentication.NotRequired, []);
+}
+
+public sealed record TerminalPinPolicy
+{
+    public TerminalPinPolicy(int iterations, int minimumLength, int maximumLength, TimeSpan reauthenticationLifetime)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(iterations);
+        ArgumentOutOfRangeException.ThrowIfLessThan(minimumLength, 4);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumLength, minimumLength);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(reauthenticationLifetime, TimeSpan.Zero);
+        Iterations = iterations;
+        MinimumLength = minimumLength;
+        MaximumLength = maximumLength;
+        ReauthenticationLifetime = reauthenticationLifetime;
+    }
+    public int Iterations { get; }
+    public int MinimumLength { get; }
+    public int MaximumLength { get; }
+    public TimeSpan ReauthenticationLifetime { get; }
+}
+
 public sealed record TerminalProfileSnapshot(
     TerminalProfileId ProfileId, string Name, TerminalContentAssignment? Content,
-    StateVersion Version, DateTimeOffset UpdatedAt);
+    TerminalRuntimePolicy RuntimePolicy, StateVersion Version, DateTimeOffset UpdatedAt);
 
 public sealed record TerminalSnapshot(
     TerminalId TerminalId, string Label, TerminalState State, TerminalProfileId? ProfileId,
@@ -89,7 +123,43 @@ public sealed record InitiateTerminalEnrollment(
 public sealed record CreateTerminalProfile(TerminalProfileId ProfileId, string Name);
 public sealed record AssignTerminalProfile(TerminalId TerminalId, TerminalProfileId ProfileId, StateVersion ExpectedVersion);
 public sealed record AssignTerminalContent(TerminalProfileId ProfileId, TerminalContentAssignment Content, StateVersion ExpectedVersion);
+public sealed record ConfigureTerminalRuntime(
+    TerminalProfileId ProfileId, TerminalRuntimePolicy Policy, StateVersion ExpectedVersion);
+public sealed record SetTerminalEmployeePin(TerminalProfileId ProfileId, PersonId PersonId, string Pin);
 public sealed record ChangeTerminalState(TerminalId TerminalId, StateVersion ExpectedVersion);
+
+public sealed record TerminalRuntimeSync(
+    TerminalId TerminalId, TerminalDeviceIdentityId DeviceIdentityId,
+    TerminalProfileId ProfileId, StateVersion ProfileVersion,
+    TerminalContentAssignment Content, TerminalRuntimePolicy Policy,
+    DateTimeOffset SynchronizedAt);
+
+public sealed record TerminalHeartbeat(
+    DateTimeOffset AcceptedAt, StateVersion ProfileVersion, bool ResyncRequired);
+
+public sealed record TerminalEmployeeReauthenticationIssue(
+    PersonId PersonId, string Token, DateTimeOffset ExpiresAt);
+
+public sealed record TerminalEmployeeReauthenticationPresentation(string Token);
+
+public sealed record TerminalInteractionAttribution(
+    Guid InteractionId, TerminalId TerminalId, TerminalDeviceIdentityId DeviceIdentityId,
+    PersonId? PersonId, string Action, DateTimeOffset AcceptedAt);
+
+public static class TerminalCommandAdmission
+{
+    public static Result Evaluate(TerminalRuntimePolicy policy, bool online)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        var code = !online
+            ? "terminal.offline_command_not_queued"
+            : policy.Experience == TerminalExperience.Wallboard
+                ? "terminal.wallboard_command_denied"
+                : "terminal.command_unavailable";
+        return Result.Failure(new OperationError(ErrorCode.From(code),
+            "Terminal command capability is unavailable and the request was not queued."));
+    }
+}
 
 public static class TerminalPermissions
 {

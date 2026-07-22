@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
+using Dispatcher.Workspace;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -13,9 +14,11 @@ public sealed class TerminalStore
     private readonly string databaseRole;
     private readonly IWallClock clock;
     private readonly TerminalEnrollmentPolicy policy;
+    private readonly TerminalPinPolicy? pinPolicy;
 
     public TerminalStore(
-        NpgsqlDataSource dataSource, string databaseRole, IWallClock clock, TerminalEnrollmentPolicy policy)
+        NpgsqlDataSource dataSource, string databaseRole, IWallClock clock, TerminalEnrollmentPolicy policy,
+        TerminalPinPolicy? pinPolicy = null)
     {
         this.dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseRole);
@@ -24,6 +27,7 @@ public sealed class TerminalStore
         this.databaseRole = databaseRole;
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
         this.policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        this.pinPolicy = pinPolicy;
     }
 
     public async Task<Result<TerminalEnrollmentChallenge>> InitiateEnrollmentAsync(
@@ -202,7 +206,8 @@ public sealed class TerminalStore
         await WriteAuditAsync(connection, transaction, authorization, null, request.ProfileId.Value,
             "create-profile", 1, now, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return Result.Success(new TerminalProfileSnapshot(request.ProfileId, request.Name.Trim(), null, StateVersion.Initial, now));
+        return Result.Success(new TerminalProfileSnapshot(
+            request.ProfileId, request.Name.Trim(), null, TerminalRuntimePolicy.Default, StateVersion.Initial, now));
     }
 
     public async Task<Result<TerminalProfileSnapshot>> AssignContentAsync(
@@ -244,6 +249,234 @@ public sealed class TerminalStore
         CancellationToken cancellationToken = default) =>
         await MutateTerminalAsync(authorization, request.TerminalId, request.ExpectedVersion,
             "assign-profile", null, request.ProfileId, cancellationToken).ConfigureAwait(false);
+
+    public async Task<Result<TerminalProfileSnapshot>> ConfigureRuntimeAsync(
+        AuthorizedMutation authorization, ConfigureTerminalRuntime request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Policy);
+        ArgumentNullException.ThrowIfNull(request.Policy.RuntimePermissions);
+        if (authorization.Permission != TerminalPermissions.Manage ||
+            !Enum.IsDefined(request.Policy.Experience) || !Enum.IsDefined(request.Policy.OfflineMode) ||
+            !Enum.IsDefined(request.Policy.EmployeeReauthentication) ||
+            request.Policy.RuntimePermissions.Distinct().Count() != request.Policy.RuntimePermissions.Count)
+            return Failure<TerminalProfileSnapshot>("terminal.runtime_policy_invalid", "Terminal runtime policy is invalid.");
+        var now = UtcNow();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var profile = await ReadProfileAsync(connection, transaction, request.ProfileId.Value, true, cancellationToken).ConfigureAwait(false);
+        if (profile is null || profile.Version != request.ExpectedVersion.Value)
+            return Failure<TerminalProfileSnapshot>(profile is null ? "terminal.profile_not_found" : "terminal.version_conflict",
+                profile is null ? "Terminal profile was not found." : "Terminal profile version changed.");
+        var next = profile with
+        {
+            Experience = (int)request.Policy.Experience,
+            OfflineMode = (int)request.Policy.OfflineMode,
+            EmployeeReauthentication = (int)request.Policy.EmployeeReauthentication,
+            RuntimePermissions = request.Policy.RuntimePermissions.Select(value => value.Value).Order().ToArray(),
+            Version = request.ExpectedVersion.Next().Value,
+            UpdatedAt = now,
+        };
+        await using (var command = new NpgsqlCommand(
+            $"""
+            UPDATE {TerminalMigrations.Schema}.profile
+            SET experience=@experience, offline_mode=@offline, employee_reauthentication=@reauth,
+                runtime_permissions=@permissions, version=@version, updated_at=@now
+            WHERE profile_id=@id;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("id", request.ProfileId.Value);
+            command.Parameters.AddWithValue("experience", checked((short)next.Experience));
+            command.Parameters.AddWithValue("offline", checked((short)next.OfflineMode));
+            command.Parameters.AddWithValue("reauth", checked((short)next.EmployeeReauthentication));
+            command.Parameters.AddWithValue("permissions", next.RuntimePermissions);
+            command.Parameters.AddWithValue("version", checked((long)next.Version));
+            command.Parameters.AddWithValue("now", now);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await WriteAuditAsync(connection, transaction, authorization, null, request.ProfileId.Value,
+            "configure-runtime", next.Version, now, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return Result.Success(next.ToModel());
+    }
+
+    public async Task<Result> SetEmployeePinAsync(
+        AuthorizedMutation authorization, SetTerminalEmployeePin request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (authorization.Permission != TerminalPermissions.Manage)
+            return Failure("terminal.permission_contract", "Fleet management authorization is invalid.");
+        if (pinPolicy is null || request.Pin.Length < pinPolicy.MinimumLength || request.Pin.Length > pinPolicy.MaximumLength ||
+            request.Pin.Any(character => !char.IsAsciiDigit(character)))
+            return Failure("terminal.pin_invalid", "Employee PIN does not satisfy the configured policy.");
+        var now = UtcNow();
+        var salt = RandomNumberGenerator.GetBytes(16);
+        var hash = PinHash(request.Pin, salt, pinPolicy.Iterations);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        if (await ReadProfileAsync(connection, transaction, request.ProfileId.Value, false, cancellationToken).ConfigureAwait(false) is null)
+            return Failure("terminal.profile_not_found", "Terminal profile was not found.");
+        await using (var command = new NpgsqlCommand(
+            $"""
+            INSERT INTO {TerminalMigrations.Schema}.employee_pin
+                (profile_id,person_id,salt,pin_hash,iterations,updated_at)
+            VALUES (@profile,@person,@salt,@hash,@iterations,@now)
+            ON CONFLICT (profile_id,person_id) DO UPDATE
+            SET salt=EXCLUDED.salt,pin_hash=EXCLUDED.pin_hash,iterations=EXCLUDED.iterations,updated_at=EXCLUDED.updated_at;
+            DELETE FROM {TerminalMigrations.Schema}.employee_reauthentication
+            WHERE profile_id=@profile AND person_id=@person;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("profile", request.ProfileId.Value);
+            command.Parameters.AddWithValue("person", request.PersonId.Value);
+            command.Parameters.AddWithValue("salt", salt);
+            command.Parameters.AddWithValue("hash", hash);
+            command.Parameters.AddWithValue("iterations", pinPolicy.Iterations);
+            command.Parameters.AddWithValue("now", now);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await WriteAuditAsync(connection, transaction, authorization, null, request.ProfileId.Value,
+            "set-employee-pin", 1, now, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    public Result<TerminalRuntimeSync> Synchronize(AuthenticatedTerminal context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Profile is null || context.Content is null)
+            return Failure<TerminalRuntimeSync>("terminal.content_not_assigned", "Terminal has no assigned runtime content.");
+        return Result.Success(new TerminalRuntimeSync(
+            context.Terminal.TerminalId, context.DeviceIdentityId, context.Profile.ProfileId,
+            context.Profile.Version, context.Content, context.Profile.RuntimePolicy, UtcNow()));
+    }
+
+    public async Task<Result<TerminalHeartbeat>> HeartbeatAsync(
+        AuthenticatedTerminal context, StateVersion synchronizedProfileVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var accepted = await RecordPresenceAsync(context, cancellationToken).ConfigureAwait(false);
+        return accepted.IsFailure
+            ? Result.Failure<TerminalHeartbeat>(accepted.Error!)
+            : Result.Success(new TerminalHeartbeat(
+                accepted.Value, context.Profile?.Version ?? StateVersion.Initial,
+                context.Profile is null || context.Profile.Version != synchronizedProfileVersion));
+    }
+
+    public async Task<Result<TerminalEmployeeReauthenticationIssue>> ReauthenticateEmployeeAsync(
+        AuthenticatedTerminal context, PersonId personId, string pin,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pin);
+        if (pinPolicy is null || context.Profile is null ||
+            context.Profile.RuntimePolicy.EmployeeReauthentication != TerminalEmployeeReauthentication.Required)
+            return Failure<TerminalEmployeeReauthenticationIssue>(
+                "terminal.reauthentication_not_required", "Employee reauthentication is not enabled for this profile.");
+        var now = UtcNow();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        byte[]? salt = null; byte[]? expected = null; var iterations = 0;
+        await using (var command = new NpgsqlCommand(
+            $"SELECT salt,pin_hash,iterations FROM {TerminalMigrations.Schema}.employee_pin WHERE profile_id=@profile AND person_id=@person;",
+            connection, transaction))
+        {
+            command.Parameters.AddWithValue("profile", context.Profile.ProfileId.Value);
+            command.Parameters.AddWithValue("person", personId.Value);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            { salt = reader.GetFieldValue<byte[]>(0); expected = reader.GetFieldValue<byte[]>(1); iterations = reader.GetInt32(2); }
+        }
+        if (salt is null || !CryptographicOperations.FixedTimeEquals(expected!, PinHash(pin, salt, iterations)))
+            return Failure<TerminalEmployeeReauthenticationIssue>("terminal.pin_invalid", "Employee PIN is invalid.");
+        var token = RandomToken(32);
+        var expires = now.Add(pinPolicy.ReauthenticationLifetime);
+        await using (var command = new NpgsqlCommand(
+            $"""
+            INSERT INTO {TerminalMigrations.Schema}.employee_reauthentication
+                (reauthentication_id,terminal_id,device_identity_id,profile_id,profile_version,
+                 person_id,token_hash,issued_at,expires_at)
+            VALUES (@id,@terminal,@identity,@profile,@version,@person,@hash,@now,@expires);
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("id", Guid.NewGuid());
+            command.Parameters.AddWithValue("terminal", context.Terminal.TerminalId.Value);
+            command.Parameters.AddWithValue("identity", context.DeviceIdentityId.Value);
+            command.Parameters.AddWithValue("profile", context.Profile.ProfileId.Value);
+            command.Parameters.AddWithValue("version", checked((long)context.Profile.Version.Value));
+            command.Parameters.AddWithValue("person", personId.Value);
+            command.Parameters.AddWithValue("hash", Hash(token));
+            command.Parameters.AddWithValue("now", now);
+            command.Parameters.AddWithValue("expires", expires);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return Result.Success(new TerminalEmployeeReauthenticationIssue(personId, token, expires));
+    }
+
+    public async Task<Result<TerminalInteractionAttribution>> AuthorizeInteractionAsync(
+        AuthenticatedTerminal context, Guid interactionId, string action,
+        TerminalEmployeeReauthenticationPresentation? reauthentication,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Profile is null || string.IsNullOrWhiteSpace(action) || action.Length > 100)
+            return Failure<TerminalInteractionAttribution>("terminal.interaction_invalid", "Terminal interaction is invalid.");
+        var now = UtcNow();
+        Guid? personId = null;
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        if (context.Profile.RuntimePolicy.EmployeeReauthentication == TerminalEmployeeReauthentication.Required)
+        {
+            if (reauthentication is null)
+                return Failure<TerminalInteractionAttribution>("terminal.reauthentication_required", "Employee reauthentication is required.");
+            await using var read = new NpgsqlCommand(
+                $"""
+                SELECT person_id FROM {TerminalMigrations.Schema}.employee_reauthentication
+                WHERE token_hash=@hash AND terminal_id=@terminal AND device_identity_id=@identity
+                  AND profile_id=@profile AND profile_version=@version AND expires_at>@now;
+                """, connection, transaction);
+            read.Parameters.AddWithValue("hash", Hash(reauthentication.Token));
+            read.Parameters.AddWithValue("terminal", context.Terminal.TerminalId.Value);
+            read.Parameters.AddWithValue("identity", context.DeviceIdentityId.Value);
+            read.Parameters.AddWithValue("profile", context.Profile.ProfileId.Value);
+            read.Parameters.AddWithValue("version", checked((long)context.Profile.Version.Value));
+            read.Parameters.AddWithValue("now", now);
+            personId = (Guid?)await read.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (personId is null)
+                return Failure<TerminalInteractionAttribution>("terminal.reauthentication_invalid", "Employee reauthentication is invalid or expired.");
+        }
+        await using (var insert = new NpgsqlCommand(
+            $"""
+            INSERT INTO {TerminalMigrations.Schema}.runtime_interaction
+                (interaction_id,terminal_id,device_identity_id,person_id,action,accepted_at)
+            SELECT @interaction,terminal.terminal_id,identity.device_identity_id,@person,@action,@now
+            FROM {TerminalMigrations.Schema}.terminal AS terminal
+            JOIN {TerminalMigrations.Schema}.device_identity AS identity ON identity.terminal_id=terminal.terminal_id
+            WHERE terminal.terminal_id=@terminal AND terminal.state=2
+              AND identity.device_identity_id=@identity AND identity.revoked_at IS NULL AND identity.expires_at>@now;
+            """, connection, transaction))
+        {
+            insert.Parameters.AddWithValue("interaction", interactionId);
+            insert.Parameters.AddWithValue("terminal", context.Terminal.TerminalId.Value);
+            insert.Parameters.AddWithValue("identity", context.DeviceIdentityId.Value);
+            insert.Parameters.Add(new NpgsqlParameter("person", NpgsqlDbType.Uuid) { Value = personId ?? (object)DBNull.Value });
+            insert.Parameters.AddWithValue("action", action.Trim());
+            insert.Parameters.AddWithValue("now", now);
+            if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                return Failure<TerminalInteractionAttribution>("terminal.not_active", "Terminal is no longer active.");
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return Result.Success(new TerminalInteractionAttribution(
+            interactionId, context.Terminal.TerminalId, context.DeviceIdentityId,
+            personId is null ? null : PersonId.From(personId.Value), action.Trim(), now));
+    }
 
     public async Task<Result<TerminalSnapshot>> BlockAsync(
         AuthorizedMutation authorization, ChangeTerminalState request,
@@ -407,14 +640,15 @@ public sealed class TerminalStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, Guid id, bool forUpdate, CancellationToken token)
     {
         await using var command = new NpgsqlCommand(
-            $"SELECT profile_id,name,content_kind,content_id,version,updated_at FROM {TerminalMigrations.Schema}.profile WHERE profile_id=@id{(forUpdate ? " FOR UPDATE" : string.Empty)};",
+            $"SELECT profile_id,name,content_kind,content_id,version,updated_at,experience,offline_mode,employee_reauthentication,runtime_permissions FROM {TerminalMigrations.Schema}.profile WHERE profile_id=@id{(forUpdate ? " FOR UPDATE" : string.Empty)};",
             connection, transaction);
         command.Parameters.AddWithValue("id", id);
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         return await reader.ReadAsync(token).ConfigureAwait(false) ? new ProfileDto(
             reader.GetGuid(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt16(2),
             reader.IsDBNull(3) ? null : reader.GetGuid(3), checked((ulong)reader.GetInt64(4)),
-            reader.GetFieldValue<DateTimeOffset>(5)) : null;
+            reader.GetFieldValue<DateTimeOffset>(5), reader.GetInt16(6), reader.GetInt16(7), reader.GetInt16(8),
+            reader.GetFieldValue<string[]>(9)) : null;
     }
 
     private static async Task<IdentityDto?> ReadIdentityAsync(
@@ -468,6 +702,8 @@ public sealed class TerminalStore
     }
 
     private static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
+    private static byte[] PinHash(string pin, byte[] salt, int iterations) =>
+        Rfc2898DeriveBytes.Pbkdf2(pin, salt, iterations, HashAlgorithmName.SHA256, 32);
     private static string RandomToken(int bytes) => Convert.ToBase64String(RandomNumberGenerator.GetBytes(bytes))
         .TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private static bool TryReadIdentity(string credential, out Guid id)
@@ -479,6 +715,8 @@ public sealed class TerminalStore
 
     private static Result<T> Failure<T>(string code, string message) =>
         Result.Failure<T>(new OperationError(ErrorCode.From(code), message));
+    private static Result Failure(string code, string message) =>
+        Result.Failure(new OperationError(ErrorCode.From(code), message));
 
     private sealed record EnrollmentDto(Guid TerminalId, byte[] ChallengeHash, int State, DateTimeOffset ExpiresAt,
         Guid? ApprovedSessionId, Guid? ApprovedSubjectId);
@@ -493,10 +731,14 @@ public sealed class TerminalStore
             StateVersion.From(Version), LastSeenAt, CreatedAt, UpdatedAt);
     }
     private sealed record ProfileDto(Guid ProfileId, string Name, int? ContentKind, Guid? ContentId,
-        ulong Version, DateTimeOffset UpdatedAt)
+        ulong Version, DateTimeOffset UpdatedAt, int Experience, int OfflineMode,
+        int EmployeeReauthentication, string[] RuntimePermissions)
     {
         public TerminalContentAssignment? Content => ContentKind is null ? null : new((TerminalContentKind)ContentKind, ContentId!.Value);
         public TerminalProfileSnapshot ToModel() => new(TerminalProfileId.From(ProfileId), Name, Content,
+            new TerminalRuntimePolicy((TerminalExperience)Experience, (TerminalOfflineMode)OfflineMode,
+                (TerminalEmployeeReauthentication)EmployeeReauthentication,
+                RuntimePermissions.Select(PermissionCode.From).ToArray()),
             StateVersion.From(Version), UpdatedAt);
     }
 }

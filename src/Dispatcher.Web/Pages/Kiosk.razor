@@ -1,0 +1,52 @@
+@page "/kiosk"
+@layout KioskLayout
+@inject KioskApiClient Api
+
+<PageTitle>Dispatcher Kiosk</PageTitle>
+
+@if (State.Runtime is null)
+{
+    <section aria-live="polite">
+        <h1>Terminal content unavailable</h1>
+        <p>@Status</p>
+    </section>
+}
+else
+{
+    <section data-terminal="@State.Runtime.TerminalId">
+        <h1>@State.Runtime.Dashboard.Name</h1>
+        @foreach (var window in State.Runtime.Dashboard.Windows)
+        {
+            <article>
+                <h2>@window.Title</h2>
+                @foreach (var widget in window.Widgets)
+                {
+                    <div data-widget="@widget.WidgetId">@widget.Title</div>
+                }
+            </article>
+        }
+        @if (!State.Online)
+        {
+            <p role="status">Offline — read-only last synchronized content.</p>
+        }
+    </section>
+}
+
+@code {
+    private readonly KioskRuntimeState State = new();
+    private string Status = "Authenticating terminal…";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            State.Synchronized(await Api.SynchronizeAsync(CancellationToken.None));
+            Status = "Synchronized";
+        }
+        catch
+        {
+            State.Disconnected();
+            Status = "Terminal authorization or assigned content is unavailable.";
+        }
+    }
+}

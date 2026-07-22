@@ -271,6 +271,7 @@
           "Dispatcher.Persistence": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }
       },
@@ -317,6 +318,7 @@
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",
           "Dispatcher.Simulator": "[1.0.0, )",
+          "Dispatcher.Terminals": "[1.0.0, )",
           "Dispatcher.Workspace": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }

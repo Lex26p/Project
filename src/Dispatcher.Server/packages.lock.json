@@ -124,6 +124,16 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.terminals": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.workspace": {
         "type": "Project",
         "dependencies": {

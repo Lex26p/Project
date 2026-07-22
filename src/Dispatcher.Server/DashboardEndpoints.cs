@@ -285,7 +285,7 @@ public static class DashboardEndpoints
         return result.IsSuccess ? Results.NoContent() : Problem(result.Error!);
     }
 
-    private static DashboardManifestPayload ToPayload(DashboardRevision revision) => new(
+    internal static DashboardManifestPayload ToPayload(DashboardRevision revision) => new(
         revision.DashboardId.Value,
         revision.RevisionId.Value,
         revision.RevisionNumber,
