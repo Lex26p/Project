@@ -13,6 +13,7 @@
   <Project Path="src/Dispatcher.Alarm/Dispatcher.Alarm.csproj" />
   <Project Path="src/Dispatcher.Events/Dispatcher.Events.csproj" />
   <Project Path="src/Dispatcher.History/Dispatcher.History.csproj" />
+  <Project Path="src/Dispatcher.Identity/Dispatcher.Identity.csproj" />
   <Project Path="src/Dispatcher.Incidents/Dispatcher.Incidents.csproj" />
   <Project Path="src/Dispatcher.Maintenance/Dispatcher.Maintenance.csproj" />
   <Project Path="src/Dispatcher.Terminals/Dispatcher.Terminals.csproj" />

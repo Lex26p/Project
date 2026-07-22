@@ -47,6 +47,12 @@ public sealed class RequestSessionResolver
 
     public SessionSnapshot? Resolve(HttpContext? context)
     {
+        if (context?.Items.TryGetValue(ProductionSessionMiddleware.SessionItemKey, out var production) == true &&
+            production is SessionSnapshot productionSession)
+        {
+            return productionSession;
+        }
+
         var allowedEnvironment = environment.IsDevelopment() || environment.IsEnvironment("Test");
         if (!options.Enabled || !allowedEnvironment || context is null)
         {

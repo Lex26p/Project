@@ -1,0 +1,39 @@
+@page "/login"
+@inject IdentityApiClient Identity
+@inject IdentitySessionState Session
+@inject NavigationManager Navigation
+
+<PageTitle>Sign in</PageTitle>
+
+<h1>Sign in to Dispatcher</h1>
+<form @onsubmit="SignInAsync" @onsubmit:preventDefault>
+    <p><label>User name <input @bind="userName" autocomplete="username" /></label></p>
+    <p><label>Password <input @bind="password" type="password" autocomplete="current-password" /></label></p>
+    <button type="submit" disabled="@busy">Sign in</button>
+</form>
+@if (invalid) { <p role="alert">The user name or password is invalid.</p> }
+@if (Session.IsAuthenticated)
+{
+    <p>Production session is active.</p>
+    <button type="button" @onclick="RefreshAsync">Refresh session</button>
+    <button type="button" @onclick="SignOutAsync">Sign out</button>
+}
+
+@code {
+    private string userName = string.Empty;
+    private string password = string.Empty;
+    private bool busy;
+    private bool invalid;
+
+    private async Task SignInAsync()
+    {
+        busy = true;
+        invalid = !await Identity.LoginAsync(userName, password);
+        password = string.Empty;
+        busy = false;
+        if (!invalid) Navigation.NavigateTo("/home");
+    }
+
+    private async Task RefreshAsync() => invalid = !await Identity.RefreshAsync();
+    private async Task SignOutAsync() { await Identity.RevokeAsync(); Navigation.NavigateTo("/login"); }
+}

@@ -1,0 +1,144 @@
+@page "/administration/identity"
+@inject IdentityApiClient Identity
+
+<PageTitle>Identity administration</PageTitle>
+
+<h1>Identity administration</h1>
+@if (diagnostic is null)
+{
+    <p role="alert">Identity administration is unavailable or your session has insufficient permission.</p>
+}
+else
+{
+    <section aria-label="Local authentication diagnostic">
+        <h2>Local authentication</h2>
+        <p>@diagnostic.Summary</p>
+        <p>Secret configured: @(diagnostic.SecretConfigured ? "yes" : "no")</p>
+        <p>Checked: @diagnostic.CheckedAt.ToLocalTime()</p>
+    </section>
+
+    <section aria-label="Access scopes">
+        <h2>Create access scope</h2>
+        <input @bind="scopeName" placeholder="Scope name" />
+        <input @bind="parentScopeText" placeholder="Optional parent scope ID" />
+        <button type="button" @onclick="CreateScopeAsync">Create</button>
+    </section>
+
+    <section aria-label="Roles">
+        <h2>Create role</h2>
+        <input @bind="roleName" placeholder="Role name" />
+        <input @bind="permission" placeholder="Exact permission code" />
+        <input @bind="grantScopeText" placeholder="Optional scope ID" />
+        <button type="button" @onclick="CreateRoleAsync">Create</button>
+    </section>
+
+    <section aria-label="Groups">
+        <h2>Create group</h2>
+        <input @bind="groupName" placeholder="Group name" />
+        <button type="button" @onclick="CreateGroupAsync">Create</button>
+    </section>
+
+    <section aria-label="Accounts">
+        <h2>Create local account</h2>
+        <input @bind="accountName" autocomplete="off" placeholder="User name" />
+        <input @bind="accountPassword" type="password" autocomplete="new-password" placeholder="Initial password" />
+        <input @bind="accountScopeText" placeholder="Optional primary scope ID" />
+        <button type="button" @onclick="CreateAccountAsync">Create</button>
+    </section>
+
+    <section aria-label="Group assignments">
+        <h2>Group assignments</h2>
+        <input @bind="assignmentGroupText" placeholder="Group ID" />
+        <input @bind="assignmentRoleText" placeholder="Role ID" />
+        <button type="button" @onclick="AssignRoleAsync">Assign role</button>
+        <input @bind="assignmentAccountText" placeholder="Account ID" />
+        <button type="button" @onclick="AddMemberAsync">Add account</button>
+    </section>
+
+    <section aria-label="Inherited settings">
+        <h2>Inherited setting</h2>
+        <input @bind="settingKey" placeholder="Setting key" />
+        <input @bind="settingValue" placeholder="Value" />
+        <button type="button" @onclick="SetSettingAsync">Save global</button>
+        <input @bind="settingTargetText" placeholder="Scope, group, or account ID" />
+        <button type="button" @onclick='() => SetScopedSettingAsync("scopes")'>Save scope</button>
+        <button type="button" @onclick='() => SetScopedSettingAsync("groups")'>Save group</button>
+        <button type="button" @onclick='() => SetScopedSettingAsync("accounts")'>Save account</button>
+    </section>
+
+    <section aria-label="Effective permission override">
+        <h2>Account permission override</h2>
+        <input @bind="overrideAccountText" placeholder="Account ID" />
+        <input @bind="overridePermission" placeholder="Exact permission code" />
+        <button type="button" @onclick='() => SetOverrideAsync(true)'>Grant</button>
+        <button type="button" @onclick='() => SetOverrideAsync(false)'>Deny</button>
+    </section>
+
+    <section aria-label="Role impact preview">
+        <h2>Replace role permission</h2>
+        <input @bind="impactRoleText" placeholder="Role ID" />
+        <input @bind="impactPermission" placeholder="New exact permission" />
+        <input @bind="impactScopeText" placeholder="Optional scope ID" />
+        <label>Expected version <input @bind="impactVersion" type="number" min="1" /></label>
+        <button type="button" @onclick="PreviewAsync">Preview impact</button>
+        @if (preview is not null)
+        {
+            <p>Affected accounts: @preview.AffectedAccounts; active sessions: @preview.ActiveSessions.</p>
+            <p>Added: @string.Join(", ", preview.Added); removed: @string.Join(", ", preview.Removed).</p>
+            <button type="button" @onclick="ApplyRoleAsync">Apply reviewed change</button>
+        }
+    </section>
+}
+@if (!string.IsNullOrEmpty(message)) { <p role="status">@message</p> }
+
+@code {
+    private IdentityDiagnosticPayload? diagnostic;
+    private string message = string.Empty;
+    private string scopeName = string.Empty, parentScopeText = string.Empty;
+    private string roleName = string.Empty, permission = string.Empty, grantScopeText = string.Empty;
+    private string groupName = string.Empty;
+    private string accountName = string.Empty, accountPassword = string.Empty, accountScopeText = string.Empty;
+    private string assignmentGroupText = string.Empty, assignmentRoleText = string.Empty, assignmentAccountText = string.Empty;
+    private string settingKey = string.Empty, settingValue = string.Empty, settingTargetText = string.Empty;
+    private string overrideAccountText = string.Empty, overridePermission = string.Empty;
+    private string impactRoleText = string.Empty, impactPermission = string.Empty, impactScopeText = string.Empty;
+    private ulong impactVersion = 1;
+    private RoleImpactPayload? preview;
+
+    protected override async Task OnInitializedAsync() => diagnostic = await Identity.ReadDiagnosticAsync();
+    private static Guid? OptionalId(string value) => Guid.TryParse(value, out var id) ? id : null;
+    private async Task ReportAsync(Task<HttpResponseMessage> operation, string success)
+    {
+        var response = await operation;
+        message = response.IsSuccessStatusCode ? success : $"Request rejected ({(int)response.StatusCode}).";
+    }
+    private Task CreateScopeAsync() => ReportAsync(Identity.CreateScopeAsync(Guid.NewGuid(), scopeName, OptionalId(parentScopeText)), "Scope created.");
+    private Task CreateRoleAsync() => ReportAsync(Identity.CreateRoleAsync(Guid.NewGuid(), roleName, new(permission, OptionalId(grantScopeText))), "Role created.");
+    private Task CreateGroupAsync() => ReportAsync(Identity.CreateGroupAsync(Guid.NewGuid(), groupName), "Group created.");
+    private async Task CreateAccountAsync()
+    {
+        await ReportAsync(Identity.CreateAccountAsync(Guid.NewGuid(), Guid.NewGuid(), OptionalId(accountScopeText), accountName, accountPassword), "Account created.");
+        accountPassword = string.Empty;
+    }
+    private Task AssignRoleAsync() => Guid.TryParse(assignmentGroupText, out var group) && Guid.TryParse(assignmentRoleText, out var role)
+        ? ReportAsync(Identity.AssignGroupRoleAsync(group, role), "Role assigned.") : InvalidIdsAsync();
+    private Task AddMemberAsync() => Guid.TryParse(assignmentGroupText, out var group) && Guid.TryParse(assignmentAccountText, out var account)
+        ? ReportAsync(Identity.AddGroupMemberAsync(group, account), "Account added.") : InvalidIdsAsync();
+    private Task SetSettingAsync() => ReportAsync(Identity.SetGlobalSettingAsync(settingKey, settingValue), "Setting saved.");
+    private Task SetScopedSettingAsync(string target) => Guid.TryParse(settingTargetText, out var id)
+        ? ReportAsync(Identity.SetScopedSettingAsync(target, id, settingKey, settingValue), "Override saved.") : InvalidIdsAsync();
+    private Task SetOverrideAsync(bool allowed) => Guid.TryParse(overrideAccountText, out var account)
+        ? ReportAsync(Identity.SetAccountPermissionOverrideAsync(account, overridePermission, allowed), "Permission override saved; account sessions were invalidated.")
+        : InvalidIdsAsync();
+    private async Task PreviewAsync()
+    {
+        preview = Guid.TryParse(impactRoleText, out var role)
+            ? await Identity.PreviewRoleAsync(role, new(impactPermission, OptionalId(impactScopeText)))
+            : null;
+        message = preview is null ? "Impact preview was rejected." : "Review the impact before applying.";
+    }
+    private Task ApplyRoleAsync() => preview is not null && Guid.TryParse(impactRoleText, out var role)
+        ? ReportAsync(Identity.UpdateRoleAsync(role, impactVersion, preview, new(impactPermission, OptionalId(impactScopeText))), "Role updated; affected sessions were invalidated.")
+        : InvalidIdsAsync();
+    private Task InvalidIdsAsync() { message = "Enter valid identifiers."; return Task.CompletedTask; }
+}

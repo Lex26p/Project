@@ -275,6 +275,16 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.platform": {
         "type": "Project",
         "dependencies": {
@@ -314,6 +324,7 @@
           "Dispatcher.Events": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.History": "[1.0.0, )",
+          "Dispatcher.Identity": "[1.0.0, )",
           "Dispatcher.Notifications": "[1.0.0, )",
           "Dispatcher.Platform": "[1.0.0, )",
           "Dispatcher.Semantics": "[1.0.0, )",

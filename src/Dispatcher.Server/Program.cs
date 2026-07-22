@@ -152,9 +152,56 @@ if (terminalsEnabled)
             terminalPinIterations!.Value, terminalPinMinimumLength!.Value, terminalPinMaximumLength!.Value,
             TimeSpan.FromSeconds(terminalReauthenticationSeconds!.Value)));
 }
+var identityRole = builder.Configuration["Dispatcher:Identity:DatabaseRole"];
+var identityPasswordIterations = builder.Configuration.GetValue<int?>("Dispatcher:Identity:PasswordIterations");
+var identityPasswordMinimumLength = builder.Configuration.GetValue<int?>("Dispatcher:Identity:PasswordMinimumLength");
+var identityPasswordMaximumLength = builder.Configuration.GetValue<int?>("Dispatcher:Identity:PasswordMaximumLength");
+var identityMaximumFailedAttempts = builder.Configuration.GetValue<int?>("Dispatcher:Identity:MaximumFailedAttempts");
+var identityLockoutSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Identity:LockoutSeconds");
+var identityAccessSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Identity:AccessLifetimeSeconds");
+var identityRefreshSeconds = builder.Configuration.GetValue<int?>("Dispatcher:Identity:RefreshLifetimeSeconds");
+var identityBootstrapUserName = builder.Configuration["Dispatcher:Identity:Bootstrap:UserName"];
+var identityBootstrapPassword = builder.Configuration["Dispatcher:Identity:Bootstrap:Password"];
+var identityEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) && !string.IsNullOrWhiteSpace(identityRole) &&
+                      identityPasswordIterations > 0 && identityPasswordMinimumLength >= 8 &&
+                      identityPasswordMaximumLength >= identityPasswordMinimumLength && identityMaximumFailedAttempts > 0 &&
+                      identityLockoutSeconds > 0 && identityAccessSeconds > 0 && identityRefreshSeconds > identityAccessSeconds;
+if (identityEnabled)
+{
+    builder.Services.AddIdentityServer(
+        workspaceConnection!, identityRole!,
+        new Dispatcher.Identity.IdentitySecurityPolicy(
+            identityPasswordIterations!.Value, identityPasswordMinimumLength!.Value, identityPasswordMaximumLength!.Value,
+            identityMaximumFailedAttempts!.Value, TimeSpan.FromSeconds(identityLockoutSeconds!.Value),
+            TimeSpan.FromSeconds(identityAccessSeconds!.Value), TimeSpan.FromSeconds(identityRefreshSeconds!.Value)));
+}
 
 var app = builder.Build();
+if (identityEnabled && !string.IsNullOrWhiteSpace(identityBootstrapUserName) &&
+    !string.IsNullOrWhiteSpace(identityBootstrapPassword))
+{
+    var bootstrap = await app.Services.GetRequiredService<Dispatcher.Identity.IdentityStore>()
+        .BootstrapAdministratorAsync(new Dispatcher.Identity.BootstrapLocalAdministrator(
+            Dispatcher.Identity.IdentityAccountId.New(),
+            Dispatcher.Platform.SubjectId.New(),
+            null,
+            Dispatcher.Identity.IdentityRoleId.New(),
+            identityBootstrapUserName,
+            identityBootstrapPassword));
+    if (bootstrap.IsFailure && bootstrap.Error?.Code.Value != "identity.bootstrap_closed")
+    {
+        throw new InvalidOperationException($"Identity bootstrap failed: {bootstrap.Error?.Code.Value}.");
+    }
+}
+if (identityEnabled)
+{
+    app.UseProductionSessionAuthentication();
+}
 app.MapDispatcherServer();
+if (identityEnabled)
+{
+    app.MapIdentityServer();
+}
 if (workspaceEnabled)
 {
     app.MapWorkspaceServer();
