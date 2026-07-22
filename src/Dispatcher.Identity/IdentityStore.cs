@@ -43,7 +43,13 @@ public sealed class IdentityStore
             if ((long)(await count.ExecuteScalarAsync(token).ConfigureAwait(false))! != 0)
                 return Failure<IdentityAccountSnapshot>("identity.bootstrap_closed", "Local account bootstrap is already closed.");
         await InsertRoleAsync(connection, transaction, request.AdministratorRoleId, "Dispatcher Administrators",
-            [new(IdentityPermissions.Administer, null), new(IdentityPermissions.ReadDiagnostics, null)], now, token).ConfigureAwait(false);
+            [
+                new(IdentityPermissions.Administer, null),
+                new(IdentityPermissions.ReadDiagnostics, null),
+                new(PermissionCode.From("administration.health.read"), null),
+                new(PermissionCode.From("administration.data-quality.read"), null),
+                new(PermissionCode.From("administration.audit.read"), null),
+            ], now, token).ConfigureAwait(false);
         var account = new AccountDto(
             request.AccountId.Value, request.SubjectId.Value, request.WorkspaceAccountId?.Value, null,
             request.UserName.Trim(), Normalize(request.UserName), salt,

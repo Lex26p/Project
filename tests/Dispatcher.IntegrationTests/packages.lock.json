@@ -265,6 +265,15 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.administration": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Semantics": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "dispatcher.terminals": {
         "type": "Project",
         "dependencies": {
@@ -317,6 +326,7 @@
       "dispatcher.server": {
         "type": "Project",
         "dependencies": {
+          "Dispatcher.Administration": "[1.0.0, )",
           "Dispatcher.Configuration": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Dashboards": "[1.0.0, )",

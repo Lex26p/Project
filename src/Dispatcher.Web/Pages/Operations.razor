@@ -1,0 +1,95 @@
+@page "/administration/operations"
+@inject OperationsApiClient Api
+
+<PageTitle>Platform operations</PageTitle>
+
+<h1>Platform operations</h1>
+@if (health is null || quality is null)
+{
+    <p role="alert">Operational views are unavailable or your session has insufficient permission.</p>
+}
+else
+{
+    <section aria-label="Platform health">
+        <h2>Health and readiness</h2>
+        <p>Healthy: @health.Healthy; degraded: @health.Degraded; unavailable: @health.Unavailable; unknown: @health.Unknown.</p>
+        <table>
+            <thead><tr><th>Owner</th><th>Facet</th><th>State</th><th>Reason</th><th>Observed</th></tr></thead>
+            <tbody>
+                @foreach (var item in health.Items)
+                {
+                    <tr><td>@item.Owner</td><td>@Facet(item.Facet)</td><td>@HealthState(item.State)</td><td>@item.ReasonCode</td><td>@item.ObservedAt.ToLocalTime()</td></tr>
+                }
+            </tbody>
+        </table>
+    </section>
+
+    <section aria-label="Data quality issues">
+        <h2>Data quality</h2>
+        <p>Warnings: @quality.Warning; critical: @quality.Critical.</p>
+        @if (quality.Issues.Count == 0) { <p>No visible open data-quality issues.</p> }
+        else
+        {
+            <table>
+                <thead><tr><th>Owner</th><th>Severity</th><th>Issue</th><th>Source</th><th>Observed</th></tr></thead>
+                <tbody>
+                    @foreach (var issue in quality.Issues)
+                    {
+                        <tr><td>@issue.Owner</td><td>@Severity(issue.Severity)</td><td>@issue.Summary</td><td>@issue.SourceReference</td><td>@issue.ObservedAt.ToLocalTime()</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section aria-label="Immutable audit journal">
+        <h2>Audit journal</h2>
+        <button type="button" @onclick="LoadAuditTailAsync">Refresh live tail</button>
+        @if (auditGap) { <p role="alert">Audit cursor gap detected. Reloading an authorized snapshot is required.</p> }
+        <table>
+            <thead><tr><th>Time</th><th>Owner</th><th>Action</th><th>Target</th><th>Outcome</th><th>Summary</th></tr></thead>
+            <tbody>
+                @foreach (var record in audit)
+                {
+                    <tr><td>@record.OccurredAt.ToLocalTime()</td><td>@record.Owner</td><td>@record.Action</td><td>@record.TargetKind</td><td>@Outcome(record.Outcome)</td><td>@record.Summary</td></tr>
+                }
+            </tbody>
+        </table>
+    </section>
+}
+
+@code {
+    private OperationalHealthViewPayload? health;
+    private DataQualityViewPayload? quality;
+    private readonly List<AuditRecordPayload> audit = [];
+    private string? auditCursor;
+    private bool auditGap;
+
+    protected override async Task OnInitializedAsync()
+    {
+        health = await Api.ReadHealthAsync();
+        quality = await Api.ReadDataQualityAsync();
+        await LoadAuditTailAsync();
+    }
+
+    private async Task LoadAuditTailAsync()
+    {
+        var page = await Api.ReadAuditAsync(auditCursor);
+        if (page is null) return;
+        auditGap = page.Kind == 2;
+        if (auditGap)
+        {
+            audit.Clear();
+            auditCursor = null;
+            return;
+        }
+        foreach (var record in page.Records)
+            if (audit.All(value => value.EventId != record.EventId)) audit.Add(record);
+        auditCursor = page.Cursor;
+    }
+
+    private static string Facet(int value) => value switch { 1 => "Persistence", 2 => "Recovery", 3 => "Protected continuity", 4 => "Admission", 5 => "Capacity", 6 => "Connectivity", _ => "Unknown" };
+    private static string HealthState(int value) => value switch { 1 => "Healthy", 2 => "Degraded", 3 => "Unavailable", _ => "Unknown" };
+    private static string Severity(int value) => value switch { 3 => "Critical", 2 => "Warning", _ => "Information" };
+    private static string Outcome(int value) => value switch { 1 => "Succeeded", 2 => "Rejected", _ => "Unknown" };
+}

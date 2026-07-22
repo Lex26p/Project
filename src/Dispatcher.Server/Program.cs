@@ -175,6 +175,23 @@ if (identityEnabled)
             identityMaximumFailedAttempts!.Value, TimeSpan.FromSeconds(identityLockoutSeconds!.Value),
             TimeSpan.FromSeconds(identityAccessSeconds!.Value), TimeSpan.FromSeconds(identityRefreshSeconds!.Value)));
 }
+var administrationRole = builder.Configuration["Dispatcher:Administration:DatabaseRole"];
+var administrationMaximumViewItems = builder.Configuration.GetValue<int?>("Dispatcher:Administration:MaximumViewItems");
+var administrationMaximumAuditPageSize = builder.Configuration.GetValue<int?>("Dispatcher:Administration:MaximumAuditPageSize");
+var administrationRetainedAuditTail = builder.Configuration.GetValue<int?>("Dispatcher:Administration:RetainedAuditTail");
+var administrationEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
+                            !string.IsNullOrWhiteSpace(administrationRole) &&
+                            administrationMaximumViewItems > 0 && administrationMaximumAuditPageSize > 0 &&
+                            administrationRetainedAuditTail > 0;
+if (administrationEnabled)
+{
+    builder.Services.AddAdministrationServer(
+        workspaceConnection!, administrationRole!,
+        new Dispatcher.Administration.AdministrationQueryLimits(
+            administrationMaximumViewItems!.Value,
+            administrationMaximumAuditPageSize!.Value,
+            administrationRetainedAuditTail!.Value));
+}
 
 var app = builder.Build();
 if (identityEnabled && !string.IsNullOrWhiteSpace(identityBootstrapUserName) &&
@@ -201,6 +218,10 @@ app.MapDispatcherServer();
 if (identityEnabled)
 {
     app.MapIdentityServer();
+}
+if (administrationEnabled)
+{
+    app.MapAdministrationServer();
 }
 if (workspaceEnabled)
 {

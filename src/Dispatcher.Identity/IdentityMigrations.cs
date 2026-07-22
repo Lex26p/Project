@@ -126,5 +126,23 @@ public static class IdentityMigrations
             target_id uuid NOT NULL,
             changed_at timestamp with time zone NOT NULL
         );
+        """),
+        new MigrationStep(2, "operational administration permissions", $"""
+        INSERT INTO {Schema}.role_permission (role_id,permission_code,scope_id)
+        SELECT role_id, permission_code, NULL
+        FROM {Schema}.role
+        CROSS JOIN (VALUES
+            ('administration.health.read'),
+            ('administration.data-quality.read'),
+            ('administration.audit.read')) AS permission(permission_code)
+        WHERE name='Dispatcher Administrators'
+        ON CONFLICT (role_id,permission_code) DO NOTHING;
+
+        UPDATE {Schema}.account AS account
+        SET authorization_version=authorization_version+1,version=version+1,updated_at=now()
+        WHERE EXISTS (
+            SELECT 1 FROM {Schema}.account_role
+            JOIN {Schema}.role USING (role_id)
+            WHERE account_role.account_id=account.account_id AND role.name='Dispatcher Administrators');
         """)]);
 }

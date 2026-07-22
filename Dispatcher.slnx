@@ -2,6 +2,7 @@
   <Project Path="src/Dispatcher.Semantics/Dispatcher.Semantics.csproj" />
   <Project Path="src/Dispatcher.Persistence/Dispatcher.Persistence.csproj" />
   <Project Path="src/Dispatcher.Platform/Dispatcher.Platform.csproj" />
+  <Project Path="src/Dispatcher.Administration/Dispatcher.Administration.csproj" />
   <Project Path="src/Dispatcher.Core/Dispatcher.Core.csproj" />
   <Project Path="src/Dispatcher.Modbus/Dispatcher.Modbus.csproj" />
   <Project Path="src/Dispatcher.Notifications/Dispatcher.Notifications.csproj" />

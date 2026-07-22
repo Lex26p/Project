@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 22 июля 2026 года
-**Статус программы:** `S35` реализован и проверен на Windows x64; остановлено перед `S36`
+**Статус программы:** `S36` реализован и проверен на Windows x64; остановлено перед `S37`
 
-**Последний завершённый пакет:** `S35` — local production AuthN/session lifecycle, account/role/group/scope/effective-permission administration, last-admin protection, inherited settings/overrides, sanitized integration diagnostics и Web login/administration routes (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S36` — owner-linked platform health/faceted readiness, distinct data-quality issues, immutable permission-filtered audit journal/live tail, explicit cursor gaps, bounded overload и read-only operations Web view (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S36` — platform health, data-quality issues, faceted readiness, immutable audit query/live tail и permission/overload acceptance из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S37` — Simulator-only command security decisions, time-bounded ControlLease, optional step-up, exact prepare/preflight intent и revoke/expiry/stale/quality/blocking races из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
 
-Windows x64 evidence для `S35`: affected Identity/Server/Web projects compiled without warnings/errors; 95 unit + 68 integration tests green. Acceptance проверил hash-only password/access/refresh persistence, generic login denial, durable recovery, refresh/expiry/revoke, backend-only administration, exact role/group/account overrides, inherited settings, impact preview/session invalidation, last-admin protection и sanitized diagnostics на отдельном временном PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S36`: affected Administration/Identity/Server/Web projects compiled without warnings/errors; 95 unit + 69 integration tests green. Acceptance проверил owner-linked health facets, data-quality/Alarm separation, permission filtering before counters/logs, immutable/idempotent audit acceptance, restart/live-tail/gap behavior и bounded view/page overload на отдельном временном PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -104,6 +104,11 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - Identity administration проверяется backend permission `identity.administration.manage`; impact preview предшествует role permission replacement, final effective administrator нельзя отключить либо лишить authority.
 - Identity settings разрешаются account → unambiguous group → nearest scope ancestor → global; local authentication diagnostics раскрывают только sanitized status/summary и `SecretConfigured`, без secret value.
 - Web routes `/login` и `/administration/identity` используют Server AuthN/admin API; Workspace Account/Person остаются отдельными identities.
+- `MOD-ADM` владеет append-only health, data-quality и audit facts; каждый факт сохраняет owner, optional scope и exact required permission, а duplicate identity с иным fingerprint fail closed.
+- Health/readiness facets, data-quality issues и Alarm остаются разными contracts; `Dispatcher.Administration` не зависит от `Dispatcher.Alarm` и не создаёт AlarmOccurrence.
+- Health/data-quality current views фильтруются по effective permissions до подсчётов; hidden scope не влияет на возвращённые rows/counters.
+- Audit journal защищён PostgreSQL triggers от update/delete, возвращает только permission-visible records через opaque cursor и при выходе за bounded retained tail выдаёт explicit gap/resnapshot.
+- Server routes `/api/administration/operations/*` и Web route `/administration/operations` являются read-only; audit mutation endpoint отсутствует.
 - `MOD-TRM` владеет terminal fleet, enrollment, device identity, profile, content assignment и presence; `TerminalId`, `TerminalDeviceIdentityId` и shared `TerminalProfileId` остаются разными identities.
 - Terminal authentication принимает только `Dispatcher-Terminal` authorization header и повторно проверяет durable expiry/revoke/terminal state; query parameter не является identity, blocked/revoked terminal не получает content и не обновляет presence.
 - Terminal profile явно задаёт `Kiosk|Wallboard`, `Blank|ReadOnlyLastSynchronized`, runtime permissions и необходимость employee re-auth; Server выдаёт только assigned Dashboard manifest после повторной device authentication и существующей binding permission-фильтрации.
@@ -197,7 +202,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 ## Provisional
 
 - exact .NET 10 SDK feature-band/patch beyond the repository baseline;
-- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event/Dashboard/Identity owners;
+- module persistence schemas beyond implemented Platform/Personal Workspace/Facility/Equipment/Configuration/Simulator activation/Core runtime/History/Alarm/Event/Dashboard/Identity/Administration owners;
 - production process topology;
 - protocol isolation mechanism;
 - external IdP, enterprise provisioning и arbitrary identity integration adapters;

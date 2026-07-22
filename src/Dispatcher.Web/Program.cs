@@ -9,6 +9,7 @@ builder.RootComponents.Add<HeadOutlet>("head::after");
 builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });
 builder.Services.AddScoped<IdentitySessionState>();
 builder.Services.AddTransient<IdentityApiClient>();
+builder.Services.AddTransient<OperationsApiClient>();
 builder.Services.AddTransient(sp =>
 {
     var navigation = sp.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
