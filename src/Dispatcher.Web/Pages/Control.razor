@@ -1,10 +1,12 @@
 @page "/control"
 @inject ControlApiClient Api
+@inject CommandRealtimeClient Realtime
+@implements IAsyncDisposable
 
 <PageTitle>Simulator control</PageTitle>
 
-<h1>Simulator control preparation</h1>
-<p>This page can acquire a time-bounded lease and prepare an exact Simulator intent. It cannot execute a command.</p>
+<h1>Simulator command control</h1>
+<p>Commands execute only against the Simulator. Physical and protocol effects are unavailable.</p>
 
 <section aria-label="Command target">
     <h2>Target evidence</h2>
@@ -35,7 +37,26 @@
 <section aria-label="Command preflight">
     <h2>Prepare intent</h2>
     <label>Desired value <input @bind="desiredValue" type="number" /></label>
-    <button type="button" disabled="@(leaseId is null || context is null)" @onclick="PrepareAsync">Prepare exact intent (no execution)</button>
+    <button type="button" disabled="@(leaseId is null || context is null)" @onclick="PrepareAsync">Prepare exact intent</button>
+</section>
+
+<section aria-label="Simulator command confirmation">
+    <h2>Confirm and execute</h2>
+    <label><input type="checkbox" @bind="executionConfirmed" /> I confirm the exact target and desired value shown above.</label>
+    <button type="button" disabled="@(intentId is null || !executionConfirmed)" @onclick="ExecuteAsync">Execute on Simulator</button>
+    @if (execution is not null)
+    {
+        <dl>
+            <dt>Execution</dt><dd>@execution.ExecutionId</dd>
+            <dt>State</dt><dd>@execution.State (@execution.Progress%)</dd>
+            <dt>Result</dt><dd>@(execution.ResultValue?.ToString() ?? execution.RejectionCode ?? "pending reconciliation")</dd>
+        </dl>
+        <button type="button" @onclick="PollRealtimeAsync">Refresh realtime state</button>
+        @if (execution.State == "Unknown")
+        {
+            <button type="button" @onclick="ReconcileAsync">Reconcile same execution identity</button>
+        }
+    }
 </section>
 
 @if (!string.IsNullOrEmpty(message)) { <p role="status">@message</p> }
@@ -45,7 +66,11 @@
     private int leaseSeconds = 60;
     private long desiredValue;
     private Guid? leaseId;
+    private Guid? intentId;
     private CommandContextPayload? context;
+    private CommandExecutionPayload? execution;
+    private bool executionConfirmed;
+    private bool realtimeStarted;
     private string message = string.Empty;
 
     private async Task LoadContextAsync()
@@ -68,10 +93,72 @@
     private async Task PrepareAsync()
     {
         if (context is null || leaseId is null) return;
-        var response = await Api.PrepareAsync(Guid.NewGuid(), leaseId.Value, context, desiredValue);
+        var candidate = Guid.NewGuid();
+        var response = await Api.PrepareAsync(candidate, leaseId.Value, context, desiredValue);
+        intentId = response.IsSuccessStatusCode ? candidate : null;
+        execution = null;
+        executionConfirmed = false;
         message = response.IsSuccessStatusCode
-            ? "Intent prepared. No execution capability exists in this sprint."
+            ? "Intent prepared. Confirm the exact Simulator command before execution."
             : $"Preflight rejected ({(int)response.StatusCode}). Reload live evidence before retrying.";
+    }
+
+    private async Task ExecuteAsync()
+    {
+        if (context is null || intentId is null || !executionConfirmed) return;
+        var candidate = Guid.NewGuid();
+        var response = await Api.ExecuteAsync(candidate, intentId.Value, context.ScopeId, context.PointId);
+        execution = await ControlApiClient.ReadExecutionAsync(response);
+        executionConfirmed = false;
+        message = execution is null
+            ? $"Execution rejected ({(int)response.StatusCode})."
+            : execution.State == "Unknown"
+                ? "Outcome is unknown. Reconcile the same execution identity; do not issue a new command."
+                : $"Simulator execution is {execution.State}.";
+        if (execution is not null)
+        {
+            try
+            {
+                var snapshot = await Realtime.StartAsync(context.ScopeId);
+                realtimeStarted = true;
+                execution = snapshot.Executions.SingleOrDefault(value => value.ExecutionId == candidate) ?? execution;
+            }
+            catch (Exception) { realtimeStarted = false; }
+        }
+    }
+
+    private async Task PollRealtimeAsync()
+    {
+        if (execution is null || context is null) return;
+        try
+        {
+            if (!realtimeStarted)
+            {
+                var snapshot = await Realtime.StartAsync(context.ScopeId);
+                realtimeStarted = true;
+                execution = snapshot.Executions.SingleOrDefault(value => value.ExecutionId == execution.ExecutionId) ?? execution;
+                return;
+            }
+            var feed = await Realtime.PollAsync();
+            var latest = feed.Transitions.LastOrDefault(value => value.ExecutionId == execution.ExecutionId);
+            if (latest is not null)
+                execution = execution with
+                {
+                    State = latest.State, Progress = latest.Progress, ResultValue = latest.ResultValue,
+                    RejectionCode = latest.RejectionCode, UpdatedAt = latest.OccurredAt, Version = latest.Version,
+                };
+        }
+        catch (Exception) { realtimeStarted = false; message = "Realtime unavailable; use reconciliation for unknown outcome."; }
+    }
+
+    private async Task ReconcileAsync()
+    {
+        if (execution is null || context is null) return;
+        var response = await Api.ReconcileAsync(execution.ExecutionId, context.ScopeId, context.PointId);
+        execution = await ControlApiClient.ReadExecutionAsync(response) ?? execution;
+        message = execution.State == "Unknown"
+            ? "No durable Simulator result is available yet; outcome remains unknown."
+            : $"Reconciled previous Simulator result: {execution.State}.";
     }
 
     private async Task RevokeAsync()
@@ -79,6 +166,10 @@
         if (leaseId is null) return;
         await Api.RevokeLeaseAsync(leaseId.Value);
         leaseId = null;
+        intentId = null;
+        execution = null;
         message = "Control lease revoked.";
     }
+
+    public async ValueTask DisposeAsync() => await Realtime.DisposeAsync();
 }

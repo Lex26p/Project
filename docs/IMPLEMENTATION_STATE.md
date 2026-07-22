@@ -1,15 +1,15 @@
 # Dispatcher — состояние реализации
 
 **Обновлено:** 22 июля 2026 года
-**Статус программы:** `S37` реализован и проверен на Windows x64; остановлено перед `S38`
+**Статус программы:** `S38` реализован и проверен на Windows x64; остановлено перед условным `S39` на неавторизованном `IG-08`
 
-**Последний завершённый пакет:** `S37` — Simulator-only command security baseline, time-bounded session/subject/scope-bound ControlLease, optional local-password step-up, exact immutable prepare/preflight intent, safety blocking и explicit no-executor boundary (working tree; commit выполняет пользователь)
+**Последний завершённый пакет:** `S38` — Simulator-only CommandExecution lifecycle, durable accepted/progress/succeeded/rejected/unknown transitions, same-identity reconciliation/idempotency, audit/realtime feed и explicit operator confirmation без physical effect (working tree; commit выполняет пользователь)
 
 ## Следующая работа
 
-`S38` — Simulator CommandExecution owner lifecycle: accepted/rejected/progress/unknown/reconcile, stable command identity/idempotency, audit/realtime/Web confirmation и timeout/restart/duplicate/security races из `./DISPATCHER_SPRINT_CATALOG.md`. В текущей работе не начат.
+`S39` — conditional physical command qualification из `./DISPATCHER_SPRINT_CATALOG.md`. Не авторизован и не начат: требуется отдельное явное решение пользователя для `IG-08`, scoped protocol/target и изолированной qualification environment; production enablement при этом останется deny.
 
-Windows x64 evidence для `S37`: affected Command/Identity/Server/Web projects compiled without warnings/errors; 95 unit + 70 integration tests green. Acceptance проверил optional bound step-up, exclusive time-bounded lease, revoke/expiry/session/holder fencing, exact Simulator revision/generation/current/quality/freshness preflight, History deny, versioned safety blocking, immutable/idempotent prepared intent и отсутствие executor/protocol dependency на отдельном временном PostgreSQL cluster; Docker не использовался.
+Windows x64 evidence для `S38`: affected Command/Server/Web projects compiled without warnings/errors; 95 unit + 71 integration tests green. Acceptance проверил accepted/progress/succeeded/rejected transitions, timeout→Unknown без inferred результата, restart/same-identity reconcile по immutable Simulator receipt, new-session и alternate-identity fencing, duplicate effect suppression, audit/realtime permission filtering, explicit Web confirmation и отсутствие protocol/physical dependency на отдельном временном PostgreSQL cluster; Docker не использовался.
 
 Linux x64 build/test/load не выполнялись по прямому указанию пользователя; соответствующее evidence `IG-01` и platform parity `S14` остаются открытыми и не заявляются.
 
@@ -35,7 +35,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 | `IG-04P` Production AuthN | Closed | `ADR-010`; local PBKDF2 accounts, hash-only opaque access/refresh credentials, durable validation/rotation/revoke, authorization-version invalidation и last-admin protection проверены в `S35` |
 | `IG-05` Web/realtime transport | Closed | `ADR-006`; authorized HTTP snapshot и scoped SignalR bootstrap/delta, gap/reconnect/resnapshot, permission invalidation и slow-consumer/render-cadence tests green |
 | `IG-06` Protocol isolation | Closed | Отдельный non-ASP.NET Core/runtime process, exact workload identity, reference-only secret resolution, bounded I/O/parser surface, lifecycle drain/isolation и Simulator parity contract tests green |
-| `IG-07` Command security | Closed | `ADR-011`; Simulator-only lease/step-up/prepare boundary, revoke/expiry/stale/quality/safety races и отсутствие physical executor проверены в `S37` |
+| `IG-07` Command security | Closed | `ADR-011`; Simulator-only lease/step-up/prepare и execution/reconcile boundary, revoke/expiry/stale/quality/safety/timeout/duplicate/session races и отсутствие physical executor проверены в `S37–S38` |
 | `IG-08` Physical write | Not authorized / deny | Только решение пользователя и scoped qualification gates перед `S39`; full `DG-08` и final production enablement не раньше `S43` |
 | `IG-09` Extraction | Not justified / remain in current deployable | Открывать только по evidence и ADR |
 | `IG-10` Production operations | Open | Bounded baseline до operations code в `S41`; final AR-10 consolidation по evidence до `S42` |
@@ -102,6 +102,10 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - `ADR-011` фиксирует Simulator-only command security boundary: `MOD-CMD` владеет lease, safety guard, immutable prepared intent и audit; protocol/physical executor отсутствует, `IG-08` остаётся deny.
 - ControlLease ограничен временем и exact scope, привязан к session/subject и никогда не заменяет повторную проверку prepare/scope/point permissions; optional step-up является короткой single-use in-memory attestation после повторной локальной password verification.
 - Command prepare допускает только Live mode и фиксирует exact active Simulator revision/number/generation/fingerprint, target/config/unit, current position/value/quality/freshness и safety version; stale или blocked evidence отклоняется до создания intent.
+- `MOD-CMD` принимает Simulator execution только после повторной проверки session/permissions/lease/intent/active revision/current/safety и сохраняет durable accepted/in-progress/succeeded/rejected/unknown transitions с отдельной realtime position.
+- Simulator effect представлен только immutable owner-local receipt: desired value вне конфигурационного Simulator range отклоняется, protocol/runtime write API отсутствует, а один prepared intent допускает ровно одну execution identity.
+- Timeout после Simulator receipt commit остаётся `Unknown`; restart и reconcile той же identity/originating session возвращают прежний durable result, новая session либо другой execution ID не могут повторить effect.
+- Server предоставляет execute/reconcile и permission-bound SignalR snapshot/feed, а Web требует явного подтверждения exact prepared target/value и при `Unknown` предлагает только reconcile того же ID.
 - Первый administrator создаётся только один раз из write-only startup configuration; empty-account precondition и PostgreSQL advisory lock закрывают повторный bootstrap.
 - Production requests используют только `Dispatcher-Session` authorization header; test session bridge остаётся только Development/Test path, refresh вращает обе credentials, expiry/revoke/account или role change fail closed.
 - Identity administration проверяется backend permission `identity.administration.manage`; impact preview предшествует role permission replacement, final effective administrator нельзя отключить либо лишить authority.
@@ -210,7 +214,7 @@ Linux x64 build/test/load не выполнялись по прямому ука
 - protocol isolation mechanism;
 - external IdP, enterprise provisioning и arbitrary identity integration adapters;
 - numeric capacity/retention/SLO limits;
-- Simulator command execution и любое physical command enablement;
+- physical command qualification и любое production physical command enablement;
 - native/service extraction.
 
 ## Известные риски

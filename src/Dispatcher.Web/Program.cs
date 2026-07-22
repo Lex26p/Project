@@ -11,6 +11,7 @@ builder.Services.AddScoped<IdentitySessionState>();
 builder.Services.AddTransient<IdentityApiClient>();
 builder.Services.AddTransient<OperationsApiClient>();
 builder.Services.AddTransient<ControlApiClient>();
+builder.Services.AddTransient<CommandRealtimeClient>();
 builder.Services.AddTransient(sp =>
 {
     var navigation = sp.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();

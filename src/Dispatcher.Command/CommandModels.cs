@@ -25,8 +25,19 @@ public readonly record struct CommandIntentId
     public static CommandIntentId From(Guid value) => new(CanonicalId.From<CommandIntentId>(value));
 }
 
+public readonly record struct CommandExecutionId
+{
+    private readonly CanonicalId<CommandExecutionId> value;
+    private CommandExecutionId(CanonicalId<CommandExecutionId> value) => this.value = value;
+    public Guid Value => value.Value;
+    public static CommandExecutionId New() => new(CanonicalId.New<CommandExecutionId>());
+    public static CommandExecutionId From(Guid value) => new(CanonicalId.From<CommandExecutionId>(value));
+}
+
 public enum CommandInteractionMode { Live = 1, History = 2 }
 public enum ControlLeaseState { Active = 1, Revoked = 2, Expired = 3 }
+public enum CommandExecutionState { Accepted = 1, InProgress = 2, Succeeded = 3, Rejected = 4, Unknown = 5 }
+public enum CommandExecutionDisposition { Accepted = 1, Replayed = 2, Reconciled = 3 }
 
 public sealed record CommandSecurityPolicy
 {
@@ -71,10 +82,35 @@ public sealed record PreparedCommandIntent(
     DataQuality Quality, Freshness Freshness, StateVersion SafetyVersion,
     DateTimeOffset PreparedAt, DateTimeOffset ExpiresAt);
 
+public sealed record ExecuteSimulatorCommand(
+    CommandExecutionId ExecutionId, CommandIntentId IntentId,
+    RuntimeScopeId ScopeId, PointId PointId);
+
+public sealed record CommandExecutionSnapshot(
+    CommandExecutionId ExecutionId, CommandIntentId IntentId, ControlLeaseId LeaseId,
+    RuntimeScopeId ScopeId, PointId PointId, SessionId SessionId, SubjectId SubjectId,
+    CommandExecutionState State, byte Progress, long? ResultValue, string? RejectionCode,
+    DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, DateTimeOffset? CompletedAt,
+    StateVersion Version, CommandExecutionDisposition Disposition);
+
+public sealed record CommandExecutionTransition(
+    ulong Position, CommandExecutionId ExecutionId, RuntimeScopeId ScopeId, PointId PointId,
+    CommandExecutionState State, byte Progress, long? ResultValue, string? RejectionCode,
+    DateTimeOffset OccurredAt, StateVersion Version);
+
+public sealed record CommandExecutionFeed(
+    ulong From, ulong To, IReadOnlyList<CommandExecutionTransition> Transitions);
+
+public sealed record CommandExecutionSnapshotPage(
+    ulong Cursor, IReadOnlyList<CommandExecutionSnapshot> Executions);
+
+public sealed record SimulatorCommandCommitHook(Action<CommandExecutionId> AfterCommit);
+
 public static class CommandPermissions
 {
     public static readonly PermissionCode AcquireLease = PermissionCode.From("commands.control.acquire");
     public static readonly PermissionCode Prepare = PermissionCode.From("commands.intent.prepare");
+    public static readonly PermissionCode Execute = PermissionCode.From("commands.execution.execute");
     public static PermissionCode ControlScope(RuntimeScopeId scopeId) =>
         PermissionCode.From($"commands.scope.s{scopeId.Value:N}.control");
     public static PermissionCode ControlPoint(PointId pointId) =>
