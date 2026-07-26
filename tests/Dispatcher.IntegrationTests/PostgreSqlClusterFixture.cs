@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using Dispatcher.DatabaseMigrator;
 using Npgsql;
 using Xunit;
 
@@ -54,8 +55,14 @@ public sealed class PostgreSqlClusterFixture : IAsyncLifetime
 
         await using var connection = new NpgsqlConnection(BuildConnectionString("postgres"));
         await connection.OpenAsync().ConfigureAwait(false);
+        string productionRoleSql = string.Join(
+            " ",
+            MigrationCatalog.Registrations.Select(static registration =>
+                $"CREATE ROLE {QuoteIdentifier(registration.Owner)} NOLOGIN;"));
         await using var command = new NpgsqlCommand(
-            $"CREATE ROLE {QuoteIdentifier(OwnerARole)} NOLOGIN; CREATE ROLE {QuoteIdentifier(OwnerBRole)} NOLOGIN;",
+            $"CREATE ROLE {QuoteIdentifier(OwnerARole)} NOLOGIN; " +
+            $"CREATE ROLE {QuoteIdentifier(OwnerBRole)} NOLOGIN; " +
+            productionRoleSql,
             connection);
         await command.ExecuteNonQueryAsync().ConfigureAwait(false);
     }

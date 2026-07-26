@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\src\Dispatcher.Administration\Dispatcher.Administration.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Alarm\Dispatcher.Alarm.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Dashboards\Dispatcher.Dashboards.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.DatabaseMigrator\Dispatcher.DatabaseMigrator.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Events\Dispatcher.Events.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Platform\Dispatcher.Platform.csproj" />

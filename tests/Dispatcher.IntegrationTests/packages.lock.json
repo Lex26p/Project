@@ -185,6 +185,31 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "dispatcher.databasemigrator": {
+        "type": "Project",
+        "dependencies": {
+          "Dispatcher.Administration": "[1.0.0, )",
+          "Dispatcher.Alarm": "[1.0.0, )",
+          "Dispatcher.Command": "[1.0.0, )",
+          "Dispatcher.Configuration": "[1.0.0, )",
+          "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Dashboards": "[1.0.0, )",
+          "Dispatcher.Equipment": "[1.0.0, )",
+          "Dispatcher.Events": "[1.0.0, )",
+          "Dispatcher.Facilities": "[1.0.0, )",
+          "Dispatcher.History": "[1.0.0, )",
+          "Dispatcher.Identity": "[1.0.0, )",
+          "Dispatcher.Incidents": "[1.0.0, )",
+          "Dispatcher.Maintenance": "[1.0.0, )",
+          "Dispatcher.MyWork": "[1.0.0, )",
+          "Dispatcher.Notifications": "[1.0.0, )",
+          "Dispatcher.Persistence": "[1.0.0, )",
+          "Dispatcher.Platform": "[1.0.0, )",
+          "Dispatcher.Simulator": "[1.0.0, )",
+          "Dispatcher.Terminals": "[1.0.0, )",
+          "Dispatcher.Workspace": "[1.0.0, )"
+        }
+      },
       "dispatcher.equipment": {
         "type": "Project",
         "dependencies": {
