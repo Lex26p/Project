@@ -32,8 +32,10 @@
     <ProjectReference Include="..\..\src\Dispatcher.Maintenance\Dispatcher.Maintenance.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Terminals\Dispatcher.Terminals.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.MyWork\Dispatcher.MyWork.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.RuntimeHost\Dispatcher.RuntimeHost.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Server\Dispatcher.Server.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
+    <ProjectReference Include="..\..\src\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Web\Dispatcher.Web.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
     <ProjectReference Include="..\..\src\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
