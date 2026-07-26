@@ -71,5 +71,17 @@ public static class CoreRuntimeMigrations
                     BEFORE UPDATE ON {Schema}.source_obligation
                     FOR EACH ROW EXECUTE FUNCTION {Schema}.protect_source_obligation();
                 """),
+            new MigrationStep(
+                2,
+                "durable source session generation allocation",
+                $"""
+                CREATE TABLE {Schema}.source_session_generation (
+                    scope_id uuid NOT NULL REFERENCES {Schema}.scope_state(scope_id),
+                    source_id uuid NOT NULL,
+                    last_generation bigint NOT NULL CHECK (last_generation > 0),
+                    allocated_at timestamp with time zone NOT NULL,
+                    PRIMARY KEY (scope_id, source_id)
+                );
+                """),
         ]);
 }
