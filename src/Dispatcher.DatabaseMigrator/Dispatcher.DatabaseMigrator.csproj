@@ -3,4 +3,26 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Dispatcher.Administration\Dispatcher.Administration.csproj" />
+    <ProjectReference Include="..\Dispatcher.Alarm\Dispatcher.Alarm.csproj" />
+    <ProjectReference Include="..\Dispatcher.Command\Dispatcher.Command.csproj" />
+    <ProjectReference Include="..\Dispatcher.Configuration\Dispatcher.Configuration.csproj" />
+    <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\Dispatcher.Dashboards\Dispatcher.Dashboards.csproj" />
+    <ProjectReference Include="..\Dispatcher.Equipment\Dispatcher.Equipment.csproj" />
+    <ProjectReference Include="..\Dispatcher.Events\Dispatcher.Events.csproj" />
+    <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
+    <ProjectReference Include="..\Dispatcher.History\Dispatcher.History.csproj" />
+    <ProjectReference Include="..\Dispatcher.Identity\Dispatcher.Identity.csproj" />
+    <ProjectReference Include="..\Dispatcher.Incidents\Dispatcher.Incidents.csproj" />
+    <ProjectReference Include="..\Dispatcher.Maintenance\Dispatcher.Maintenance.csproj" />
+    <ProjectReference Include="..\Dispatcher.MyWork\Dispatcher.MyWork.csproj" />
+    <ProjectReference Include="..\Dispatcher.Notifications\Dispatcher.Notifications.csproj" />
+    <ProjectReference Include="..\Dispatcher.Persistence\Dispatcher.Persistence.csproj" />
+    <ProjectReference Include="..\Dispatcher.Platform\Dispatcher.Platform.csproj" />
+    <ProjectReference Include="..\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
+    <ProjectReference Include="..\Dispatcher.Terminals\Dispatcher.Terminals.csproj" />
+    <ProjectReference Include="..\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
+  </ItemGroup>
 </Project>

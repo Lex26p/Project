@@ -24,13 +24,13 @@ public static class DatabaseMigratorApplication
 
         if (arguments.Count == 1 && IsHelpArgument(arguments[0]))
         {
-            await standardOutput.WriteLineAsync(
-                "Dispatcher.DatabaseMigrator\n\n" +
-                "Usage:\n" +
-                "  Dispatcher.DatabaseMigrator\n\n" +
-                "The executable project is installed. Migration execution will be enabled in a later C01 step.")
-                .ConfigureAwait(false);
+            await WriteHelpAsync(standardOutput).ConfigureAwait(false);
+            return SuccessExitCode;
+        }
 
+        if (arguments.Count == 1 && string.Equals(arguments[0], "--list-plans", StringComparison.Ordinal))
+        {
+            await WritePlanCatalogAsync(standardOutput).ConfigureAwait(false);
             return SuccessExitCode;
         }
 
@@ -48,6 +48,30 @@ public static class DatabaseMigratorApplication
             .ConfigureAwait(false);
 
         return InvalidInvocationExitCode;
+    }
+
+    private static Task WriteHelpAsync(TextWriter standardOutput) => standardOutput.WriteLineAsync(
+        "Dispatcher.DatabaseMigrator\n\n" +
+        "Usage:\n" +
+        "  Dispatcher.DatabaseMigrator\n" +
+        "  Dispatcher.DatabaseMigrator --list-plans\n\n" +
+        "Options:\n" +
+        "  --list-plans  Validate and print the fixed production migration catalog.\n\n" +
+        "Migration execution will be enabled in a later C01 step.");
+
+    private static async Task WritePlanCatalogAsync(TextWriter standardOutput)
+    {
+        IReadOnlyList<MigrationPlanRegistration> registrations = MigrationCatalog.Registrations;
+        await standardOutput.WriteLineAsync(
+            $"Production migration catalog: {registrations.Count} plans.").ConfigureAwait(false);
+
+        for (var index = 0; index < registrations.Count; index++)
+        {
+            MigrationPlanRegistration registration = registrations[index];
+            await standardOutput.WriteLineAsync(
+                $"{index + 1}. owner={registration.Owner}; schema={registration.Schema}")
+                .ConfigureAwait(false);
+        }
     }
 
     private static bool IsHelpArgument(string argument) =>
