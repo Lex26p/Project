@@ -12,8 +12,8 @@
 | ID | Статус | Примечание |
 |---|---|---|
 | C01 | Complete | Production DatabaseMigrator реализован и принят |
-| C02 | Ready | Prerequisite C01 выполнен |
-| C03 | Planned | После C02 |
+| C02 | Complete | Production RuntimeHost и Simulator polling реализованы и приняты |
+| C03 | Ready | Prerequisite C02 выполнен |
 | C04 | Planned | После C03 |
 | C05 | Planned | После C03 |
 | C06 | Planned | После C05 |
