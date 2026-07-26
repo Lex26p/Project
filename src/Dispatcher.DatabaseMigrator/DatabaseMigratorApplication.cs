@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 namespace Dispatcher.DatabaseMigrator;
 
 public static class DatabaseMigratorApplication
@@ -15,7 +17,6 @@ public static class DatabaseMigratorApplication
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(standardOutput);
         ArgumentNullException.ThrowIfNull(standardError);
-
         if (cancellationToken.IsCancellationRequested)
         {
             await standardError.WriteLineAsync("Database migration was canceled.").ConfigureAwait(false);
@@ -27,11 +28,14 @@ public static class DatabaseMigratorApplication
             await WriteHelpAsync(standardOutput).ConfigureAwait(false);
             return SuccessExitCode;
         }
-
         if (arguments.Count == 1 && string.Equals(arguments[0], "--list-plans", StringComparison.Ordinal))
         {
             await WritePlanCatalogAsync(standardOutput).ConfigureAwait(false);
             return SuccessExitCode;
+        }
+        if (arguments.Count == 1 && string.Equals(arguments[0], "--validate-config", StringComparison.Ordinal))
+        {
+            return await ValidateConfigurationAsync(standardOutput, standardError).ConfigureAwait(false);
         }
 
         if (arguments.Count > 0)
@@ -39,7 +43,6 @@ public static class DatabaseMigratorApplication
             await standardError.WriteLineAsync(
                 "Unsupported command-line arguments. Use --help to display usage.")
                 .ConfigureAwait(false);
-
             return InvalidInvocationExitCode;
         }
 
@@ -54,17 +57,21 @@ public static class DatabaseMigratorApplication
         "Dispatcher.DatabaseMigrator\n\n" +
         "Usage:\n" +
         "  Dispatcher.DatabaseMigrator\n" +
-        "  Dispatcher.DatabaseMigrator --list-plans\n\n" +
+        "  Dispatcher.DatabaseMigrator --list-plans\n" +
+        "  Dispatcher.DatabaseMigrator --validate-config\n\n" +
         "Options:\n" +
-        "  --list-plans  Validate and print the fixed production migration catalog.\n\n" +
+        "  --list-plans       Validate and print the fixed production migration catalog.\n" +
+        "  --validate-config  Validate environment configuration without connecting to PostgreSQL.\n\n" +
+        "Configuration names:\n" +
+        $"  {MigrationEnvironmentVariables.ConnectionString}\n" +
+        $"  {MigrationEnvironmentVariables.RolePrefix}<owner>\n\n" +
         "Migration execution will be enabled in a later C01 step.");
 
     private static async Task WritePlanCatalogAsync(TextWriter standardOutput)
     {
-        IReadOnlyList<MigrationPlanRegistration> registrations = MigrationCatalog.Registrations;
+        ReadOnlyCollection<MigrationPlanRegistration> registrations = MigrationCatalog.Registrations;
         await standardOutput.WriteLineAsync(
             $"Production migration catalog: {registrations.Count} plans.").ConfigureAwait(false);
-
         for (var index = 0; index < registrations.Count; index++)
         {
             MigrationPlanRegistration registration = registrations[index];
@@ -72,6 +79,34 @@ public static class DatabaseMigratorApplication
                 $"{index + 1}. owner={registration.Owner}; schema={registration.Schema}")
                 .ConfigureAwait(false);
         }
+    }
+
+    private static async Task<int> ValidateConfigurationAsync(
+        TextWriter standardOutput,
+        TextWriter standardError)
+    {
+        Dictionary<string, string?> environmentVariables = MigrationEnvironmentReader.ReadCurrentProcess();
+        MigrationConfigurationValidationResult result = MigrationConfigurationParser.Parse(
+            environmentVariables,
+            MigrationCatalog.Registrations);
+
+        if (!result.IsValid)
+        {
+            await standardError.WriteLineAsync("Migration configuration is invalid:").ConfigureAwait(false);
+            foreach (string error in result.Errors)
+            {
+                await standardError.WriteLineAsync($"- {error}").ConfigureAwait(false);
+            }
+
+            return InvalidInvocationExitCode;
+        }
+
+        MigrationConfiguration configuration = result.Configuration!;
+        await standardOutput.WriteLineAsync("Migration configuration is valid.").ConfigureAwait(false);
+        await standardOutput.WriteLineAsync("Connection string: configured (value hidden).").ConfigureAwait(false);
+        await standardOutput.WriteLineAsync(
+            $"PostgreSQL role mappings: {configuration.DatabaseRolesByOwner.Count}.").ConfigureAwait(false);
+        return SuccessExitCode;
     }
 
     private static bool IsHelpArgument(string argument) =>

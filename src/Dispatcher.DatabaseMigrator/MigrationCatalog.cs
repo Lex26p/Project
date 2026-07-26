@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-
 using Dispatcher.Administration;
 using Dispatcher.Alarm;
 using Dispatcher.Command;
@@ -19,7 +18,6 @@ using Dispatcher.Platform;
 using Dispatcher.Simulator;
 using Dispatcher.Terminals;
 using Dispatcher.Workspace;
-
 namespace Dispatcher.DatabaseMigrator;
 
 public static class MigrationCatalog
@@ -31,7 +29,7 @@ public static class MigrationCatalog
     private static readonly ReadOnlyCollection<MigrationPlanRegistration> OrderedRegistrations =
         CreateRegistrations();
 
-    public static IReadOnlyList<MigrationPlanRegistration> Registrations => OrderedRegistrations;
+    public static ReadOnlyCollection<MigrationPlanRegistration> Registrations => OrderedRegistrations;
 
     private static ReadOnlyCollection<MigrationPlanRegistration> CreateRegistrations()
     {
@@ -57,7 +55,6 @@ public static class MigrationCatalog
             new(TerminalMigrations.Owner, TerminalMigrations.Schema, TerminalMigrations.CreatePlan),
             new(WorkspaceMigrations.Owner, WorkspaceMigrations.Schema, WorkspaceMigrations.CreatePlan),
         ];
-
         Validate(registrations);
         return Array.AsReadOnly(registrations);
     }
@@ -69,10 +66,8 @@ public static class MigrationCatalog
             throw new InvalidOperationException(
                 $"The production migration catalog must contain exactly {ExpectedPlanCount} plans.");
         }
-
         ValidateUnique(registrations.Select(static registration => registration.Owner), "owner");
         ValidateUnique(registrations.Select(static registration => registration.Schema), "schema");
-
         foreach (MigrationPlanRegistration registration in registrations)
         {
             var plan = registration.CreatePlan(ValidationRole);
@@ -84,7 +79,6 @@ public static class MigrationCatalog
             }
         }
     }
-
     private static void ValidateUnique(IEnumerable<string> values, string valueKind)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
