@@ -26,6 +26,16 @@ public sealed class RuntimeProcess
         return protocolActivated.IsSuccess ? core.ActivateBinding(binding) : protocolActivated;
     }
 
+    public Result ActivateSimulatorBinding(SourceBinding binding) => core.ActivateBinding(binding);
+
+    public Task<Result<RuntimeIngressResult>> EnqueueAsync(
+        RuntimeCut cut,
+        CancellationToken cancellationToken = default) =>
+        core.EnqueueAsync(cut, cancellationToken);
+
+    public Task<Result<bool>> ProcessNextAsync(CancellationToken cancellationToken = default) =>
+        core.ProcessNextAsync(cancellationToken);
+
     public async Task<Result<RuntimeIngressResult>> AcquireAsync(
         ProtocolSourceRequest request,
         CancellationToken cancellationToken = default)
