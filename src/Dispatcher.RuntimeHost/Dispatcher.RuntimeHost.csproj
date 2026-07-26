@@ -8,9 +8,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
+    <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
     <ProjectReference Include="..\Dispatcher.Modbus\Dispatcher.Modbus.csproj" />
     <ProjectReference Include="..\Dispatcher.Protocols\Dispatcher.Protocols.csproj" />
     <ProjectReference Include="..\Dispatcher.ProtocolCommissioning\Dispatcher.ProtocolCommissioning.csproj" />
+    <ProjectReference Include="..\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
     <ProjectReference Include="..\Dispatcher.Snmp\Dispatcher.Snmp.csproj" />
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
   </ItemGroup>
