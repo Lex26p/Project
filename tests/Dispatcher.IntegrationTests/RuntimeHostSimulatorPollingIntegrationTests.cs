@@ -170,9 +170,10 @@ public sealed class RuntimeHostSimulatorPollingIntegrationTests
 
         workerCancellation.Cancel();
         var cycle = await workerTask.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(cycle.IsSuccess);
+        Assert.True(cycle.IsSuccess, cycle.Error?.Code.Value);
         Assert.Equal(RuntimeHostSessionCycleStatus.WorkerStopped, cycle.Value.Status);
-        Assert.True((await session.StopAsync(CancellationToken.None)).IsSuccess);
+        var stopped = await session.StopAsync(CancellationToken.None);
+        Assert.True(stopped.IsSuccess, $"Runtime session stop failed: {stopped.Error?.Code.Value}");
         return checkpoint;
     }
 

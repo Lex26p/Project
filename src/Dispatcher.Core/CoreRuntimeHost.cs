@@ -33,6 +33,25 @@ public sealed record RuntimeIngressResult(
     RuntimeIngressStatus Status,
     RuntimeSourceObligation? GapObligation);
 
+public enum RuntimeProcessNextStatus
+{
+    Idle = 1,
+    Published = 2,
+}
+
+public sealed record RuntimeProcessNextResult(
+    RuntimeProcessNextStatus Status,
+    RuntimeSourceObligation? Obligation,
+    RuntimePublicationCommit? Publication)
+{
+    public bool Processed => Status == RuntimeProcessNextStatus.Published;
+
+    public static RuntimeProcessNextResult Idle { get; } = new(
+        RuntimeProcessNextStatus.Idle,
+        null,
+        null);
+}
+
 public sealed record RuntimeReadiness(
     RuntimeHostState State,
     bool PersistenceAvailable,
@@ -55,8 +74,10 @@ public sealed class RuntimeObligationCommitHook
 {
     private readonly Func<RuntimeSourceObligation, CancellationToken, Task> callback;
 
-    public RuntimeObligationCommitHook(Func<RuntimeSourceObligation, CancellationToken, Task> callback)
+    public RuntimeObligationCommitHook(
+        Func<RuntimeSourceObligation, CancellationToken, Task> callback)
     {
+        ArgumentNullException.ThrowIfNull(callback);
         this.callback = callback;
     }
 
@@ -66,13 +87,69 @@ public sealed class RuntimeObligationCommitHook
         callback(obligation, cancellationToken);
 }
 
+public sealed class RuntimeDeliveryProcessor
+{
+    private readonly Func<RuntimeProcessingDelivery, CancellationToken, Task<Result>> callback;
+
+    public RuntimeDeliveryProcessor(
+        Func<RuntimeProcessingDelivery, CancellationToken, Task<Result>> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        this.callback = callback;
+    }
+
+    public static RuntimeDeliveryProcessor NoOp { get; } = new(
+        static (_, _) => Task.FromResult(Result.Success()));
+
+    public Task<Result> ProcessAsync(
+        RuntimeProcessingDelivery delivery,
+        CancellationToken cancellationToken) =>
+        callback(delivery, cancellationToken);
+}
+
+public enum RuntimeDeliveryCommitPoint
+{
+    PendingDeliveryPersisted = 1,
+    DownstreamCompleted = 2,
+    Published = 3,
+}
+
+public sealed class RuntimeDeliveryCommitHook
+{
+    private readonly Func<
+        RuntimeDeliveryCommitPoint,
+        RuntimeSourceObligation,
+        CancellationToken,
+        Task> callback;
+
+    public RuntimeDeliveryCommitHook(
+        Func<
+            RuntimeDeliveryCommitPoint,
+            RuntimeSourceObligation,
+            CancellationToken,
+            Task> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        this.callback = callback;
+    }
+
+    public Task AfterCommittedAsync(
+        RuntimeDeliveryCommitPoint commitPoint,
+        RuntimeSourceObligation obligation,
+        CancellationToken cancellationToken) =>
+        callback(commitPoint, obligation, cancellationToken);
+}
+
 public sealed class CoreRuntimeHost : IDisposable
 {
+    private const string ContinuityLostReason = "runtime.protected_continuity_lost";
     private readonly RuntimeScopeId scopeId;
     private readonly CoreRuntime runtime;
     private readonly CoreRuntimeStore store;
     private readonly RuntimeIngressLimits limits;
     private readonly RuntimeObligationCommitHook? commitHook;
+    private readonly RuntimeDeliveryProcessor deliveryProcessor;
+    private readonly RuntimeDeliveryCommitHook? deliveryCommitHook;
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly Queue<RuntimeSourceObligation> queue = [];
     private RuntimeHostState state = RuntimeHostState.Created;
@@ -80,7 +157,6 @@ public sealed class CoreRuntimeHost : IDisposable
     private bool recoveryComplete;
     private bool protectedContinuity = true;
     private bool admissionOpen;
-    private ulong checkpointPosition;
     private RuntimeSourceObligation? pendingGap;
 
     public CoreRuntimeHost(
@@ -88,7 +164,9 @@ public sealed class CoreRuntimeHost : IDisposable
         CoreRuntime runtime,
         CoreRuntimeStore store,
         RuntimeIngressLimits limits,
-        RuntimeObligationCommitHook? commitHook = null)
+        RuntimeObligationCommitHook? commitHook = null,
+        RuntimeDeliveryProcessor? deliveryProcessor = null,
+        RuntimeDeliveryCommitHook? deliveryCommitHook = null)
     {
         _ = scopeId.Value;
         ArgumentNullException.ThrowIfNull(runtime);
@@ -99,6 +177,8 @@ public sealed class CoreRuntimeHost : IDisposable
         this.store = store;
         this.limits = limits;
         this.commitHook = commitHook;
+        this.deliveryProcessor = deliveryProcessor ?? RuntimeDeliveryProcessor.NoOp;
+        this.deliveryCommitHook = deliveryCommitHook;
     }
 
     public async Task<Result> StartAsync(CancellationToken cancellationToken = default)
@@ -108,17 +188,67 @@ public sealed class CoreRuntimeHost : IDisposable
         {
             if (state != RuntimeHostState.Created)
             {
-                return Failure("runtime.lifecycle_state", "Runtime host cannot start from its current state.");
+                return Failure(
+                    "runtime.lifecycle_state",
+                    "Runtime host cannot start from its current state.");
             }
 
             state = RuntimeHostState.Recovering;
             admissionOpen = false;
             recoveryComplete = false;
-            RuntimeRecoveryState recovery;
             try
             {
-                recovery = await store.LoadRecoveryAsync(scopeId, cancellationToken).ConfigureAwait(false);
+                var recovery = await store.LoadRecoveryAsync(
+                    scopeId,
+                    cancellationToken).ConfigureAwait(false);
                 persistenceAvailable = true;
+
+                if (recovery.Checkpoint is not null)
+                {
+                    var restored = runtime.Restore(recovery.Checkpoint);
+                    if (restored.IsFailure)
+                    {
+                        return Fault(restored);
+                    }
+                }
+
+                protectedContinuity = recovery.ProtectedContinuity;
+
+                var pendingDelivery = await store.LoadPendingDeliveryAsync(
+                    scopeId,
+                    cancellationToken).ConfigureAwait(false);
+                if (pendingDelivery is not null)
+                {
+                    var completed = await CompleteDeliveryAsync(
+                        pendingDelivery,
+                        cancellationToken).ConfigureAwait(false);
+                    if (completed.IsFailure)
+                    {
+                        return Fault(Result.Failure(completed.Error!));
+                    }
+                }
+
+                foreach (var obligation in recovery.PendingObligations)
+                {
+                    var activated = runtime.ActivateBinding(obligation.Binding);
+                    if (activated.IsFailure)
+                    {
+                        return Fault(activated);
+                    }
+
+                    var processed = await ApplyPersistAndPublishAsync(
+                        obligation,
+                        cancellationToken).ConfigureAwait(false);
+                    if (processed.IsFailure)
+                    {
+                        return Fault(Result.Failure(processed.Error!));
+                    }
+                }
+
+                recoveryComplete = true;
+                admissionOpen = true;
+                state = RuntimeHostState.Running;
+                return Result.Success();
             }
             catch
             {
@@ -126,65 +256,6 @@ public sealed class CoreRuntimeHost : IDisposable
                 state = RuntimeHostState.Faulted;
                 throw;
             }
-
-            if (recovery.Checkpoint is not null)
-            {
-                var restored = runtime.Restore(recovery.Checkpoint);
-                if (restored.IsFailure)
-                {
-                    state = RuntimeHostState.Faulted;
-                    return restored;
-                }
-            }
-
-            checkpointPosition = recovery.CheckpointObligationPosition;
-            protectedContinuity = recovery.ProtectedContinuity;
-            foreach (var obligation in recovery.PendingObligations)
-            {
-                var activated = runtime.ActivateBinding(obligation.Binding);
-                if (activated.IsFailure)
-                {
-                    state = RuntimeHostState.Faulted;
-                    return activated;
-                }
-
-                var replayed = obligation.FactClass == RuntimeFactClass.SourceCut
-                    ? runtime.Apply(obligation.Cut!).IsSuccess
-                        ? Result.Success()
-                        : Failure("runtime.replay_failed", "A protected RuntimeCut could not be replayed.")
-                    : runtime.ApplyGap(obligation.Gap!);
-                if (replayed.IsFailure)
-                {
-                    state = RuntimeHostState.Faulted;
-                    return replayed;
-                }
-
-                if (obligation.FactClass == RuntimeFactClass.SourceGap)
-                {
-                    protectedContinuity = false;
-                }
-
-                checkpointPosition = obligation.Position.Value;
-            }
-
-            if (recovery.PendingObligations.Count > 0)
-            {
-                var checkpointed = await store.SaveCheckpointAsync(
-                    runtime.CaptureCheckpoint(),
-                    checkpointPosition,
-                    protectedContinuity,
-                    cancellationToken).ConfigureAwait(false);
-                if (checkpointed.IsFailure)
-                {
-                    state = RuntimeHostState.Faulted;
-                    return checkpointed;
-                }
-            }
-
-            recoveryComplete = true;
-            admissionOpen = true;
-            state = RuntimeHostState.Running;
-            return Result.Success();
         }
         finally
         {
@@ -199,7 +270,9 @@ public sealed class CoreRuntimeHost : IDisposable
         {
             if (state != RuntimeHostState.Running || !admissionOpen)
             {
-                return Failure("runtime.not_accepting", "Runtime host is not accepting source bindings.");
+                return Failure(
+                    "runtime.not_accepting",
+                    "Runtime host is not accepting source bindings.");
             }
 
             return runtime.ActivateBinding(binding);
@@ -227,19 +300,27 @@ public sealed class CoreRuntimeHost : IDisposable
 
             if (cut.Binding.ScopeId != scopeId)
             {
-                return Failure<RuntimeIngressResult>("runtime.scope_mismatch", "RuntimeCut belongs to another host scope.");
+                return Failure<RuntimeIngressResult>(
+                    "runtime.scope_mismatch",
+                    "RuntimeCut belongs to another host scope.");
             }
 
             if (queue.Count < limits.Capacity)
             {
-                var obligation = await store.AppendCutAsync(cut, cancellationToken).ConfigureAwait(false);
+                var obligation = await store.AppendCutAsync(
+                    cut,
+                    cancellationToken).ConfigureAwait(false);
                 if (commitHook is not null)
                 {
-                    await commitHook.AfterPersistedAsync(obligation, cancellationToken).ConfigureAwait(false);
+                    await commitHook.AfterPersistedAsync(
+                        obligation,
+                        cancellationToken).ConfigureAwait(false);
                 }
 
                 queue.Enqueue(obligation);
-                return Result.Success(new RuntimeIngressResult(RuntimeIngressStatus.Queued, null));
+                return Result.Success(new RuntimeIngressResult(
+                    RuntimeIngressStatus.Queued,
+                    null));
             }
 
             if (cut.Observations.Count == 0)
@@ -249,23 +330,31 @@ public sealed class CoreRuntimeHost : IDisposable
                     "An empty RuntimeCut could not be admitted because bounded ingress is full.");
             }
 
-            var positions = cut.Observations.Select(item => item.SourcePosition.Value).ToArray();
+            var positions = cut.Observations
+                .Select(item => item.SourcePosition.Value)
+                .ToArray();
             var gap = new RuntimeSourceGap(
                 cut.Binding,
                 cut.ScheduleSequence,
                 positions.Min(),
                 positions.Max(),
                 "bounded_ingress_capacity");
-            var gapObligation = await store.AppendGapAsync(gap, cancellationToken).ConfigureAwait(false);
+            var gapObligation = await store.AppendGapAsync(
+                gap,
+                cancellationToken).ConfigureAwait(false);
             if (commitHook is not null)
             {
-                await commitHook.AfterPersistedAsync(gapObligation, cancellationToken).ConfigureAwait(false);
+                await commitHook.AfterPersistedAsync(
+                    gapObligation,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             protectedContinuity = false;
             admissionOpen = false;
             pendingGap = gapObligation;
-            return Result.Success(new RuntimeIngressResult(RuntimeIngressStatus.GapRecorded, gapObligation));
+            return Result.Success(new RuntimeIngressResult(
+                RuntimeIngressStatus.GapRecorded,
+                gapObligation));
         }
         catch
         {
@@ -280,17 +369,21 @@ public sealed class CoreRuntimeHost : IDisposable
         }
     }
 
-    public async Task<Result<bool>> ProcessNextAsync(CancellationToken cancellationToken = default)
+    public async Task<Result<RuntimeProcessNextResult>> ProcessNextDeliveryAsync(
+        CancellationToken cancellationToken = default)
     {
         await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (state != RuntimeHostState.Running)
             {
-                return Failure<bool>("runtime.lifecycle_state", "Runtime host is not running.");
+                return Failure<RuntimeProcessNextResult>(
+                    "runtime.lifecycle_state",
+                    "Runtime host is not running.");
             }
 
-            var processed = await ProcessNextCoreAsync(cancellationToken).ConfigureAwait(false);
+            var processed = await ProcessNextCoreAsync(
+                cancellationToken).ConfigureAwait(false);
             if (processed.IsFailure)
             {
                 admissionOpen = false;
@@ -312,21 +405,35 @@ public sealed class CoreRuntimeHost : IDisposable
         }
     }
 
-    public async Task<Result> DrainAsync(CancellationToken cancellationToken = default)
+    public async Task<Result<bool>> ProcessNextAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var processed = await ProcessNextDeliveryAsync(
+            cancellationToken).ConfigureAwait(false);
+        return processed.IsSuccess
+            ? Result.Success(processed.Value.Processed)
+            : Result.Failure<bool>(processed.Error!);
+    }
+
+    public async Task<Result> DrainAsync(
+        CancellationToken cancellationToken = default)
     {
         await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (state != RuntimeHostState.Running)
             {
-                return Failure("runtime.lifecycle_state", "Only a running runtime host can drain.");
+                return Failure(
+                    "runtime.lifecycle_state",
+                    "Only a running runtime host can drain.");
             }
 
             admissionOpen = false;
             state = RuntimeHostState.Draining;
             while (queue.Count > 0 || pendingGap is not null)
             {
-                var processed = await ProcessNextCoreAsync(cancellationToken).ConfigureAwait(false);
+                var processed = await ProcessNextCoreAsync(
+                    cancellationToken).ConfigureAwait(false);
                 if (processed.IsFailure)
                 {
                     state = RuntimeHostState.Faulted;
@@ -370,15 +477,17 @@ public sealed class CoreRuntimeHost : IDisposable
         }
     }
 
-    public Result EnsureUserMutationReady() => GetReadiness().AcceptsUserMutations
-        ? Result.Success()
-        : Failure(
-            "runtime.required_evidence_unavailable",
-            "Runtime protected continuity and readiness evidence are required for user mutation.");
+    public Result EnsureUserMutationReady() =>
+        GetReadiness().AcceptsUserMutations
+            ? Result.Success()
+            : Failure(
+                "runtime.required_evidence_unavailable",
+                "Runtime protected continuity and readiness evidence are required for user mutation.");
 
     public void Dispose() => lifecycle.Dispose();
 
-    private async Task<Result<bool>> ProcessNextCoreAsync(CancellationToken cancellationToken)
+    private async Task<Result<RuntimeProcessNextResult>> ProcessNextCoreAsync(
+        CancellationToken cancellationToken)
     {
         RuntimeSourceObligation obligation;
         if (queue.Count > 0)
@@ -392,33 +501,132 @@ public sealed class CoreRuntimeHost : IDisposable
         }
         else
         {
-            return Result.Success(false);
+            return Result.Success(RuntimeProcessNextResult.Idle);
         }
 
-        Result applied;
+        return await ApplyPersistAndPublishAsync(
+            obligation,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<Result<RuntimeProcessNextResult>> ApplyPersistAndPublishAsync(
+        RuntimeSourceObligation obligation,
+        CancellationToken cancellationToken)
+    {
+        RuntimeCutAcceptance? acceptance = null;
         if (obligation.FactClass == RuntimeFactClass.SourceCut)
         {
-            var cutApplied = runtime.Apply(obligation.Cut!);
-            applied = cutApplied.IsSuccess ? Result.Success() : Result.Failure(cutApplied.Error!);
+            var applied = runtime.Apply(obligation.Cut!);
+            if (applied.IsFailure)
+            {
+                return Result.Failure<RuntimeProcessNextResult>(applied.Error!);
+            }
+
+            acceptance = applied.Value;
         }
         else
         {
-            applied = runtime.ApplyGap(obligation.Gap!);
-        }
-        if (applied.IsFailure)
-        {
-            return Result.Failure<bool>(applied.Error!);
+            var applied = runtime.ApplyGap(obligation.Gap!);
+            if (applied.IsFailure)
+            {
+                return Result.Failure<RuntimeProcessNextResult>(applied.Error!);
+            }
+
+            protectedContinuity = false;
         }
 
-        checkpointPosition = obligation.Position.Value;
-        var checkpointed = await store.SaveCheckpointAsync(
+        var saved = await store.SaveCheckpointWithPendingDeliveryAsync(
             runtime.CaptureCheckpoint(),
-            checkpointPosition,
+            obligation,
+            acceptance,
             protectedContinuity,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (saved.IsFailure)
+        {
+            return Result.Failure<RuntimeProcessNextResult>(saved.Error!);
+        }
+
+        if (deliveryCommitHook is not null)
+        {
+            await deliveryCommitHook.AfterCommittedAsync(
+                RuntimeDeliveryCommitPoint.PendingDeliveryPersisted,
+                obligation,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var completed = await CompleteDeliveryAsync(
+            saved.Value,
             cancellationToken).ConfigureAwait(false);
-        return checkpointed.IsSuccess
-            ? Result.Success(true)
-            : Result.Failure<bool>(checkpointed.Error!);
+        return completed.IsSuccess
+            ? Result.Success(new RuntimeProcessNextResult(
+                RuntimeProcessNextStatus.Published,
+                obligation,
+                completed.Value))
+            : Result.Failure<RuntimeProcessNextResult>(completed.Error!);
+    }
+
+    private async Task<Result<RuntimePublicationCommit>> CompleteDeliveryAsync(
+        RuntimeProcessingDelivery delivery,
+        CancellationToken cancellationToken)
+    {
+        if (delivery.Stage == RuntimeProcessingDeliveryStage.PendingDownstream)
+        {
+            var processed = await deliveryProcessor.ProcessAsync(
+                delivery,
+                cancellationToken).ConfigureAwait(false);
+            if (processed.IsFailure)
+            {
+                return Result.Failure<RuntimePublicationCommit>(processed.Error!);
+            }
+
+            var completed = await store.CompleteDownstreamAsync(
+                delivery.ScopeId,
+                delivery.ObligationPosition,
+                cancellationToken).ConfigureAwait(false);
+            if (completed.IsFailure)
+            {
+                return Result.Failure<RuntimePublicationCommit>(completed.Error!);
+            }
+
+            if (deliveryCommitHook is not null)
+            {
+                await deliveryCommitHook.AfterCommittedAsync(
+                    RuntimeDeliveryCommitPoint.DownstreamCompleted,
+                    delivery.Obligation,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        var publication = await store.PublishCompletedDeliveryAsync(
+            delivery.ScopeId,
+            delivery.ObligationPosition,
+            runtime.GetCurrentCapacity().RetainedChangeCapacity,
+            ready: protectedContinuity,
+            degradationReasonCode: protectedContinuity
+                ? null
+                : ContinuityLostReason,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (publication.IsFailure)
+        {
+            return publication;
+        }
+
+        if (deliveryCommitHook is not null)
+        {
+            await deliveryCommitHook.AfterCommittedAsync(
+                RuntimeDeliveryCommitPoint.Published,
+                delivery.Obligation,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return publication;
+    }
+
+    private Result Fault(Result result)
+    {
+        state = RuntimeHostState.Faulted;
+        admissionOpen = false;
+        return result;
     }
 
     private static Result Failure(string code, string message) =>

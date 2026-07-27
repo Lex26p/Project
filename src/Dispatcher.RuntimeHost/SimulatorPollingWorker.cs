@@ -208,14 +208,14 @@ public sealed class SimulatorPollingWorker
         }
 
         Interlocked.Increment(ref admittedCuts);
-        return await ProcessAvailableAsync(cancellationToken).ConfigureAwait(false);
+        return await ProcessAvailableAsync().ConfigureAwait(false);
     }
 
-    private async Task<Result> ProcessAvailableAsync(CancellationToken cancellationToken)
+    private async Task<Result> ProcessAvailableAsync()
     {
         for (var index = 0; index < maxProcessBatch; index++)
         {
-            var processed = await processNext(cancellationToken).ConfigureAwait(false);
+            var processed = await processNext(CancellationToken.None).ConfigureAwait(false);
             if (processed.IsFailure)
             {
                 return Result.Failure(processed.Error!);
