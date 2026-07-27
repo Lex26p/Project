@@ -10,7 +10,10 @@ internal sealed record RealtimeSubscription(
     RuntimeScopeId ScopeId,
     ulong CoreCursor,
     ulong WebCursor,
-    IReadOnlySet<Guid> PointIds);
+    IReadOnlySet<Guid> PointIds,
+    bool RestrictedToPointIds,
+    IReadOnlySet<PermissionCode> PermissionGrants,
+    IReadOnlySet<PermissionCode> PermissionDenials);
 
 public sealed class RealtimeSubscriptionStore
 {
@@ -50,10 +53,16 @@ public sealed class RuntimeRealtimeHub : Hub
         return BootstrapCore(scopeId, pointIds.ToHashSet());
     }
 
-    private Task<RuntimeSnapshotPayload> BootstrapCore(Guid scopeId, IReadOnlySet<Guid>? pointIds)
+    private async Task<RuntimeSnapshotPayload> BootstrapCore(
+        Guid scopeId,
+        IReadOnlySet<Guid>? pointIds)
     {
         var session = sessionResolver.Resolve(Context.GetHttpContext());
-        var result = reader.ReadSnapshot(session, RuntimeScopeId.From(scopeId), pointIds);
+        var result = await reader.ReadSnapshotAsync(
+            session,
+            RuntimeScopeId.From(scopeId),
+            pointIds,
+            Context.ConnectionAborted);
         if (result.IsFailure)
         {
             throw new HubException(result.Error!.Code.Value);
@@ -65,53 +74,74 @@ public sealed class RuntimeRealtimeHub : Hub
             RuntimeScopeId.From(scopeId),
             snapshot.CoreCursor,
             0,
-            snapshot.PointIds));
-        return Task.FromResult(snapshot.Payload);
+            snapshot.PointIds,
+            pointIds is not null,
+            session!.Permissions.Grants.ToHashSet(),
+            session.Permissions.Denials.ToHashSet()));
+        return snapshot.Payload;
     }
 
-    public Task<RealtimePollPayload> Poll(Guid scopeId, ulong cursor)
+    public async Task<RealtimePollPayload> Poll(Guid scopeId, ulong cursor)
     {
         if (!subscriptions.TryGet(Context.ConnectionId, out var subscription) ||
             subscription!.ScopeId != RuntimeScopeId.From(scopeId) ||
             subscription.WebCursor != cursor)
         {
             subscriptions.Remove(Context.ConnectionId);
-            return Task.FromResult(new RealtimePollPayload(RealtimePollKind.Gap));
+            return new RealtimePollPayload(RealtimePollKind.Gap);
         }
 
         var session = sessionResolver.Resolve(Context.GetHttpContext());
-        if (session is null || session.Id != subscription.SessionId)
+        if (session is null ||
+            session.Id != subscription.SessionId ||
+            !session.Permissions.Grants.SetEquals(subscription.PermissionGrants) ||
+            !session.Permissions.Denials.SetEquals(subscription.PermissionDenials))
         {
             subscriptions.Remove(Context.ConnectionId);
-            return Task.FromResult(new RealtimePollPayload(RealtimePollKind.PermissionInvalidated));
+            return new RealtimePollPayload(RealtimePollKind.PermissionInvalidated);
         }
 
-        var currentSnapshot = reader.ReadSnapshot(session, subscription.ScopeId, subscription.PointIds);
-        if (currentSnapshot.IsFailure || !currentSnapshot.Value.PointIds.SetEquals(subscription.PointIds))
+        var currentSnapshot = await reader.ReadSnapshotAsync(
+            session,
+            subscription.ScopeId,
+            subscription.RestrictedToPointIds ? subscription.PointIds : null,
+            Context.ConnectionAborted);
+        if (currentSnapshot.IsFailure)
         {
             subscriptions.Remove(Context.ConnectionId);
-            return Task.FromResult(new RealtimePollPayload(RealtimePollKind.PermissionInvalidated));
+            return new RealtimePollPayload(
+                IsAuthorizationFailure(currentSnapshot.Error?.Code.Value)
+                    ? RealtimePollKind.PermissionInvalidated
+                    : RealtimePollKind.Gap);
+        }
+        if (!currentSnapshot.Value.PointIds.SetEquals(subscription.PointIds))
+        {
+            subscriptions.Remove(Context.ConnectionId);
+            return new RealtimePollPayload(RealtimePollKind.PermissionInvalidated);
         }
 
-        var result = reader.ReadDelta(
+        var result = await reader.ReadDeltaAsync(
             session,
             subscription.ScopeId,
             subscription.CoreCursor,
-            subscription.PointIds);
+            subscription.PointIds,
+            Context.ConnectionAborted);
         if (result.IsFailure)
         {
             subscriptions.Remove(Context.ConnectionId);
             var kind = result.Error!.Code.Value == "runtime.cursor_gap"
                 ? RealtimePollKind.Gap
-                : RealtimePollKind.PermissionInvalidated;
-            return Task.FromResult(new RealtimePollPayload(kind));
+                : IsAuthorizationFailure(result.Error.Code.Value)
+                    ? RealtimePollKind.PermissionInvalidated
+                    : RealtimePollKind.Gap;
+            return new RealtimePollPayload(kind);
         }
 
         var delta = result.Value;
         if (delta.Changes.Count == 0)
         {
             subscriptions.Set(Context.ConnectionId, subscription with { CoreCursor = delta.CoreCursor });
-            return Task.FromResult(new RealtimePollPayload(RealtimePollKind.NoChange));
+            return new RealtimePollPayload(RealtimePollKind.NoChange);
         }
 
         var nextWebCursor = checked(subscription.WebCursor + 1);
@@ -120,9 +150,9 @@ public sealed class RuntimeRealtimeHub : Hub
             CoreCursor = delta.CoreCursor,
             WebCursor = nextWebCursor,
         });
-        return Task.FromResult(new RealtimePollPayload(
+        return new RealtimePollPayload(
             RealtimePollKind.Delta,
-            new RuntimeDeltaPayload(scopeId, subscription.WebCursor, nextWebCursor, delta.Changes)));
+            new RuntimeDeltaPayload(scopeId, subscription.WebCursor, nextWebCursor, delta.Changes));
     }
 
     public override Task OnDisconnectedAsync(Exception? exception)
@@ -130,4 +160,10 @@ public sealed class RuntimeRealtimeHub : Hub
         subscriptions.Remove(Context.ConnectionId);
         return base.OnDisconnectedAsync(exception);
     }
+
+    private static bool IsAuthorizationFailure(string? code) =>
+        code is "session.anonymous" or
+            "session.revoked" or
+            "session.expired" or
+            "permission.denied";
 }

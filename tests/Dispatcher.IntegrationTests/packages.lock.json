@@ -351,8 +351,11 @@
       "dispatcher.runtimehost": {
         "type": "Project",
         "dependencies": {
+          "Dispatcher.Alarm": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Events": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",
+          "Dispatcher.History": "[1.0.0, )",
           "Dispatcher.Modbus": "[1.0.0, )",
           "Dispatcher.ProtocolCommissioning": "[1.0.0, )",
           "Dispatcher.Protocols": "[1.0.0, )",

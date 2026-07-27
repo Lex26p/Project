@@ -21,6 +21,15 @@ public sealed record RuntimeDeltaPayload(
     ulong To,
     IReadOnlyList<RuntimePointPayload> Changes);
 
+public sealed record RuntimeReadinessPayload(
+    Guid ScopeId,
+    bool Published,
+    bool Ready,
+    bool CanServeCurrent,
+    string? DegradationReasonCode,
+    DateTimeOffset? HeartbeatAt,
+    DateTimeOffset? PublishedAt);
+
 public enum RealtimePollKind
 {
     Delta = 1,

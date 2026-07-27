@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
@@ -175,6 +176,11 @@ public sealed class RegistryProjectionTests
                 await PostgresMigrationRunner.ApplyAsync(
                     dataSource,
                     EquipmentMigrations.CreatePlan(PostgreSqlClusterFixture.OwnerBRole));
+                await PostgresMigrationRunner.ApplyAsync(
+                    dataSource,
+                    CoreRuntimeMigrations.CreatePlan(
+                        PostgreSqlClusterFixture.OwnerBRole,
+                        PostgreSqlClusterFixture.OwnerARole));
 
                 var scopeA = FacilityScopeId.From(Guid.Parse("61000000-0000-0000-0000-000000000011"));
                 var scopeB = FacilityScopeId.From(Guid.Parse("61000000-0000-0000-0000-000000000012"));
@@ -246,6 +252,13 @@ public sealed class RegistryProjectionTests
 
                 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Test" });
                 builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:Dispatcher"] = database.ConnectionString,
+                    ["Dispatcher:Core:PublishedReadRole"] = PostgreSqlClusterFixture.OwnerARole,
+                    ["Dispatcher:Core:MaxSnapshotPoints"] = "128",
+                    ["Dispatcher:Core:MaxDeltaChanges"] = "128",
+                });
                 builder.Services.AddDispatcherServer(builder.Configuration);
                 builder.Services.AddRegistryServer(
                     database.ConnectionString,
@@ -263,7 +276,6 @@ public sealed class RegistryProjectionTests
                     SystemClock.Instance,
                     SystemClock.Instance,
                     new RuntimeCurrentLimits(maxPoints: 128, retainedChangeCapacity: 1024));
-                app.Services.GetRequiredService<RuntimeRegistry>().Add(runtimeScope, runtime);
                 var allowedBinding = new SourceBinding(
                     runtimeScope,
                     SourceId.From(Guid.Parse("65000000-0000-0000-0000-000000000011")),
@@ -298,8 +310,12 @@ public sealed class RegistryProjectionTests
                     SourceTimestamp.FromUtc(now))]);
                 Assert.True(allowedCut.IsSuccess);
                 Assert.True(hiddenCut.IsSuccess);
-                Assert.True(runtime.Apply(allowedCut.Value).IsSuccess);
-                Assert.True(runtime.Apply(hiddenCut.Value).IsSuccess);
+                var runtimeStore = new CoreRuntimeStore(
+                    dataSource,
+                    PostgreSqlClusterFixture.OwnerBRole,
+                    SystemClock.Instance);
+                await PublishAsync(runtime, runtimeStore, allowedCut.Value);
+                await PublishAsync(runtime, runtimeStore, hiddenCut.Value);
 
                 await app.StartAsync();
                 var address = new Uri(Assert.Single(app.Services
@@ -339,6 +355,29 @@ public sealed class RegistryProjectionTests
             await app.StopAsync();
             await app.DisposeAsync();
             await database.DisposeAsync();
+        }
+
+        private static async Task PublishAsync(
+            CoreRuntime runtime,
+            CoreRuntimeStore store,
+            RuntimeCut cut)
+        {
+            var obligation = await store.AppendCutAsync(cut);
+            var acceptance = runtime.Apply(cut);
+            Assert.True(acceptance.IsSuccess);
+            Assert.True((await store.SaveCheckpointWithPendingDeliveryAsync(
+                runtime.CaptureCheckpoint(),
+                obligation,
+                acceptance.Value,
+                protectedContinuity: true)).IsSuccess);
+            Assert.True((await store.CompleteDownstreamAsync(
+                obligation.ScopeId,
+                obligation.Position)).IsSuccess);
+            Assert.True((await store.PublishCompletedDeliveryAsync(
+                obligation.ScopeId,
+                obligation.Position,
+                retainedDeltaCapacity: 128,
+                ready: true)).IsSuccess);
         }
     }
 }

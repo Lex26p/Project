@@ -335,7 +335,11 @@ public sealed class RegistryProjectionService
             .OrderBy(point => point.Code, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var requestedPoints = definitions.Select(point => point.PointId.Value).ToHashSet();
-        var current = runtime.ReadSnapshot(session, RuntimeScopeId.From(scopeId.Value), requestedPoints);
+        var current = await runtime.ReadSnapshotAsync(
+            session,
+            RuntimeScopeId.From(scopeId.Value),
+            requestedPoints,
+            cancellationToken).ConfigureAwait(false);
         var currentByPoint = current.IsSuccess
             ? current.Value.Payload.Points.ToDictionary(point => point.PointId)
             : new Dictionary<Guid, RuntimePointPayload>();

@@ -15,8 +15,8 @@
 | C02 | Complete | Production RuntimeHost и Simulator polling реализованы и приняты |
 | C03 | Complete | Durable processing delivery и published current реализованы и приняты |
 | C04 | Complete | Автоматическая History → Alarm → Event pipeline реализована и принята |
-| C05 | Ready | Prerequisite C03 выполнен |
-| C06 | Planned | После C05 |
+| C05 | Complete | PostgreSQL published current reader подключён к Server и принят |
+| C06 | Ready | Prerequisite C05 выполнен |
 | C07 | Planned | Gate R2 |
 | C08 | Planned | После production Web composition |
 | C09 | Planned | После runtime pipeline и Web shell |

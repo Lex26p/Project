@@ -172,7 +172,8 @@ public sealed class CoreRuntimePublicationSecurityCleanupTests
                 Clock);
             Reader = new CoreRuntimePublishedReader(
                 DataSource,
-                ReadRole);
+                ReadRole,
+                new PublishedCurrentReadLimits(64, 64));
         }
 
         public TestDatabase Database { get; }

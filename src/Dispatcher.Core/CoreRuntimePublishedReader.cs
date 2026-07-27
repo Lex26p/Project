@@ -9,13 +9,16 @@ public sealed partial class CoreRuntimePublishedReader
 {
     private readonly NpgsqlDataSource dataSource;
     private readonly string databaseRole;
+    private readonly PublishedCurrentReadLimits limits;
 
     public CoreRuntimePublishedReader(
         NpgsqlDataSource dataSource,
-        string databaseRole)
+        string databaseRole,
+        PublishedCurrentReadLimits limits)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseRole);
+        ArgumentNullException.ThrowIfNull(limits);
         if (!RolePattern().IsMatch(databaseRole))
         {
             throw new ArgumentException(
@@ -25,6 +28,7 @@ public sealed partial class CoreRuntimePublishedReader
 
         this.dataSource = dataSource;
         this.databaseRole = databaseRole;
+        this.limits = limits;
     }
 
     public async Task<PublishedRuntimeReadiness> ReadReadinessAsync(
@@ -82,11 +86,18 @@ public sealed partial class CoreRuntimePublishedReader
                 tableName: "published_current",
                 predicate: string.Empty,
                 cursor: null,
+                limits.MaxSnapshotPoints,
                 cancellationToken).ConfigureAwait(false)
             : [];
+        if (entries.Count > limits.MaxSnapshotPoints)
+        {
+            throw new PublishedCurrentReadLimitExceededException();
+        }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new PublishedCurrentSnapshot(readiness, entries);
+        return new PublishedCurrentSnapshot(
+            readiness,
+            entries.Take(limits.MaxSnapshotPoints).ToArray());
     }
 
     public async Task<PublishedCurrentDelta> ReadDeltaAsync(
@@ -137,13 +148,24 @@ public sealed partial class CoreRuntimePublishedReader
                 tableName: "published_delta",
                 predicate: "AND current_position > @cursor",
                 cursor,
+                limits.MaxDeltaChanges,
                 cancellationToken).ConfigureAwait(false);
         }
 
+        var hasMore = changes.Count > limits.MaxDeltaChanges;
+        if (hasMore)
+        {
+            changes = changes.Take(limits.MaxDeltaChanges).ToArray();
+        }
+        var to = hasMore
+            ? new ConsumerCursor<PublishedCurrentEntry>(
+                changes[^1].CurrentPosition.Value)
+            : readiness.CurrentCursor;
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new PublishedCurrentDelta(
             readiness,
             cursor,
+            to,
             status,
             changes);
     }
@@ -217,6 +239,7 @@ public sealed partial class CoreRuntimePublishedReader
         string tableName,
         string predicate,
         ConsumerCursor<PublishedCurrentEntry>? cursor,
+        int entryLimit,
         CancellationToken cancellationToken)
     {
         var entries = new List<PublishedCurrentEntry>();
@@ -238,7 +261,8 @@ public sealed partial class CoreRuntimePublishedReader
             FROM {CoreRuntimeMigrations.Schema}.{tableName}
             WHERE scope_id = @scope_id
             {predicate}
-            ORDER BY current_position;
+            ORDER BY current_position
+            LIMIT @entry_limit;
             """,
             connection,
             transaction);
@@ -249,6 +273,9 @@ public sealed partial class CoreRuntimePublishedReader
                 "cursor",
                 checked((long)cursor.Value.Value));
         }
+        command.Parameters.AddWithValue(
+            "entry_limit",
+            checked((long)entryLimit + 1));
 
         await using var reader = await command
             .ExecuteReaderAsync(cancellationToken)

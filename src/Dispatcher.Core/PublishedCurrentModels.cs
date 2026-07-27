@@ -2,6 +2,29 @@ using Dispatcher.Semantics;
 
 namespace Dispatcher.Core;
 
+public sealed record PublishedCurrentReadLimits
+{
+    public PublishedCurrentReadLimits(int maxSnapshotPoints, int maxDeltaChanges)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSnapshotPoints);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxDeltaChanges);
+        MaxSnapshotPoints = maxSnapshotPoints;
+        MaxDeltaChanges = maxDeltaChanges;
+    }
+
+    public int MaxSnapshotPoints { get; }
+
+    public int MaxDeltaChanges { get; }
+}
+
+public sealed class PublishedCurrentReadLimitExceededException : InvalidOperationException
+{
+    public PublishedCurrentReadLimitExceededException()
+        : base("Published current read exceeded its configured capacity.")
+    {
+    }
+}
+
 public sealed record PublishedCurrentEntry(
     RuntimeScopeId ScopeId,
     SourceId SourceId,
@@ -57,13 +80,11 @@ public enum PublishedCurrentDeltaStatus
 public sealed record PublishedCurrentDelta(
     PublishedRuntimeReadiness Readiness,
     ConsumerCursor<PublishedCurrentEntry> RequestedCursor,
+    ConsumerCursor<PublishedCurrentEntry> To,
     PublishedCurrentDeltaStatus Status,
     IReadOnlyList<PublishedCurrentEntry> Changes)
 {
     public RuntimeScopeId ScopeId => Readiness.ScopeId;
-
-    public ConsumerCursor<PublishedCurrentEntry> To =>
-        Readiness.CurrentCursor;
 
     public bool RequiresSnapshot =>
         Status is PublishedCurrentDeltaStatus.ScopeNotPublished or

@@ -128,7 +128,8 @@ public static class CommandEndpoints
 
     private static async Task<IResult> ReadContextAsync(
         Guid scopeId, Guid pointId, HttpContext context, RequestSessionResolver sessions,
-        IWallClock clock, SimulatorRuntimeStore simulator, RuntimeRegistry registry, CancellationToken token)
+        IWallClock clock, SimulatorRuntimeStore simulator, AuthorizedRuntimeReader runtime,
+        CancellationToken token)
     {
         var scope = RuntimeScopeId.From(scopeId);
         var point = PointId.From(pointId);
@@ -140,9 +141,9 @@ public static class CommandEndpoints
         var active = await simulator.ReadActiveAsync(FacilityScopeId.From(scopeId), token).ConfigureAwait(false);
         if (active.IsFailure || active.Value.Configuration.ScopeId != scope)
             return Problem(active.IsFailure ? active.Error! : new OperationError(ErrorCode.From("command.active_revision_stale"), "Active Simulator scope does not match."));
-        if (!registry.TryGet(scope, out var runtime))
-            return Problem(new OperationError(ErrorCode.From("runtime.scope_not_found"), "Runtime scope was not found."));
-        var current = runtime!.GetSnapshot();
+        var evidence = await runtime.ReadEvidenceAsync(scope, point, token).ConfigureAwait(false);
+        if (evidence.IsFailure) return Problem(evidence.Error!);
+        var current = evidence.Value;
         var entry = current.Entries.SingleOrDefault(value => value.PointId == point);
         if (entry is null)
             return Problem(new OperationError(ErrorCode.From("command.target_unavailable"), "Target current evidence is unavailable."));
@@ -191,7 +192,7 @@ public static class CommandEndpoints
     private static async Task<IResult> PrepareAsync(
         PrepareCommandPayload request, HttpContext context, RequestSessionResolver sessions,
         IWallClock clock, CommandStore commands, SimulatorRuntimeStore simulator,
-        RuntimeRegistry registry, CancellationToken token)
+        AuthorizedRuntimeReader runtime, CancellationToken token)
     {
         var authorization = SessionAuthorization.AuthorizeMutation(
             sessions.Resolve(context), CommandPermissions.Prepare, clock);
@@ -199,22 +200,23 @@ public static class CommandEndpoints
         var scope = RuntimeScopeId.From(request.ScopeId);
         var active = await simulator.ReadActiveAsync(FacilityScopeId.From(request.ScopeId), token).ConfigureAwait(false);
         if (active.IsFailure) return Problem(active.Error!);
-        if (!registry.TryGet(scope, out var runtime))
-            return Problem(new OperationError(ErrorCode.From("runtime.scope_not_found"), "Runtime scope was not found."));
+        var evidence = await runtime.ReadEvidenceAsync(
+            scope, PointId.From(request.PointId), token).ConfigureAwait(false);
+        if (evidence.IsFailure) return Problem(evidence.Error!);
         var result = await commands.PrepareAsync(authorization.Value, new(
             CommandIntentId.From(request.IntentId), ControlLeaseId.From(request.LeaseId), scope,
             PointId.From(request.PointId), request.DesiredValue, Unit.FromSymbol(request.Unit),
             (CommandInteractionMode)request.InteractionMode,
             ConfigurationRevisionId.From(request.ExpectedRevisionId), RevisionNumber.From(request.ExpectedRevisionNumber),
             request.ExpectedGeneration, request.ExpectedManifestFingerprint, request.ExpectedCurrentPosition),
-            active.Value, runtime!.GetSnapshot(), token).ConfigureAwait(false);
+            active.Value, evidence.Value, token).ConfigureAwait(false);
         return result.IsSuccess ? Results.Ok(result.Value) : Problem(result.Error!);
     }
 
     private static async Task<IResult> ExecuteAsync(
         ExecuteCommandPayload request, HttpContext context, RequestSessionResolver sessions,
         IWallClock clock, CommandExecutionStore executions, SimulatorRuntimeStore simulator,
-        RuntimeRegistry registry, CancellationToken token)
+        AuthorizedRuntimeReader runtime, CancellationToken token)
     {
         var authorization = SessionAuthorization.AuthorizeMutation(
             sessions.Resolve(context), CommandPermissions.Execute, clock);
@@ -222,11 +224,12 @@ public static class CommandEndpoints
         var scope = RuntimeScopeId.From(request.ScopeId);
         var active = await simulator.ReadActiveAsync(FacilityScopeId.From(request.ScopeId), token).ConfigureAwait(false);
         if (active.IsFailure) return Problem(active.Error!);
-        if (!registry.TryGet(scope, out var runtime))
-            return Problem(new OperationError(ErrorCode.From("runtime.scope_not_found"), "Runtime scope was not found."));
+        var evidence = await runtime.ReadEvidenceAsync(
+            scope, PointId.From(request.PointId), token).ConfigureAwait(false);
+        if (evidence.IsFailure) return Problem(evidence.Error!);
         var result = await executions.ExecuteAsync(authorization.Value, new(
             CommandExecutionId.From(request.ExecutionId), CommandIntentId.From(request.IntentId),
-            scope, PointId.From(request.PointId)), active.Value, runtime!.GetSnapshot(), token).ConfigureAwait(false);
+            scope, PointId.From(request.PointId)), active.Value, evidence.Value, token).ConfigureAwait(false);
         return ExecutionResponse(result);
     }
 
@@ -265,6 +268,8 @@ public static class CommandEndpoints
             "session.anonymous" or "session.expired" or "session.revoked" or "identity.session_invalid" => StatusCodes.Status401Unauthorized,
             "permission.denied" or "command.step_up_required" or "identity.step_up_invalid" => StatusCodes.Status403Forbidden,
             "runtime.scope_not_found" or "command.lease_not_found" or "command.intent_not_found" or "command.execution_not_found" => StatusCodes.Status404NotFound,
+            "runtime.scope_not_ready" or "runtime.current_unavailable" or "runtime.query_limit_exceeded" =>
+                StatusCodes.Status503ServiceUnavailable,
             "command.lease_held" or "command.intent_conflict" or "command.active_revision_stale" or "command.current_stale" or
             "command.execution_identity_conflict" or "command.execution_identity_session" or "command.intent_already_executed" or
             "command.safety_stale" => StatusCodes.Status409Conflict,

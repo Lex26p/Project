@@ -64,6 +64,11 @@ public sealed class ProtocolCommissioningAcceptanceTests
         await PostgresMigrationRunner.ApplyAsync(
             dataSource,
             AlarmMigrations.CreatePlan(PostgreSqlClusterFixture.OwnerBRole));
+        await PostgresMigrationRunner.ApplyAsync(
+            dataSource,
+            CoreRuntimeMigrations.CreatePlan(
+                PostgreSqlClusterFixture.OwnerBRole,
+                PostgreSqlClusterFixture.OwnerARole));
         var clock = new FixedClock();
         var session = Session();
 
@@ -157,22 +162,52 @@ public sealed class ProtocolCommissioningAcceptanceTests
         await Task.WhenAll(modbusAcquire, snmpAcquire);
         var modbusCut = (await modbusAcquire).Value;
         var snmpCut = (await snmpAcquire).Value;
-        var modbusAcceptance = core.Apply(modbusCut).Value;
-        var snmpAcceptance = core.Apply(snmpCut).Value;
+        var coreStore = new CoreRuntimeStore(
+            dataSource,
+            PostgreSqlClusterFixture.OwnerBRole,
+            clock);
+        var modbusAcceptance = await PublishAsync(core, coreStore, modbusCut);
+        var snmpAcceptance = await PublishAsync(core, coreStore, snmpCut);
         Assert.True((await history.AcceptAsync(Obligation(1, modbusCut))).IsSuccess);
         Assert.True((await history.AcceptAsync(Obligation(2, snmpCut))).IsSuccess);
         Assert.True((await alarm.EvaluatePostRuntimeCutAsync(modbusAcceptance, core.GetSnapshot())).IsSuccess);
         Assert.True((await alarm.EvaluatePostRuntimeCutAsync(snmpAcceptance, core.GetSnapshot())).IsSuccess);
 
-        var registry = new RuntimeRegistry();
-        registry.Add(RuntimeScope, core);
-        var web = new AuthorizedRuntimeReader(registry, clock).ReadSnapshot(session, RuntimeScope);
+        var publishedReader = new CoreRuntimePublishedReader(
+            dataSource,
+            PostgreSqlClusterFixture.OwnerARole,
+            new PublishedCurrentReadLimits(16, 64));
+        var web = await new AuthorizedRuntimeReader(publishedReader, clock)
+            .ReadSnapshotAsync(session, RuntimeScope);
 
         Assert.True(web.IsSuccess);
         Assert.Equal(2, web.Value.Payload.Points.Count);
         Assert.Equal(2, modbusFactory.OpenAttempts);
         Assert.Equal(2, snmpFactory.OpenAttempts);
         Assert.Equal([42L, 50L], web.Value.Payload.Points.OrderBy(point => point.PointId).Select(point => point.Value));
+    }
+
+    private static async Task<RuntimeCutAcceptance> PublishAsync(
+        CoreRuntime runtime,
+        CoreRuntimeStore store,
+        RuntimeCut cut)
+    {
+        var obligation = await store.AppendCutAsync(cut);
+        var acceptance = runtime.Apply(cut).Value;
+        Assert.True((await store.SaveCheckpointWithPendingDeliveryAsync(
+            runtime.CaptureCheckpoint(),
+            obligation,
+            acceptance,
+            protectedContinuity: true)).IsSuccess);
+        Assert.True((await store.CompleteDownstreamAsync(
+            obligation.ScopeId,
+            obligation.Position)).IsSuccess);
+        Assert.True((await store.PublishCompletedDeliveryAsync(
+            obligation.ScopeId,
+            obligation.Position,
+            retainedDeltaCapacity: 64,
+            ready: true)).IsSuccess);
+        return acceptance;
     }
 
     private static RuntimeSourceObligation Obligation(ulong position, RuntimeCut cut) => new(

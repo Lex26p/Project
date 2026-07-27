@@ -107,6 +107,35 @@ public sealed class CoreRuntimePublishedReadTests
         Assert.Empty(delta.Changes);
     }
 
+    [Fact]
+    public async Task ConfiguredReadLimitsRejectOversizedSnapshotAndPageDeltaWithoutSkipping()
+    {
+        await using var context = await RuntimeTestContext.CreateAsync(cluster);
+        var runtime = context.CreateRuntime();
+        Assert.True(runtime.ActivateBinding(context.Binding).IsSuccess);
+        var secondPoint = Dispatcher.Semantics.PointId.From(
+            Guid.Parse("c7000000-0000-0000-0000-000000000002"));
+        await context.PublishAsync(
+            runtime, 1, 1, 10, retainedDeltaCapacity: 8);
+        await context.PublishAsync(
+            runtime, 2, 2, 20, retainedDeltaCapacity: 8, secondPoint);
+        var bounded = new CoreRuntimePublishedReader(
+            context.DataSource,
+            PostgreSqlClusterFixture.OwnerBRole,
+            new PublishedCurrentReadLimits(1, 1));
+
+        await Assert.ThrowsAsync<PublishedCurrentReadLimitExceededException>(
+            () => bounded.ReadSnapshotAsync(context.ScopeId));
+        var first = await bounded.ReadDeltaAsync(
+            context.ScopeId,
+            new ConsumerCursor<PublishedCurrentEntry>(0));
+        Assert.Single(first.Changes);
+        Assert.Equal((ulong)1, first.To.Value);
+        var second = await bounded.ReadDeltaAsync(context.ScopeId, first.To);
+        Assert.Single(second.Changes);
+        Assert.Equal((ulong)2, second.To.Value);
+    }
+
     private sealed class RuntimeTestContext : IAsyncDisposable
     {
         private static readonly SourceId SourceId = Dispatcher.Core.SourceId.From(
@@ -135,7 +164,8 @@ public sealed class CoreRuntimePublishedReadTests
                 Clock);
             Reader = new CoreRuntimePublishedReader(
                 DataSource,
-                PostgreSqlClusterFixture.OwnerBRole);
+                PostgreSqlClusterFixture.OwnerBRole,
+                new PublishedCurrentReadLimits(64, 64));
         }
 
         public TestDatabase Database { get; }
@@ -180,9 +210,14 @@ public sealed class CoreRuntimePublishedReadTests
             ulong scheduleSequence,
             ulong sourcePosition,
             long value,
-            int retainedDeltaCapacity)
+            int retainedDeltaCapacity,
+            PointId? targetPointId = null)
         {
-            var cut = Cut(scheduleSequence, sourcePosition, value);
+            var cut = Cut(
+                scheduleSequence,
+                sourcePosition,
+                value,
+                targetPointId ?? PointId);
             var obligation = await Store.AppendCutAsync(cut);
             var acceptance = runtime.Apply(cut).Value;
             var saved = await Store.SaveCheckpointWithPendingDeliveryAsync(
@@ -204,12 +239,13 @@ public sealed class CoreRuntimePublishedReadTests
         public RuntimeCut Cut(
             ulong scheduleSequence,
             ulong sourcePosition,
-            long value)
+            long value,
+            PointId targetPointId)
         {
             var observation = new SourceObservation(
                 ScopeId,
                 SourceId,
-                PointId,
+                targetPointId,
                 new OwnerPosition<SourceObservation>(sourcePosition),
                 TypedValue.From(value),
                 Unit.FromSymbol("kW"),

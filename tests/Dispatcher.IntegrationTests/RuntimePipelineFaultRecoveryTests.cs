@@ -390,7 +390,8 @@ public sealed class RuntimePipelineFaultRecoveryTests
             PublishedReader =
                 new CoreRuntimePublishedReader(
                     DataSource,
-                    PostgreSqlClusterFixture.OwnerBRole);
+                    PostgreSqlClusterFixture.OwnerBRole,
+                    new PublishedCurrentReadLimits(64, 64));
         }
 
         public TestDatabase Database { get; }
