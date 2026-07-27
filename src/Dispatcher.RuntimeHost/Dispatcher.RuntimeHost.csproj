@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
     <ProjectReference Include="..\Dispatcher.Facilities\Dispatcher.Facilities.csproj" />
+    <ProjectReference Include="..\Dispatcher.History\Dispatcher.History.csproj" />
     <ProjectReference Include="..\Dispatcher.Modbus\Dispatcher.Modbus.csproj" />
     <ProjectReference Include="..\Dispatcher.Protocols\Dispatcher.Protocols.csproj" />
     <ProjectReference Include="..\Dispatcher.ProtocolCommissioning\Dispatcher.ProtocolCommissioning.csproj" />
