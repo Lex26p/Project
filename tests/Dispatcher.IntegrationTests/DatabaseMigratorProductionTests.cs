@@ -1,3 +1,4 @@
+using Dispatcher.Core;
 using Dispatcher.DatabaseMigrator;
 using Npgsql;
 using Xunit;
@@ -161,14 +162,24 @@ public sealed class DatabaseMigratorProductionTests
                 registration.Owner);
         }
 
+        environmentVariables.Add(
+            MigrationEnvironmentVariables.GetRoleVariableName(
+                CoreRuntimeMigrations.PublishedReadRoleKey),
+            CoreRuntimeMigrations.Owner);
         return environmentVariables;
     }
 
-    private static Dictionary<string, string> CreateRoleMappings() =>
-        MigrationCatalog.Registrations.ToDictionary(
+    private static Dictionary<string, string> CreateRoleMappings()
+    {
+        Dictionary<string, string> mappings = MigrationCatalog.Registrations.ToDictionary(
             static registration => registration.Owner,
             static registration => registration.Owner,
             StringComparer.Ordinal);
+        mappings.Add(
+            CoreRuntimeMigrations.PublishedReadRoleKey,
+            CoreRuntimeMigrations.Owner);
+        return mappings;
+    }
 
     private static async Task<long> CountProductionSchemasAsync(NpgsqlDataSource dataSource)
     {

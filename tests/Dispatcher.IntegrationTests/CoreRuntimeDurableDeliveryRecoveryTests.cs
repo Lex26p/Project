@@ -129,6 +129,47 @@ public sealed class CoreRuntimeDurableDeliveryRecoveryTests
         Assert.Equal(1L, state.DeltaCount);
     }
 
+    [Fact]
+    public async Task RestartAfterPublicationCommitDoesNotDuplicatePublishedResult()
+    {
+        await using var context = await RuntimeTestContext.CreateAsync(cluster);
+        var crashing = context.CreateHost(RuntimeDeliveryCommitPoint.Published);
+        using (crashing.Host)
+        {
+            Assert.True((await crashing.Host.StartAsync()).IsSuccess);
+            Assert.True(crashing.Host.ActivateBinding(context.Binding).IsSuccess);
+            Assert.Equal(
+                RuntimeIngressStatus.Queued,
+                (await crashing.Host.EnqueueAsync(context.Cut(1, 1, 35))).Value.Status);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => crashing.Host.ProcessNextDeliveryAsync());
+            Assert.Equal(RuntimeHostState.Faulted, crashing.Host.GetReadiness().State);
+        }
+
+        var committed = await context.ReadPublishedStateAsync();
+        Assert.Equal(1L, committed.CompletedObligationPosition);
+        Assert.Equal(1L, committed.CurrentPosition);
+        Assert.Equal(35L, committed.CurrentValue);
+        Assert.Equal(1L, committed.PublishedDeliveries);
+        Assert.Equal(0L, committed.PendingDeliveries);
+        Assert.Equal(1L, committed.DeltaCount);
+        Assert.Null(await context.Store.LoadPendingDeliveryAsync(context.ScopeId));
+
+        var recovered = context.CreateHost();
+        using (recovered.Host)
+        {
+            Assert.True((await recovered.Host.StartAsync()).IsSuccess);
+            Assert.True(recovered.Host.GetReadiness().RecoveryComplete);
+            Assert.True(recovered.Host.GetReadiness().AdmissionOpen);
+            Assert.Equal(
+                35L,
+                Assert.Single(recovered.Runtime.GetSnapshot().Entries).Value.Value);
+        }
+
+        var afterRestart = await context.ReadPublishedStateAsync();
+        Assert.Equal(committed, afterRestart);
+    }
+
     private sealed class RuntimeTestContext : IAsyncDisposable
     {
         private static readonly SourceId SourceId = Dispatcher.Core.SourceId.From(

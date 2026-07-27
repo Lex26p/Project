@@ -13,9 +13,9 @@
 |---|---|---|
 | C01 | Complete | Production DatabaseMigrator реализован и принят |
 | C02 | Complete | Production RuntimeHost и Simulator polling реализованы и приняты |
-| C03 | Ready | Prerequisite C02 выполнен |
-| C04 | Planned | После C03 |
-| C05 | Planned | После C03 |
+| C03 | Complete | Durable processing delivery и published current реализованы и приняты |
+| C04 | Ready | Prerequisite C03 выполнен |
+| C05 | Ready | Prerequisite C03 выполнен |
 | C06 | Planned | После C05 |
 | C07 | Planned | Gate R2 |
 | C08 | Planned | После production Web composition |
