@@ -1,18 +1,71 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject IdentitySessionState Session
+@inject ShellPresentationState Presentation
 
-<div class="workspace-shell">
-    <header>
-        <a href="/home">Dispatcher</a>
-        <WorkspaceSearchBox />
-        <a href="/administration/identity">Administration</a>
-        <a href="/administration/operations">Operations</a>
-        <a href="/control">Control</a>
-        <a href="/login">Sign in</a>
+<div class="workspace-shell"
+     data-theme="@Presentation.ThemeToken"
+     data-density="@Presentation.DensityToken">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="shell-header">
+        <a class="shell-brand" href="/home" aria-label="Dispatcher home">
+            <span class="shell-brand__mark" aria-hidden="true">
+                <span></span><span></span><span></span>
+            </span>
+            <span class="shell-brand__text">
+                <strong>Dispatcher</strong>
+                <small>Operations workspace</small>
+            </span>
+        </a>
+
+        <div class="shell-header__search">
+            <WorkspaceSearchBox />
+        </div>
+
+        <div class="shell-header__actions">
+            <ShellPreferenceControls />
+            <NavLink class="session-link" href="/login">
+                <span class="session-link__indicator"
+                      data-active="@Session.IsAuthenticated"
+                      aria-hidden="true"></span>
+                <span>@(Session.IsAuthenticated ? "Session" : "Sign in")</span>
+            </NavLink>
+        </div>
     </header>
-    <aside aria-label="Primary navigation">
+
+    <aside class="shell-navigation">
+        <div class="shell-panel-heading">
+            <span class="shell-panel-heading__eyebrow">Navigation</span>
+            <h2>Operations</h2>
+        </div>
         <WorkspaceNavigation />
     </aside>
-    <main>
-        @Body
+
+    <main id="main-content"
+          class="shell-main"
+          tabindex="-1">
+        <div class="shell-content">
+            @Body
+        </div>
     </main>
+
+    <WorkspaceContextPanel />
 </div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        Session.Changed += HandlePresentationChanged;
+        Presentation.Changed += HandlePresentationChanged;
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= HandlePresentationChanged;
+        Presentation.Changed -= HandlePresentationChanged;
+    }
+
+    private void HandlePresentationChanged() =>
+        _ = InvokeAsync(StateHasChanged);
+}

@@ -1,16 +1,33 @@
 @inject WorkspaceApiClient Api
+@inject NavigationManager Navigation
 
-@if (state.Access is null)
+@if (transportOffline)
 {
-    <p>Checking access…</p>
+    <UiStatePanel Kind="@UiStateKind.Offline"
+                  Title="Server unavailable"
+                  Message="This route cannot be authorized while the server is offline."
+                  ActionLabel="Retry"
+                  OnAction="@ReloadAsync" />
+}
+else if (state.Access is null)
+{
+    <UiStatePanel Kind="@UiStateKind.Loading"
+                  Title="Checking access"
+                  Message="Validating the current session and route capabilities." />
 }
 else if (state.Access == RouteAccess.SessionExpired)
 {
-    <p role="alert">Your session has expired.</p>
+    <UiStatePanel Kind="@UiStateKind.SessionExpired"
+                  Title="Session expired"
+                  Message="Sign in again before continuing with this workspace."
+                  ActionLabel="Sign in"
+                  OnAction="@OpenLogin" />
 }
 else if (state.Access == RouteAccess.Denied)
 {
-    <p role="alert">This page is not available.</p>
+    <UiStatePanel Kind="@UiStateKind.Forbidden"
+                  Title="Access denied"
+                  Message="The current session does not have the capability required by this route." />
 }
 else
 {
@@ -19,6 +36,7 @@ else
 
 @code {
     private readonly WorkspaceRouteGuardState state = new();
+    private bool transportOffline;
 
     [Parameter, EditorRequired]
     public string Route { get; set; } = string.Empty;
@@ -26,10 +44,24 @@ else
     [Parameter, EditorRequired]
     public RenderFragment? ChildContent { get; set; }
 
-    protected override async Task OnParametersSetAsync()
+    protected override Task OnParametersSetAsync() =>
+        ReloadAsync();
+
+    private async Task ReloadAsync()
     {
         var generation = state.BeginNavigation(Route);
-        var access = await Api.CheckAccessAsync(Route);
-        state.CompleteNavigation(generation, access);
+        transportOffline = false;
+        try
+        {
+            var access = await Api.CheckAccessAsync(Route);
+            state.CompleteNavigation(generation, access);
+        }
+        catch (HttpRequestException)
+        {
+            transportOffline = true;
+        }
     }
+
+    private void OpenLogin() =>
+        Navigation.NavigateTo("/login");
 }

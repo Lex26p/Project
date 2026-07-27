@@ -3,11 +3,23 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <base href="/" />
     <title>Dispatcher</title>
+    <link rel="stylesheet" href="app.css" />
 </head>
 <body>
-    <div id="app">Loading…</div>
+    <div id="app">
+        <div class="boot-screen" role="status" aria-live="polite">
+            <div class="boot-screen__mark" aria-hidden="true">
+                <span></span><span></span><span></span>
+            </div>
+            <div>
+                <strong>Dispatcher</strong>
+                <span>Loading operations workspace…</span>
+            </div>
+        </div>
+    </div>
     <script src="_framework/blazor.webassembly.js"></script>
 </body>
 </html>

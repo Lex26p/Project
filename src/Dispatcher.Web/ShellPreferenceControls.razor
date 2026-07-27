@@ -1,0 +1,24 @@
+@inject ShellPresentationState Presentation
+
+<div class="shell-preference-controls"
+     role="group"
+     aria-label="Appearance">
+    <button class="shell-control"
+            type="button"
+            aria-label="Switch color theme"
+            aria-pressed="@(Presentation.Theme == ShellTheme.Dark)"
+            @onclick="Presentation.ToggleTheme">
+        <span aria-hidden="true">
+            @(Presentation.Theme == ShellTheme.Dark ? "☾" : "☀")
+        </span>
+        <span>@Presentation.ThemeLabel</span>
+    </button>
+    <button class="shell-control"
+            type="button"
+            aria-label="Switch interface density"
+            aria-pressed="@(Presentation.Density == ShellDensity.Compact)"
+            @onclick="Presentation.ToggleDensity">
+        <span aria-hidden="true">≡</span>
+        <span>@Presentation.DensityLabel</span>
+    </button>
+</div>

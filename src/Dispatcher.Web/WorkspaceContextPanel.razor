@@ -1,0 +1,93 @@
+@inject IdentitySessionState Session
+
+<aside class="shell-context" aria-label="Current workspace context">
+    <div class="shell-panel-heading">
+        <span class="shell-panel-heading__eyebrow">Context</span>
+        <h2>Workspace</h2>
+    </div>
+
+    @if (Session.Bootstrap is null)
+    {
+        <UiStatePanel Kind="@UiStateKind.Empty"
+                      Title="No active session"
+                      Message="Sign in to load permitted facilities and workspace context."
+                      Compact />
+    }
+    else
+    {
+        var bootstrap = Session.Bootstrap!;
+        <div class="context-stack">
+            <section class="context-card" aria-label="Session">
+                <div class="context-card__header">
+                    <span>Session</span>
+                    <UiBadge Text="Active"
+                             Category="@UiBadgeCategory.State"
+                             Tone="@UiBadgeTone.Positive" />
+                </div>
+                <dl class="context-list">
+                    <div>
+                        <dt>Account</dt>
+                        <dd>@Short(bootstrap.AccountId)</dd>
+                    </div>
+                    <div>
+                        <dt>Expires</dt>
+                        <dd>@bootstrap.ExpiresAt.ToLocalTime().ToString("HH:mm")</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section class="context-card" aria-label="Operational scope">
+                <div class="context-card__header">
+                    <span>Operational scope</span>
+                    <UiBadge Text="@ScopeBadge(bootstrap)"
+                             Category="@UiBadgeCategory.Assignment"
+                             Tone="@ScopeTone(bootstrap)" />
+                </div>
+                <dl class="context-list">
+                    <div>
+                        <dt>Selected</dt>
+                        <dd>@ScopeLabel(bootstrap)</dd>
+                    </div>
+                    <div>
+                        <dt>Permitted</dt>
+                        <dd>@bootstrap.AllowedScopeIds.Count</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section class="context-card" aria-label="Access summary">
+                <div class="context-card__header">
+                    <span>Access</span>
+                    <UiBadge Text="Effective"
+                             Category="@UiBadgeCategory.State"
+                             Tone="@UiBadgeTone.Information" />
+                </div>
+                <p class="context-card__metric">@bootstrap.Permissions.Count</p>
+                <p class="context-card__caption">effective capabilities</p>
+            </section>
+        </div>
+    }
+</aside>
+
+@code {
+    private static string Short(Guid value) =>
+        value.ToString("N")[..8].ToUpperInvariant();
+
+    private static string ScopeLabel(
+        SessionBootstrapPayload bootstrap) =>
+        bootstrap.DefaultScopeId is Guid scopeId
+            ? Short(scopeId)
+            : "Not selected";
+
+    private static string ScopeBadge(
+        SessionBootstrapPayload bootstrap) =>
+        bootstrap.DefaultScopeId is null
+            ? "Unassigned"
+            : "Selected";
+
+    private static UiBadgeTone ScopeTone(
+        SessionBootstrapPayload bootstrap) =>
+        bootstrap.DefaultScopeId is null
+            ? UiBadgeTone.Warning
+            : UiBadgeTone.Information;
+}

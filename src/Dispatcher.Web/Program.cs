@@ -5,8 +5,13 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
-builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });
+builder.Services.AddScoped(_ => new HttpClient
+{
+    BaseAddress = new Uri(
+        builder.HostEnvironment.BaseAddress),
+});
 builder.Services.AddScoped<IdentitySessionState>();
+builder.Services.AddScoped<ShellPresentationState>();
 builder.Services.AddTransient<IdentityApiClient>();
 builder.Services.AddTransient<OperationsApiClient>();
 builder.Services.AddTransient<ControlApiClient>();

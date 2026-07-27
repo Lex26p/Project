@@ -1,31 +1,91 @@
 @inject WorkspaceApiClient Api
 
-@if (items is null)
-{
-    <p>Loading navigation…</p>
-}
-else
-{
-    <nav>
-        @foreach (var item in items)
-        {
-            <NavLink href="@item.Route">@item.Label</NavLink>
-        }
-    </nav>
-}
+<nav class="primary-navigation" aria-label="Primary navigation">
+    @if (loading)
+    {
+        <UiStatePanel Kind="@UiStateKind.Loading"
+                      Title="Loading navigation"
+                      Message="Reading the capabilities available to this session."
+                      Compact />
+    }
+    else if (offline)
+    {
+        <UiStatePanel Kind="@UiStateKind.Offline"
+                      Title="Navigation unavailable"
+                      Message="The server could not be reached. Existing content may be stale."
+                      ActionLabel="Retry"
+                      OnAction="@LoadAsync"
+                      Compact />
+    }
+    else if (items is null || items.Count == 0)
+    {
+        <UiStatePanel Kind="@UiStateKind.Empty"
+                      Title="No available sections"
+                      Message="This session has no workspace routes assigned."
+                      Compact />
+    }
+    else
+    {
+        <ul class="navigation-list">
+            @foreach (var item in items)
+            {
+                <li>
+                    <NavLink class="navigation-link"
+                             href="@item.Route"
+                             Match="@Match(item.Route)">
+                        <span class="navigation-link__marker"
+                              aria-hidden="true">
+                            @Initial(item.Label)
+                        </span>
+                        <span class="navigation-link__label">@item.Label</span>
+                        <span class="navigation-link__arrow"
+                              aria-hidden="true">›</span>
+                    </NavLink>
+                </li>
+            }
+        </ul>
+    }
+</nav>
 
 @code {
     private IReadOnlyList<WorkspaceNavigationPayload>? items;
+    private bool loading = true;
+    private bool offline;
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync() =>
+        LoadAsync();
+
+    private async Task LoadAsync()
     {
+        loading = true;
+        offline = false;
         try
         {
             items = await Api.ReadNavigationAsync();
         }
         catch (HttpRequestException)
         {
-            items = [];
+            items = null;
+            offline = true;
+        }
+        finally
+        {
+            loading = false;
         }
     }
+
+    private static NavLinkMatch Match(string route) =>
+        string.Equals(
+            route.TrimEnd('/'),
+            "/home",
+            StringComparison.OrdinalIgnoreCase)
+                ? NavLinkMatch.All
+                : NavLinkMatch.Prefix;
+
+    private static string Initial(string label) =>
+        string.IsNullOrWhiteSpace(label)
+            ? "•"
+            : label.Trim()[0]
+                .ToString()
+                .ToUpperInvariant();
 }

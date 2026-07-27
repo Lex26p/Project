@@ -1,0 +1,80 @@
+<section class="@CssClass"
+         data-ui-state="@StateToken"
+         role="@Role"
+         aria-live="@AriaLive">
+    <div class="ui-state-panel__symbol" aria-hidden="true">@Symbol</div>
+    <div class="ui-state-panel__content">
+        <h2 class="ui-state-panel__title">@Title</h2>
+        @if (!string.IsNullOrWhiteSpace(Message))
+        {
+            <p class="ui-state-panel__message">@Message</p>
+        }
+        @if (!string.IsNullOrWhiteSpace(ActionLabel))
+        {
+            <button class="button button--secondary"
+                    type="button"
+                    @onclick="InvokeActionAsync">
+                @ActionLabel
+            </button>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public UiStateKind Kind { get; set; }
+
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? Message { get; set; }
+
+    [Parameter]
+    public string? ActionLabel { get; set; }
+
+    [Parameter]
+    public EventCallback OnAction { get; set; }
+
+    [Parameter]
+    public bool Compact { get; set; }
+
+    private string CssClass =>
+        Compact
+            ? "ui-state-panel ui-state-panel--compact"
+            : "ui-state-panel";
+
+    private string StateToken =>
+        Kind.ToString().ToLowerInvariant();
+
+    private string Role =>
+        Kind is UiStateKind.Error or
+            UiStateKind.Forbidden or
+            UiStateKind.SessionExpired or
+            UiStateKind.Offline
+                ? "alert"
+                : "status";
+
+    private string AriaLive =>
+        Role == "alert"
+            ? "assertive"
+            : "polite";
+
+    private string Symbol =>
+        Kind switch
+        {
+            UiStateKind.Loading => "…",
+            UiStateKind.Empty => "○",
+            UiStateKind.Partial => "◐",
+            UiStateKind.Stale => "◷",
+            UiStateKind.Offline => "↯",
+            UiStateKind.Forbidden => "⊘",
+            UiStateKind.SessionExpired => "⌛",
+            UiStateKind.NotFound => "404",
+            UiStateKind.Error => "!",
+            _ => "•",
+        };
+
+    private Task InvokeActionAsync() =>
+        OnAction.InvokeAsync();
+}

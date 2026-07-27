@@ -1,8 +1,37 @@
-<Router AppAssembly="typeof(App).Assembly">
+<Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+        <ErrorBoundary @key="routeData.PageType">
+            <ChildContent>
+                <RouteView RouteData="@routeData"
+                           DefaultLayout="@typeof(MainLayout)" />
+                <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+            </ChildContent>
+            <ErrorContent>
+                <LayoutView Layout="@typeof(MainLayout)">
+                    <UiStatePanel Kind="@UiStateKind.Error"
+                                  Title="This view could not be displayed"
+                                  Message="The application kept your session, but this route failed to render. Open another section or reload the page."
+                                  ActionLabel="Open home"
+                                  OnAction="@OpenHome" />
+                </LayoutView>
+            </ErrorContent>
+        </ErrorBoundary>
     </Found>
     <NotFound>
-        <p>Page not found.</p>
+        <LayoutView Layout="@typeof(MainLayout)">
+            <UiStatePanel Kind="@UiStateKind.NotFound"
+                          Title="Page not found"
+                          Message="The requested address is not part of the current Dispatcher workspace."
+                          ActionLabel="Open home"
+                          OnAction="@OpenHome" />
+        </LayoutView>
     </NotFound>
 </Router>
+
+@code {
+    [Inject]
+    private NavigationManager Navigation { get; set; } = default!;
+
+    private void OpenHome() =>
+        Navigation.NavigateTo("/home");
+}

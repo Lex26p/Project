@@ -1,5 +1,38 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject ShellPresentationState Presentation
 
-<main class="kiosk-shell" aria-label="Assigned terminal content">
-    @Body
-</main>
+<div class="kiosk-shell"
+     data-theme="@Presentation.ThemeToken"
+     data-density="@Presentation.DensityToken">
+    <header class="kiosk-header">
+        <div class="shell-brand shell-brand--kiosk">
+            <span class="shell-brand__mark" aria-hidden="true">
+                <span></span><span></span><span></span>
+            </span>
+            <span class="shell-brand__text">
+                <strong>Dispatcher</strong>
+                <small>Assigned terminal</small>
+            </span>
+        </div>
+        <UiBadge Text="Read-only display"
+                 Category="@UiBadgeCategory.State"
+                 Tone="@UiBadgeTone.Information" />
+    </header>
+
+    <main class="kiosk-main"
+          aria-label="Assigned terminal content">
+        @Body
+    </main>
+</div>
+
+@code {
+    protected override void OnInitialized() =>
+        Presentation.Changed += HandlePresentationChanged;
+
+    public void Dispose() =>
+        Presentation.Changed -= HandlePresentationChanged;
+
+    private void HandlePresentationChanged() =>
+        _ = InvokeAsync(StateHasChanged);
+}

@@ -1,9 +1,17 @@
 @inject NavigationManager Navigation
 
-<form @onsubmit="Submit" @onsubmit:preventDefault>
-    <label>
-        <span>Search</span>
-        <input @bind="query" aria-label="Global search" />
+<form class="workspace-search"
+      role="search"
+      @onsubmit="Submit"
+      @onsubmit:preventDefault>
+    <label class="workspace-search__field">
+        <span class="workspace-search__icon" aria-hidden="true">⌕</span>
+        <span class="visually-hidden">Global search</span>
+        <input @bind="query"
+               aria-label="Global search"
+               autocomplete="off"
+               placeholder="Search workspace" />
+        <kbd aria-hidden="true">Enter</kbd>
     </label>
 </form>
 
@@ -12,9 +20,12 @@
 
     private void Submit()
     {
-        if (!string.IsNullOrWhiteSpace(query))
+        if (string.IsNullOrWhiteSpace(query))
         {
-            Navigation.NavigateTo($"/search?q={Uri.EscapeDataString(query.Trim())}");
+            return;
         }
+
+        Navigation.NavigateTo(
+            $"/search?q={Uri.EscapeDataString(query.Trim())}");
     }
 }

@@ -1,0 +1,24 @@
+<span class="ui-badge"
+      data-category="@CategoryToken"
+      data-tone="@ToneToken">
+    @Text
+</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Text { get; set; } = string.Empty;
+
+    [Parameter]
+    public UiBadgeCategory Category { get; set; } =
+        UiBadgeCategory.State;
+
+    [Parameter]
+    public UiBadgeTone Tone { get; set; } =
+        UiBadgeTone.Neutral;
+
+    private string CategoryToken =>
+        Category.ToString().ToLowerInvariant();
+
+    private string ToneToken =>
+        Tone.ToString().ToLowerInvariant();
+}
