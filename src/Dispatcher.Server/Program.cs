@@ -292,4 +292,22 @@ if (terminalsEnabled)
     app.MapTerminalRuntimeServer();
 }
 app.MapFallbackToFile("index.html");
-app.Run();
+using var shutdown = new CancellationTokenSource();
+if (string.Equals(
+        Environment.GetEnvironmentVariable("DISPATCHER_PROCESS_CONTROL_STDIN"),
+        "1",
+        StringComparison.Ordinal) &&
+    Console.IsInputRedirected)
+{
+    _ = Task.Run(() => WatchShutdownInputAsync(shutdown));
+}
+await app.RunAsync(shutdown.Token);
+
+static async Task WatchShutdownInputAsync(CancellationTokenSource shutdown)
+{
+    var command = await Console.In.ReadLineAsync().ConfigureAwait(false);
+    if (string.Equals(command, "shutdown", StringComparison.Ordinal))
+    {
+        shutdown.Cancel();
+    }
+}

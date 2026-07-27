@@ -12,6 +12,14 @@ try
         eventArgs.Cancel = true;
         shutdown.Cancel();
     };
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("DISPATCHER_PROCESS_CONTROL_STDIN"),
+            "1",
+            StringComparison.Ordinal) &&
+        Console.IsInputRedirected)
+    {
+        _ = Task.Run(() => WatchShutdownInputAsync(shutdown));
+    }
 
     var application = new RuntimeHostApplication(
         cancellationToken => ValueTask.FromResult<IRuntimeHostSession>(
@@ -47,3 +55,12 @@ catch (Exception exception) when (
 
 static bool IsTransientFailure(Exception exception) =>
     exception is NpgsqlException or TimeoutException or IOException;
+
+static async Task WatchShutdownInputAsync(CancellationTokenSource shutdown)
+{
+    var command = await Console.In.ReadLineAsync().ConfigureAwait(false);
+    if (string.Equals(command, "shutdown", StringComparison.Ordinal))
+    {
+        shutdown.Cancel();
+    }
+}

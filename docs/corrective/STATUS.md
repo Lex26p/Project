@@ -17,11 +17,11 @@
 | C04 | Complete | Автоматическая History → Alarm → Event pipeline реализована и принята |
 | C05 | Complete | PostgreSQL published current reader подключён к Server и принят |
 | C06 | Complete | Same-origin Web, production session и runtime realtime реализованы и приняты |
-| C07 | Ready | Prerequisites C01–C06 выполнены; Gate R2 |
+| C07 | Complete | Межпроцессный Simulator E2E и recovery corpus реализованы и приняты |
 | C08 | Ready | Production Web composition C06 выполнена |
 | C09 | Planned | После runtime pipeline и Web shell |
 | C10 | Planned | После current feed и Web shell |
-| C11 | Planned | После Simulator E2E |
+| C11 | Ready | Межпроцессный Simulator E2E C07 выполнен |
 | C12 | Planned | После configuration reconciliation |
 | C13 | Planned | После configuration reconciliation |
 | C14 | Planned | После обоих protocol adapters |
