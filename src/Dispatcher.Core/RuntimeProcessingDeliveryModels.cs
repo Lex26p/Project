@@ -15,6 +15,26 @@ public enum RuntimeDownstreamDeliveryState
     Completed = 2,
 }
 
+public enum RuntimeDownstreamStage
+{
+    History = 1,
+    Alarm = 2,
+    Event = 3,
+}
+
+public enum RuntimeDownstreamStageCommitStatus
+{
+    Completed = 1,
+    AlreadyCompleted = 2,
+}
+
+public sealed record RuntimeDownstreamStageCommit(
+    RuntimeDownstreamStageCommitStatus Status,
+    RuntimeScopeId ScopeId,
+    OwnerPosition<RuntimeSourceObligation> ObligationPosition,
+    RuntimeDownstreamStage Stage,
+    DateTimeOffset UpdatedAt);
+
 public enum RuntimePublicationCommitStatus
 {
     Published = 1,
