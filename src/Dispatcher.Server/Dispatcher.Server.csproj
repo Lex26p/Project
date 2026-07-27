@@ -9,6 +9,7 @@
     <ProjectReference Include="..\Dispatcher.Events\Dispatcher.Events.csproj" />
     <ProjectReference Include="..\Dispatcher.Notifications\Dispatcher.Notifications.csproj" />
     <PackageReference Include="Npgsql" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Dispatcher.Core\Dispatcher.Core.csproj" />
@@ -22,5 +23,6 @@
     <ProjectReference Include="..\Dispatcher.Semantics\Dispatcher.Semantics.csproj" />
     <ProjectReference Include="..\Dispatcher.Simulator\Dispatcher.Simulator.csproj" />
     <ProjectReference Include="..\Dispatcher.Workspace\Dispatcher.Workspace.csproj" />
+    <ProjectReference Include="..\Dispatcher.Web\Dispatcher.Web.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

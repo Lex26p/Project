@@ -60,6 +60,14 @@ public sealed class RealtimeWidgetState
 
     public void MarkDisconnected() => NeedsResync = true;
 
+    public void InvalidateSession()
+    {
+        points.Clear();
+        PermissionInvalidated = true;
+        NeedsResync = true;
+        HasPendingRender = true;
+    }
+
     public bool ConsumeRenderRequest()
     {
         var result = HasPendingRender;

@@ -1,13 +1,27 @@
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace Dispatcher.Web;
 
 public sealed class RealtimeWidgetClient : IAsyncDisposable
 {
-    private readonly HubConnection connection;
+    private readonly NavigationManager? navigation;
+    private readonly IdentitySessionState? identity;
     private readonly RealtimeWidgetState state = new();
+    private HubConnection? connection;
+    private ulong connectionGeneration;
     private Guid scopeId;
     private IReadOnlyCollection<Guid>? pointIds;
+
+    public RealtimeWidgetClient(NavigationManager navigation, IdentitySessionState identity)
+    {
+        ArgumentNullException.ThrowIfNull(navigation);
+        ArgumentNullException.ThrowIfNull(identity);
+        this.navigation = navigation;
+        this.identity = identity;
+        identity.Changed += OnSessionChanged;
+    }
 
     public RealtimeWidgetClient(HubConnection connection)
     {
@@ -29,24 +43,29 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
     {
         scopeId = runtimeScopeId;
         pointIds = requestedPointIds;
-        if (connection.State == HubConnectionState.Disconnected)
-        {
-            await connection.StartAsync(cancellationToken);
-        }
-
+        await EnsureConnectionAsync(cancellationToken);
         await ResnapshotAsync(cancellationToken);
     }
 
     public async Task PollAsync(CancellationToken cancellationToken)
     {
-        if (connection.State == HubConnectionState.Disconnected)
+        var previousGeneration = connectionGeneration;
+        await EnsureConnectionAsync(cancellationToken);
+        if (identity is not null && previousGeneration != connectionGeneration)
         {
-            await connection.StartAsync(cancellationToken);
             await ResnapshotAsync(cancellationToken);
             return;
         }
 
-        var poll = await connection.InvokeAsync<RealtimePollPayload>(
+        var activeConnection = connection!;
+        if (activeConnection.State == HubConnectionState.Disconnected)
+        {
+            await activeConnection.StartAsync(cancellationToken);
+            await ResnapshotAsync(cancellationToken);
+            return;
+        }
+
+        var poll = await activeConnection.InvokeAsync<RealtimePollPayload>(
             "Poll",
             scopeId,
             state.Cursor,
@@ -57,6 +76,10 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
         }
 
         state.ApplyPoll(poll);
+        if (state.PermissionInvalidated && identity is not null)
+        {
+            identity.Clear();
+        }
         if (state.NeedsResync && !state.PermissionInvalidated)
         {
             await ResnapshotAsync(cancellationToken);
@@ -69,18 +92,28 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        connection.Closed -= OnClosedAsync;
-        await connection.DisposeAsync();
+        if (identity is not null)
+        {
+            identity.Changed -= OnSessionChanged;
+        }
+
+        if (connection is not null)
+        {
+            connection.Closed -= OnClosedAsync;
+            await connection.DisposeAsync();
+        }
     }
 
     private async Task ResnapshotAsync(CancellationToken cancellationToken)
     {
+        var activeConnection = connection
+            ?? throw new InvalidOperationException("The realtime connection is not available.");
         var snapshot = pointIds is null
-            ? await connection.InvokeAsync<RuntimeSnapshotPayload>(
+            ? await activeConnection.InvokeAsync<RuntimeSnapshotPayload>(
                 "Bootstrap",
                 scopeId,
                 cancellationToken)
-            : await connection.InvokeAsync<RuntimeSnapshotPayload>(
+            : await activeConnection.InvokeAsync<RuntimeSnapshotPayload>(
                 "BootstrapPoints",
                 scopeId,
                 pointIds,
@@ -102,4 +135,45 @@ public sealed class RealtimeWidgetClient : IAsyncDisposable
         state.MarkDisconnected();
         return Task.CompletedTask;
     }
+
+    private async Task EnsureConnectionAsync(CancellationToken cancellationToken)
+    {
+        if (identity is null)
+        {
+            if (connection!.State == HubConnectionState.Disconnected)
+            {
+                await connection.StartAsync(cancellationToken);
+            }
+            return;
+        }
+
+        var session = identity.Session
+            ?? throw new InvalidOperationException("An authenticated session is required.");
+        if (connection is null || connectionGeneration != identity.Generation)
+        {
+            if (connection is not null)
+            {
+                connection.Closed -= OnClosedAsync;
+                await connection.DisposeAsync();
+            }
+
+            connection = new HubConnectionBuilder()
+                .WithUrl(new Uri(new Uri(navigation!.BaseUri), "hubs/runtime"), options =>
+                {
+                    options.Transports = HttpTransportType.LongPolling;
+                    options.Headers["Authorization"] =
+                        $"Dispatcher-Session {session.AccessToken}";
+                })
+                .Build();
+            connection.Closed += OnClosedAsync;
+            connectionGeneration = identity.Generation;
+        }
+
+        if (connection.State == HubConnectionState.Disconnected)
+        {
+            await connection.StartAsync(cancellationToken);
+        }
+    }
+
+    private void OnSessionChanged() => state.InvalidateSession();
 }

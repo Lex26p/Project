@@ -158,6 +158,64 @@ public sealed class IdentityStore
             row.IssuedAt, row.ExpiresAt, permissions));
     }
 
+    public async Task<Result<IdentitySessionBootstrap>> ReadSessionBootstrapAsync(
+        SessionSnapshot session,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var validation = SessionAuthorization.ValidateSession(session, clock);
+        if (validation.IsFailure)
+            return Result.Failure<IdentitySessionBootstrap>(validation.Error!);
+        await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, token).ConfigureAwait(false);
+        var account = await ReadAccountBySubjectAsync(
+            connection, transaction, session.SubjectId.Value, token).ConfigureAwait(false);
+        if (account is null || !account.Enabled)
+            return InvalidSession<IdentitySessionBootstrap>();
+        var scopes = new HashSet<IdentityScopeId>();
+        await using (var command = new NpgsqlCommand($"""
+            SELECT DISTINCT permission_code, scope_id
+            FROM {IdentityMigrations.Schema}.role_permission
+            WHERE scope_id IS NOT NULL AND role_id IN (
+                SELECT role_id FROM {IdentityMigrations.Schema}.account_role WHERE account_id=@account
+                UNION
+                SELECT group_role.role_id FROM {IdentityMigrations.Schema}.group_member
+                JOIN {IdentityMigrations.Schema}.group_role USING (group_id) WHERE account_id=@account);
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("account", account.AccountId);
+            await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                var permission = PermissionCode.From(reader.GetString(0));
+                if (session.Permissions.Allows(permission))
+                    scopes.Add(IdentityScopeId.From(reader.GetGuid(1)));
+            }
+        }
+        var ordered = scopes.OrderBy(value => value.Value).ToArray();
+        var primary = account.PrimaryScopeId is not null
+            ? IdentityScopeId.From(account.PrimaryScopeId.Value)
+            : (IdentityScopeId?)null;
+        var defaultScope = primary is not null && scopes.Contains(primary.Value)
+            ? primary
+            : ordered.Length > 0
+                ? ordered[0]
+                : null;
+        await transaction.CommitAsync(token).ConfigureAwait(false);
+        return Result.Success(new IdentitySessionBootstrap(
+            IdentityAccountId.From(account.AccountId),
+            session.Id,
+            session.SubjectId,
+            session.ExpiresAt,
+            ordered,
+            defaultScope,
+            session.Permissions.Grants
+                .Where(session.Permissions.Allows)
+                .OrderBy(value => value.Value)
+                .ToArray()));
+    }
+
     public async Task<Result> RevokeAsync(string accessToken, CancellationToken token = default)
     {
         if (!TryParseToken(accessToken, out var sessionId)) return InvalidSession();

@@ -37,6 +37,14 @@ public sealed record RefreshSessionPayload(string RefreshToken);
 public sealed record ProductionSessionPayload(
     Guid AccountId, Guid SessionId, string AccessToken, string RefreshToken,
     DateTimeOffset ExpiresAt, DateTimeOffset RefreshExpiresAt);
+public sealed record SessionBootstrapPayload(
+    Guid AccountId,
+    Guid SessionId,
+    Guid SubjectId,
+    DateTimeOffset ExpiresAt,
+    IReadOnlyList<Guid> AllowedScopeIds,
+    Guid? DefaultScopeId,
+    IReadOnlyList<string> Permissions);
 public sealed record IdentityGrantPayload(string Permission, Guid? ScopeId);
 public sealed record CreateRolePayload(Guid RoleId, string Name, IReadOnlyList<IdentityGrantPayload> Grants);
 public sealed record UpdateRolePayload(ulong ExpectedVersion, string PreviewFingerprint, IReadOnlyList<IdentityGrantPayload> Grants);
@@ -72,6 +80,7 @@ public static class IdentityEndpoints
         auth.MapPost("/login", LoginAsync);
         auth.MapPost("/refresh", RefreshAsync);
         auth.MapPost("/revoke", RevokeAsync);
+        auth.MapGet("/bootstrap", BootstrapAsync);
         var admin = endpoints.MapGroup("/api/administration/identity");
         admin.MapPost("/scopes", CreateScopeAsync);
         admin.MapPost("/roles", CreateRoleAsync);
@@ -102,6 +111,29 @@ public static class IdentityEndpoints
             ? Result.Failure(new OperationError(ErrorCode.From("identity.session_invalid"), "Production session credential is invalid or expired."))
             : await store.RevokeAsync(presentation.Token, token).ConfigureAwait(false);
         return result.IsSuccess ? Results.NoContent() : Problem(result.Error!);
+    }
+    private static async Task<IResult> BootstrapAsync(
+        HttpContext context,
+        RequestSessionResolver sessions,
+        IdentityStore store,
+        CancellationToken token)
+    {
+        var session = sessions.Resolve(context);
+        if (session is null)
+            return Problem(new OperationError(
+                ErrorCode.From("session.anonymous"),
+                "An active production session is required."));
+        var result = await store.ReadSessionBootstrapAsync(session, token).ConfigureAwait(false);
+        return result.IsSuccess
+            ? Results.Ok(new SessionBootstrapPayload(
+                result.Value.AccountId.Value,
+                result.Value.SessionId.Value,
+                result.Value.SubjectId.Value,
+                result.Value.ExpiresAt,
+                result.Value.AllowedScopes.Select(value => value.Value).ToArray(),
+                result.Value.DefaultScope?.Value,
+                result.Value.Permissions.Select(value => value.Value).ToArray()))
+            : Problem(result.Error!);
     }
 
     private static async Task<IResult> CreateScopeAsync(CreateScopePayload request, HttpContext context,

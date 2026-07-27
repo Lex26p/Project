@@ -387,6 +387,7 @@
           "Dispatcher.Simulator": "[1.0.0, )",
           "Dispatcher.Terminals": "[1.0.0, )",
           "Dispatcher.Workspace": "[1.0.0, )",
+          "Microsoft.AspNetCore.Components.WebAssembly.Server": "[10.0.10, )",
           "Npgsql": "[10.0.3, )"
         }
       },
@@ -442,6 +443,15 @@
         "contentHash": "0Zib7U6HmGw4Noj/+yJz1YuEJwo3XOV0iLezXDLFsrHTaC8L+KUOR/1+1tX7AAeipDG6jP3gPZOwpirk6G3LYQ==",
         "dependencies": {
           "Microsoft.JSInterop.WebAssembly": "10.0.10"
+        }
+      },
+      "Microsoft.AspNetCore.Components.WebAssembly.Server": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "4VZTIYe3nJ3im3ILpcpPp9LJbJ43lYeDAJSQQosAogz889by8FRaMCpjo8YFeXLBFDGpNYJSBPNBYLdeq8bn1A==",
+        "dependencies": {
+          "Microsoft.AspNetCore.Components.WebAssembly": "10.0.10"
         }
       }
     }

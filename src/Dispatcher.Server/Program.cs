@@ -210,6 +210,21 @@ if (commandEnabled)
 }
 
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        if (context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            context.Response.Headers.CacheControl = "no-store, no-cache";
+            context.Response.Headers.Pragma = "no-cache";
+        }
+        return Task.CompletedTask;
+    });
+    await next(context);
+});
+app.UseBlazorFrameworkFiles();
+app.UseStaticFiles();
 if (identityEnabled && !string.IsNullOrWhiteSpace(identityBootstrapUserName) &&
     !string.IsNullOrWhiteSpace(identityBootstrapPassword))
 {
@@ -276,4 +291,5 @@ if (terminalsEnabled)
 {
     app.MapTerminalRuntimeServer();
 }
+app.MapFallbackToFile("index.html");
 app.Run();

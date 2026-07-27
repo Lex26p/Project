@@ -43,6 +43,21 @@ public sealed class RealtimeWidgetStateTests
         Assert.True(state.HasPendingRender);
     }
 
+    [Fact]
+    public void SessionReplacementClearsPreviouslyAuthorizedValues()
+    {
+        var state = new RealtimeWidgetState();
+        state.ApplySnapshot(Snapshot(10));
+        state.ConsumeRenderRequest();
+
+        state.InvalidateSession();
+
+        Assert.True(state.PermissionInvalidated);
+        Assert.True(state.NeedsResync);
+        Assert.Empty(state.Points);
+        Assert.True(state.ConsumeRenderRequest());
+    }
+
     private static RuntimeSnapshotPayload Snapshot(long value) =>
         new(ScopeId, 0, [Point(value)]);
 

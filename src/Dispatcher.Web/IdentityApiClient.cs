@@ -6,6 +6,14 @@ namespace Dispatcher.Web;
 public sealed record ProductionSessionPayload(
     Guid AccountId, Guid SessionId, string AccessToken, string RefreshToken,
     DateTimeOffset ExpiresAt, DateTimeOffset RefreshExpiresAt);
+public sealed record SessionBootstrapPayload(
+    Guid AccountId,
+    Guid SessionId,
+    Guid SubjectId,
+    DateTimeOffset ExpiresAt,
+    IReadOnlyList<Guid> AllowedScopeIds,
+    Guid? DefaultScopeId,
+    IReadOnlyList<string> Permissions);
 public sealed record IdentityDiagnosticPayload(
     int Kind, int Status, string Summary, bool SecretConfigured, DateTimeOffset CheckedAt);
 public sealed record IdentityGrantPayload(string Permission, Guid? ScopeId);
@@ -13,12 +21,30 @@ public sealed record RoleImpactPayload(
     Guid RoleId, IReadOnlyList<string> Added, IReadOnlyList<string> Removed,
     int AffectedAccounts, int ActiveSessions, string Fingerprint);
 
-public sealed class IdentitySessionState
+public sealed class IdentitySessionState(HttpClient http)
 {
     public ProductionSessionPayload? Session { get; private set; }
+    public SessionBootstrapPayload? Bootstrap { get; private set; }
+    public ulong Generation { get; private set; }
     public bool IsAuthenticated => Session is not null;
-    internal void Set(ProductionSessionPayload value) => Session = value;
-    internal void Clear() => Session = null;
+    public event Action? Changed;
+    internal void Set(ProductionSessionPayload value, SessionBootstrapPayload bootstrap)
+    {
+        Session = value;
+        Bootstrap = bootstrap;
+        http.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Dispatcher-Session", value.AccessToken);
+        Generation = checked(Generation + 1);
+        Changed?.Invoke();
+    }
+    internal void Clear()
+    {
+        Session = null;
+        Bootstrap = null;
+        http.DefaultRequestHeaders.Authorization = null;
+        Generation = checked(Generation + 1);
+        Changed?.Invoke();
+    }
 }
 
 public sealed class IdentityApiClient(HttpClient http, IdentitySessionState state)
@@ -26,9 +52,10 @@ public sealed class IdentityApiClient(HttpClient http, IdentitySessionState stat
     public async Task<bool> LoginAsync(string userName, string password, CancellationToken token = default)
     {
         var response = await http.PostAsJsonAsync("api/auth/login", new { UserName = userName, Password = password }, token);
-        if (!response.IsSuccessStatusCode) return false;
-        Apply((await response.Content.ReadFromJsonAsync<ProductionSessionPayload>(token))!);
-        return true;
+        if (!response.IsSuccessStatusCode) { Clear(); return false; }
+        return await ApplyAsync(
+            (await response.Content.ReadFromJsonAsync<ProductionSessionPayload>(token))!,
+            token);
     }
 
     public async Task<bool> RefreshAsync(CancellationToken token = default)
@@ -36,8 +63,9 @@ public sealed class IdentityApiClient(HttpClient http, IdentitySessionState stat
         if (state.Session is null) return false;
         var response = await http.PostAsJsonAsync("api/auth/refresh", new { state.Session.RefreshToken }, token);
         if (!response.IsSuccessStatusCode) { Clear(); return false; }
-        Apply((await response.Content.ReadFromJsonAsync<ProductionSessionPayload>(token))!);
-        return true;
+        return await ApplyAsync(
+            (await response.Content.ReadFromJsonAsync<ProductionSessionPayload>(token))!,
+            token);
     }
 
     public async Task RevokeAsync(CancellationToken token = default)
@@ -99,15 +127,29 @@ public sealed class IdentityApiClient(HttpClient http, IdentitySessionState stat
             Grants = new[] { grant },
         }, token);
 
-    private void Apply(ProductionSessionPayload session)
+    private async Task<bool> ApplyAsync(
+        ProductionSessionPayload session,
+        CancellationToken token)
     {
-        state.Set(session);
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Dispatcher-Session", session.AccessToken);
+        var response = await http.GetAsync("api/auth/bootstrap", token);
+        if (!response.IsSuccessStatusCode)
+        {
+            Clear();
+            return false;
+        }
+        var bootstrap = await response.Content.ReadFromJsonAsync<SessionBootstrapPayload>(token);
+        if (bootstrap is null || bootstrap.SessionId != session.SessionId)
+        {
+            Clear();
+            return false;
+        }
+        state.Set(session, bootstrap);
+        return true;
     }
 
     private void Clear()
     {
         state.Clear();
-        http.DefaultRequestHeaders.Authorization = null;
     }
 }

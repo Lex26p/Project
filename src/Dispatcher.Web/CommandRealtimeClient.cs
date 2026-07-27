@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace Dispatcher.Web;
@@ -14,6 +15,7 @@ public sealed class CommandRealtimeClient : IAsyncDisposable
         connection = new HubConnectionBuilder()
             .WithUrl(new Uri(new Uri(navigation.BaseUri), "hubs/commands"), options =>
             {
+                options.Transports = HttpTransportType.LongPolling;
                 if (identity.Session is not null)
                     options.Headers["Authorization"] = $"Dispatcher-Session {identity.Session.AccessToken}";
             })

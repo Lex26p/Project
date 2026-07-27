@@ -99,6 +99,14 @@ public sealed record RefreshProductionSession(string RefreshToken);
 public sealed record ProductionSessionIssue(
     IdentityAccountId AccountId, SessionSnapshot Session, string AccessToken, string RefreshToken,
     DateTimeOffset RefreshExpiresAt);
+public sealed record IdentitySessionBootstrap(
+    IdentityAccountId AccountId,
+    SessionId SessionId,
+    SubjectId SubjectId,
+    DateTimeOffset ExpiresAt,
+    IReadOnlyList<IdentityScopeId> AllowedScopes,
+    IdentityScopeId? DefaultScope,
+    IReadOnlyList<PermissionCode> Permissions);
 public sealed class StepUpAttestation
 {
     internal StepUpAttestation(

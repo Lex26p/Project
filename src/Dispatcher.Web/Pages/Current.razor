@@ -1,15 +1,15 @@
 @page "/current"
-@inject IConfiguration Configuration
+@inject IdentitySessionState Session
 
 <PageTitle>Current values</PageTitle>
 
 <GuardedContent Route="/current">
-    @if (Guid.TryParse(Configuration["Dispatcher:RuntimeScopeId"], out var scopeId))
+    @if (Session.Bootstrap?.DefaultScopeId is Guid scopeId)
     {
         <CurrentValueWidget ScopeId="scopeId" />
     }
     else
     {
-        <p>Runtime scope is not configured.</p>
+        <p>No accessible runtime scope is available.</p>
     }
 </GuardedContent>
