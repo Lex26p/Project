@@ -225,6 +225,14 @@ public static partial class CoreRuntimeMigrations
                     4,
                     "published current read role boundary",
                     publishedReadBoundarySql),
+                new MigrationStep(
+                    5,
+                    "durable Alarm definition epoch",
+                    $"""
+                    ALTER TABLE {Schema}.processing_delivery
+                    ADD COLUMN alarm_definition_epoch bigint NULL
+                        CHECK (alarm_definition_epoch > 0);
+                    """),
             ]);
     }
 

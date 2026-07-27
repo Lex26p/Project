@@ -63,7 +63,8 @@ public sealed record RuntimeProcessingDelivery(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? DownstreamCompletedAt,
-    DateTimeOffset? PublishedAt)
+    DateTimeOffset? PublishedAt,
+    RevisionNumber? AlarmDefinitionEpoch = null)
 {
     public RuntimeScopeId ScopeId => Obligation.ScopeId;
 

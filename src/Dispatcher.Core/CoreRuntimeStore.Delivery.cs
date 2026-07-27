@@ -13,10 +13,18 @@ public sealed partial class CoreRuntimeStore
         RuntimeCutAcceptance? postCutAcceptance,
         bool protectedContinuity,
         Guid? definitionEpoch = null,
+        RevisionNumber? alarmDefinitionEpoch = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentNullException.ThrowIfNull(obligation);
+        if (alarmDefinitionEpoch is { } epoch && !epoch.IsDefined)
+        {
+            return DeliveryFailure(
+                "runtime.delivery_alarm_epoch",
+                "Alarm definition epoch must be defined when supplied.");
+        }
+
         var validation = ValidatePendingDelivery(checkpoint, obligation, postCutAcceptance);
         if (validation.IsFailure)
         {
@@ -101,11 +109,11 @@ public sealed partial class CoreRuntimeStore
                          INSERT INTO {CoreRuntimeMigrations.Schema}.processing_delivery
                              (scope_id, obligation_position, fact_class, stage,
                               post_cut_acceptance, gap_reason, definition_epoch,
-                              created_at, updated_at)
+                              alarm_definition_epoch, created_at, updated_at)
                          VALUES
                              (@scope_id, @position, @fact_class, @stage,
                               @post_cut_acceptance, @gap_reason, @definition_epoch,
-                              @created_at, @updated_at);
+                              @alarm_definition_epoch, @created_at, @updated_at);
                          """,
                          connection,
                          transaction))
@@ -133,6 +141,12 @@ public sealed partial class CoreRuntimeStore
                 "definition_epoch",
                 NpgsqlDbType.Uuid,
                 (object?)definitionEpoch ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "alarm_definition_epoch",
+                NpgsqlDbType.Bigint,
+                alarmDefinitionEpoch is null
+                    ? DBNull.Value
+                    : checked((long)alarmDefinitionEpoch.Value.Value));
             command.Parameters.AddWithValue("created_at", now);
             command.Parameters.AddWithValue("updated_at", now);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -153,7 +167,8 @@ public sealed partial class CoreRuntimeStore
             now,
             now,
             null,
-            null));
+            null,
+            alarmDefinitionEpoch));
     }
 
     public async Task<RuntimeProcessingDelivery?> LoadPendingDeliveryAsync(
@@ -170,7 +185,8 @@ public sealed partial class CoreRuntimeStore
                          SELECT obligation_position, stage, post_cut_acceptance::text,
                                 gap_reason, definition_epoch, history_state, alarm_state,
                                 event_state, last_error_code, last_error_at, created_at,
-                                updated_at, downstream_completed_at, published_at
+                                updated_at, downstream_completed_at, published_at,
+                                alarm_definition_epoch
                          FROM {CoreRuntimeMigrations.Schema}.processing_delivery
                          WHERE scope_id = @scope_id AND stage < 3
                          ORDER BY obligation_position
@@ -197,7 +213,11 @@ public sealed partial class CoreRuntimeStore
                     reader.GetFieldValue<DateTimeOffset>(10),
                     reader.GetFieldValue<DateTimeOffset>(11),
                     reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12),
-                    reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13));
+                    reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13),
+                    reader.IsDBNull(14)
+                        ? null
+                        : RevisionNumber.From(
+                            checked((ulong)reader.GetInt64(14))));
             }
         }
 
@@ -244,7 +264,8 @@ public sealed partial class CoreRuntimeStore
             row.CreatedAt,
             row.UpdatedAt,
             row.DownstreamCompletedAt,
-            row.PublishedAt);
+            row.PublishedAt,
+            row.AlarmDefinitionEpoch);
     }
 
     private static Result ValidatePendingDelivery(
@@ -377,7 +398,8 @@ public sealed partial class CoreRuntimeStore
         DateTimeOffset CreatedAt,
         DateTimeOffset UpdatedAt,
         DateTimeOffset? DownstreamCompletedAt,
-        DateTimeOffset? PublishedAt);
+        DateTimeOffset? PublishedAt,
+        RevisionNumber? AlarmDefinitionEpoch);
 
     private sealed record ProcessingAcceptanceDto(
         CurrentDto[] CurrentTransitions,
