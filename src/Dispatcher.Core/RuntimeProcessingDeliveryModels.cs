@@ -15,6 +15,20 @@ public enum RuntimeDownstreamDeliveryState
     Completed = 2,
 }
 
+public enum RuntimePublicationCommitStatus
+{
+    Published = 1,
+    AlreadyPublished = 2,
+}
+
+public sealed record RuntimePublicationCommit(
+    RuntimePublicationCommitStatus Status,
+    RuntimeScopeId ScopeId,
+    OwnerPosition<RuntimeSourceObligation> ObligationPosition,
+    ConsumerCursor<CurrentEntry> CurrentCursor,
+    int PublishedTransitionCount,
+    int RetainedDeltaCount);
+
 public sealed record RuntimeProcessingDelivery(
     RuntimeSourceObligation Obligation,
     RuntimeProcessingDeliveryStage Stage,
