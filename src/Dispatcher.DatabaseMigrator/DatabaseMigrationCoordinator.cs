@@ -1,3 +1,4 @@
+using Dispatcher.Core;
 using Dispatcher.Persistence;
 using Npgsql;
 
@@ -21,7 +22,12 @@ public static class DatabaseMigrationCoordinator
             try
             {
                 string databaseRole = configuration.GetDatabaseRole(registration.Owner);
-                ModuleMigrationPlan plan = registration.CreatePlan(databaseRole);
+                ModuleMigrationPlan plan = registration.Owner == CoreRuntimeMigrations.Owner
+                    ? CoreRuntimeMigrations.CreatePlan(
+                        databaseRole,
+                        configuration.GetDatabaseRole(
+                            CoreRuntimeMigrations.PublishedReadRoleKey))
+                    : registration.CreatePlan(databaseRole);
                 int appliedStepCount = await PostgresMigrationRunner.ApplyAsync(
                     dataSource,
                     plan,

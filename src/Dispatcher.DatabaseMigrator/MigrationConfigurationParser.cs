@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Dispatcher.Core;
 
 namespace Dispatcher.DatabaseMigrator;
 
@@ -40,6 +41,32 @@ public static class MigrationConfigurationParser
             {
                 errors.Add(
                     $"Environment variable '{variableName}' must contain a valid PostgreSQL role identifier.");
+            }
+        }
+
+        knownOwners.Add(CoreRuntimeMigrations.PublishedReadRoleKey);
+        string publishedReadVariable = MigrationEnvironmentVariables.GetRoleVariableName(
+            CoreRuntimeMigrations.PublishedReadRoleKey);
+        string? publishedReadRole = ReadRequiredValue(
+            normalizedVariables,
+            publishedReadVariable,
+            errors);
+        if (publishedReadRole is not null &&
+            rolesByOwner.TryGetValue(CoreRuntimeMigrations.Owner, out string? coreOwnerRole))
+        {
+            try
+            {
+                _ = CoreRuntimeMigrations.CreatePlan(
+                    coreOwnerRole,
+                    publishedReadRole);
+                rolesByOwner.Add(
+                    CoreRuntimeMigrations.PublishedReadRoleKey,
+                    publishedReadRole);
+            }
+            catch (ArgumentException)
+            {
+                errors.Add(
+                    $"Environment variable '{publishedReadVariable}' must contain a valid PostgreSQL role identifier.");
             }
         }
 
