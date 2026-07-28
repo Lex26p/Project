@@ -32,6 +32,8 @@ public sealed class WorkspaceRouteTests
         var home = state.BeginNavigation("/home");
         var me = state.BeginNavigation("/me");
 
+        Assert.False(state.IsCurrent(home));
+        Assert.True(state.IsCurrent(me));
         Assert.False(state.CompleteNavigation(home, RouteAccess.Allowed));
         Assert.True(state.CompleteNavigation(me, RouteAccess.Denied));
         Assert.Equal("/me", state.Route);

@@ -8,7 +8,12 @@
 <div class="workspace-shell"
      data-theme="@Presentation.ThemeToken"
      data-density="@Presentation.DensityToken">
-    <a class="skip-link" href="#main-content">Skip to content</a>
+    <a class="skip-link"
+       href="#main-content"
+       @onclick="FocusMainAsync"
+       @onclick:preventDefault>
+        Skip to content
+    </a>
 
     <header class="shell-header">
         <a class="shell-brand" href="/home" aria-label="Dispatcher home">
@@ -91,4 +96,11 @@
 
     private void HandlePresentationChanged() =>
         _ = InvokeAsync(StateHasChanged);
+
+    private async Task FocusMainAsync()
+    {
+        await JavaScript.InvokeAsync<bool>(
+            "dispatcherUi.focusElement",
+            ["main-content"]);
+    }
 }

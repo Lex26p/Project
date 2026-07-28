@@ -43,9 +43,21 @@
         }
     }
 
+    function focusElement(id) {
+        const element =
+            document.getElementById(id);
+        if (!element) {
+            return false;
+        }
+
+        element.focus();
+        return document.activeElement === element;
+    }
+
     window.dispatcherUi = {
         readPreferences,
-        writePreferences
+        writePreferences,
+        focusElement
     };
 
     const initial = readPreferences();

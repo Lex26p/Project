@@ -108,6 +108,128 @@ public sealed class WebShellBrowserTests
 
     [Fact]
     public async Task
+        DirectProtectedRouteSurvivesReloadWithStableSessionState()
+    {
+        await using var scenario =
+            await fixture.CreateScenarioAsync();
+        await scenario.Page.GotoAsync(
+            scenario.Url("/home"));
+        await WaitForMainHeadingAsync(
+            scenario.Page,
+            "Session expired");
+
+        await scenario.Page.ReloadAsync();
+
+        await WaitForMainHeadingAsync(
+            scenario.Page,
+            "Session expired");
+        Assert.EndsWith(
+            "/home",
+            scenario.Page.Url,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task
+        ThemeAndDensityPersistAcrossReload()
+    {
+        await using var scenario =
+            await fixture.CreateScenarioAsync();
+        await scenario.Page.GotoAsync(
+            scenario.Url("/login"));
+        await WaitForHeadingAsync(
+            scenario.Page,
+            "Sign in");
+
+        await scenario.Page
+            .GetByRole(
+                AriaRole.Button,
+                new()
+                {
+                    Name = "Switch color theme",
+                    Exact = true,
+                })
+            .ClickAsync();
+        await scenario.Page
+            .GetByRole(
+                AriaRole.Button,
+                new()
+                {
+                    Name =
+                        "Switch interface density",
+                    Exact = true,
+                })
+            .ClickAsync();
+        await scenario.Page
+            .Locator(
+                ".workspace-shell[data-theme='dark'][data-density='compact']")
+            .WaitForAsync();
+
+        await scenario.Page.ReloadAsync();
+        await WaitForHeadingAsync(
+            scenario.Page,
+            "Sign in");
+
+        await scenario.Page
+            .Locator(
+                ".workspace-shell[data-theme='dark'][data-density='compact']")
+            .WaitForAsync();
+    }
+
+    [Fact]
+    public async Task
+        KeyboardFocusShowsAndActivatesSkipLink()
+    {
+        await using var scenario =
+            await fixture.CreateScenarioAsync();
+        await scenario.Page.GotoAsync(
+            scenario.Url("/login"));
+        await WaitForHeadingAsync(
+            scenario.Page,
+            "Sign in");
+
+        await scenario.Page.Keyboard
+            .PressAsync("Tab");
+        var keyboardFocus =
+            await ReadFocusMetricsAsync(
+                scenario.Page);
+
+        Assert.True(
+            keyboardFocus.OutlineWidth >= 3);
+
+        await scenario.Page
+            .Locator(".skip-link")
+            .FocusAsync();
+        await scenario.Page
+            .WaitForTimeoutAsync(150);
+        var skipLinkFocus =
+            await ReadFocusMetricsAsync(
+                scenario.Page);
+
+        Assert.Contains(
+            "skip-link",
+            skipLinkFocus.ClassName,
+            StringComparison.Ordinal);
+        Assert.True(
+            skipLinkFocus.OutlineWidth >= 3);
+        Assert.True(
+            skipLinkFocus.Top >= 0);
+
+        await scenario.Page.Keyboard
+            .PressAsync("Enter");
+        await scenario.Page
+            .WaitForFunctionAsync(
+                "() => document.activeElement?.id === 'main-content'");
+
+        Assert.Equal(
+            "main-content",
+            await scenario.Page
+                .EvaluateAsync<string>(
+                    "() => document.activeElement?.id ?? ''"));
+    }
+
+    [Fact]
+    public async Task
         ForbiddenRouteRendersStableAccessState()
     {
         await using var scenario =
@@ -350,6 +472,59 @@ public sealed class WebShellBrowserTests
                     State =
                         WaitForSelectorState.Visible,
                 });
+
+    private static Task WaitForMainHeadingAsync(
+        IPage page,
+        string heading) =>
+        page
+            .Locator("#main-content")
+            .GetByRole(
+                AriaRole.Heading,
+                new()
+                {
+                    Name = heading,
+                    Exact = true,
+                })
+            .WaitForAsync(
+                new LocatorWaitForOptions
+                {
+                    State =
+                        WaitForSelectorState.Visible,
+                });
+
+    private static Task<FocusMetrics>
+        ReadFocusMetricsAsync(
+            IPage page) =>
+        page.EvaluateAsync<FocusMetrics>(
+            """
+            () => {
+                const active =
+                    document.activeElement;
+                const style =
+                    getComputedStyle(active);
+                const bounds =
+                    active.getBoundingClientRect();
+                return {
+                    className:
+                        active.className,
+                    outlineWidth:
+                        parseFloat(
+                            style.outlineWidth),
+                    top:
+                        bounds.top
+                };
+            }
+            """);
+
+    private sealed class FocusMetrics
+    {
+        public string ClassName { get; set; } =
+            string.Empty;
+
+        public double OutlineWidth { get; set; }
+
+        public double Top { get; set; }
+    }
 
     private sealed class LayoutMetrics
     {

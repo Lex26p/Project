@@ -18,7 +18,7 @@ public sealed class WorkspaceRouteGuardState
 
     public bool CompleteNavigation(long navigationGeneration, RouteAccess access)
     {
-        if (navigationGeneration != generation)
+        if (!IsCurrent(navigationGeneration))
         {
             return false;
         }
@@ -26,4 +26,7 @@ public sealed class WorkspaceRouteGuardState
         Access = access;
         return true;
     }
+
+    public bool IsCurrent(long navigationGeneration) =>
+        navigationGeneration == generation;
 }

@@ -1,3 +1,4 @@
+@implements IDisposable
 @inject WorkspaceApiClient Api
 @inject IdentitySessionState Session
 @inject NavigationManager Navigation
@@ -24,6 +25,14 @@ else if (state.Access == RouteAccess.SessionExpired)
                   ActionLabel="Sign in"
                   OnAction="@OpenLogin" />
 }
+else if (state.Access == RouteAccess.Unavailable)
+{
+    <UiStatePanel Kind="@UiStateKind.Error"
+                  Title="Authorization unavailable"
+                  Message="The server could not validate access to this route."
+                  ActionLabel="Retry"
+                  OnAction="@ReloadAsync" />
+}
 else if (state.Access == RouteAccess.Denied)
 {
     <UiStatePanel Kind="@UiStateKind.Forbidden"
@@ -37,6 +46,7 @@ else
 
 @code {
     private readonly WorkspaceRouteGuardState state = new();
+    private CancellationTokenSource? navigationCancellation;
     private bool transportOffline;
 
     [Parameter, EditorRequired]
@@ -50,12 +60,22 @@ else
 
     private async Task ReloadAsync()
     {
+        var requestCancellation =
+            new CancellationTokenSource();
+        var previousCancellation =
+            navigationCancellation;
+        navigationCancellation =
+            requestCancellation;
+        previousCancellation?.Cancel();
+
         var generation = state.BeginNavigation(Route);
         transportOffline = false;
         try
         {
             var access =
-                await Api.CheckAccessAsync(Route);
+                await Api.CheckAccessAsync(
+                    Route,
+                    requestCancellation.Token);
             if (state.CompleteNavigation(
                     generation,
                     access) &&
@@ -65,10 +85,37 @@ else
                 Session.Invalidate();
             }
         }
+        catch (OperationCanceledException)
+            when (requestCancellation
+                .IsCancellationRequested)
+        {
+        }
         catch (HttpRequestException)
         {
-            transportOffline = true;
+            if (state.IsCurrent(generation))
+            {
+                transportOffline = true;
+            }
         }
+        finally
+        {
+            if (ReferenceEquals(
+                    navigationCancellation,
+                    requestCancellation))
+            {
+                navigationCancellation = null;
+            }
+
+            requestCancellation.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        var cancellation =
+            navigationCancellation;
+        navigationCancellation = null;
+        cancellation?.Cancel();
     }
 
     private void OpenLogin()

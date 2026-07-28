@@ -167,7 +167,7 @@ corpus намеренно проверяет браузерное поведен
 
 ## 5. Browser scenarios
 
-Реализованы и приняты шесть сценариев:
+Реализованы и приняты девять сценариев:
 
 1. **Login и capability-filtered shell**
    - открывается production Web bundle;
@@ -205,6 +205,21 @@ corpus намеренно проверяет браузерное поведен
    - document и shell не создают критичный horizontal/vertical overflow;
    - shell занимает viewport;
    - основная content area сохраняет рабочую ширину.
+
+7. **Direct protected route и reload**
+   - прямое открытие `/home` обслуживается Web fallback;
+   - отсутствие client session отображается как стабильный `Session expired`;
+   - reload сохраняет route и корректное session state.
+
+8. **Theme и density persistence**
+   - theme и density переключаются независимо;
+   - выбранные значения отражаются в shell attributes;
+   - значения восстанавливаются после полноценного browser reload.
+
+9. **Keyboard focus и skip link**
+   - клавиатурный focus имеет видимый outline;
+   - skip link становится видимым при focus;
+   - активация клавишей `Enter` переносит focus в основную content area.
 
 ## 6. Accessibility и keyboard baseline
 
@@ -266,6 +281,8 @@ corpus намеренно проверяет браузерное поведен
 - `tests/Dispatcher.UnitTests/ReturnUrlPolicyTests.cs`
 - `tests/Dispatcher.UnitTests/ShellPresentationStateTests.cs`
 - `tests/Dispatcher.UnitTests/ShellRouteContextStateTests.cs`
+- `tests/Dispatcher.UnitTests/WorkspaceApiClientTests.cs`
+- `tests/Dispatcher.UnitTests/WorkspaceRouteTests.cs`
 
 ### Browser test layer
 
@@ -292,21 +309,21 @@ dotnet test .\tests\Dispatcher.IntegrationTests\Dispatcher.IntegrationTests.cspr
 dotnet test .\tests\Dispatcher.BrowserTests\Dispatcher.BrowserTests.csproj -c Release --no-build --no-restore
 ```
 
-Результат, подтверждённый пользователем:
+Результат контрольной проверки:
 
 - restore успешен;
 - Release build успешен;
-- Unit: 130 успешно, 0 сбоев, 0 пропущено;
+- Unit: 136 успешно, 0 сбоев, 0 пропущено;
 - Integration: 120 успешно, 0 сбоев, 0 пропущено;
-- Browser: 6 успешно, 0 сбоев, 0 пропущено;
-- всего: 256 тестов успешно.
+- Browser: 9 успешно, 0 сбоев, 0 пропущено;
+- всего: 265 тестов успешно.
 
 Отдельно browser corpus был принят на Windows с Chromium:
 
-- 6 успешно;
+- 9 успешно;
 - 0 сбоев;
 - 0 пропущено;
-- длительность контрольного запуска — 28,8 секунды.
+- длительность контрольного запуска — 20 секунд.
 
 ## 10. Сознательно отложенные UI-области
 
@@ -342,7 +359,7 @@ C08 создаёт shell foundation, но не реализует предмет
 - kiosk изолирован от обычной shell;
 - browser project и reusable fixture встроены в solution;
 - все обязательные browser smoke scenarios проходят;
-- полная контрольная валидация проходит: 256/256.
+- полная контрольная валидация проходит: 265/265.
 
 C08 переводится в `Complete`. C09 и C10 переводятся в `Ready`, поскольку их
 runtime/current prerequisites и Web shell теперь завершены.

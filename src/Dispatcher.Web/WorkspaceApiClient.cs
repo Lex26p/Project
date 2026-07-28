@@ -8,6 +8,7 @@ public enum RouteAccess
     Allowed = 1,
     Denied = 2,
     SessionExpired = 3,
+    Unavailable = 4,
 }
 
 public enum WorkspaceNavigationStatus
@@ -36,7 +37,7 @@ public sealed class WorkspaceApiClient
         string route,
         CancellationToken cancellationToken = default)
     {
-        var response = await http.GetAsync(
+        using var response = await http.GetAsync(
             $"api/workspace/access?route={Uri.EscapeDataString(route)}",
             cancellationToken);
         if (response.IsSuccessStatusCode)
@@ -44,10 +45,14 @@ public sealed class WorkspaceApiClient
             return RouteAccess.Allowed;
         }
 
-        return response.StatusCode ==
-            HttpStatusCode.Unauthorized
-                ? RouteAccess.SessionExpired
-                : RouteAccess.Denied;
+        return response.StatusCode switch
+        {
+            HttpStatusCode.Unauthorized =>
+                RouteAccess.SessionExpired,
+            HttpStatusCode.Forbidden =>
+                RouteAccess.Denied,
+            _ => RouteAccess.Unavailable,
+        };
     }
 
     public Task<
