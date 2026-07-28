@@ -307,6 +307,157 @@ public sealed class DashboardTests(PostgreSqlClusterFixture cluster)
         Assert.Contains("immutable", exception.MessageText, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task RuntimeResolvesExactPublishedMimicAndSubscribesOnlyItsVisibleBindings()
+    {
+        await using var context =
+            await DashboardTestContext.CreateAsync(
+                cluster);
+        var generations =
+            new DashboardSubscriptionGenerationStore();
+        var authoring =
+            new DashboardAuthoringService(
+                context.Store,
+                context.SvgLimits,
+                context.Clock,
+                generations);
+        var mimicId =
+            MimicId.From(
+                Guid.Parse(
+                    "d7000000-0000-7000-8000-000000000010"));
+        var mimicEditor =
+            DashboardTestContext
+                .MimicEditorSession(mimicId);
+        var mimic =
+            context.Mimic(
+                $"""
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+                  <rect x="1" y="1" width="8" height="8" data-binding-id="{context.AllowedBindingId.Value:D}" />
+                </svg>
+                """);
+        var savedMimic =
+            await authoring.SaveMimicAsync(
+                mimicEditor,
+                mimicId,
+                new SaveMimicDraftRequest(
+                    mimic,
+                    null),
+                CancellationToken.None);
+        var validatedMimic =
+            await authoring.ValidateMimicAsync(
+                mimicEditor,
+                mimicId,
+                savedMimic.Value.RevisionId,
+                savedMimic.Value.Version,
+                CancellationToken.None);
+        var publishedMimic =
+            await authoring.PublishMimicAsync(
+                mimicEditor,
+                mimicId,
+                new PublishAuthoringRequest(
+                    validatedMimic.Value
+                        .RevisionId,
+                    validatedMimic.Value.Version),
+                CancellationToken.None);
+
+        var windowId =
+            DashboardWindowId.New();
+        var dashboard =
+            new DashboardDraftContent(
+                "Mimic runtime",
+                null,
+                [
+                    new DashboardWindow(
+                        windowId,
+                        "Process",
+                        [],
+                        [],
+                        DashboardWindowLayout.Mimic,
+                        new DashboardMimicReference(
+                            mimicId,
+                            MimicRevisionId.From(
+                                publishedMimic.Value
+                                    .RevisionId))),
+                ],
+                []);
+        var dashboardEditor =
+            context.DashboardEditorSession();
+        var savedDashboard =
+            await authoring.SaveDashboardAsync(
+                dashboardEditor,
+                context.FirstDashboardId,
+                new SaveDashboardDraftRequest(
+                    dashboard,
+                    null),
+                CancellationToken.None);
+        var validatedDashboard =
+            await authoring.ValidateDashboardAsync(
+                dashboardEditor,
+                context.FirstDashboardId,
+                savedDashboard.Value.RevisionId,
+                savedDashboard.Value.Version,
+                CancellationToken.None);
+        await authoring.PublishDashboardAsync(
+            dashboardEditor,
+            context.FirstDashboardId,
+            new PublishAuthoringRequest(
+                validatedDashboard.Value
+                    .RevisionId,
+                validatedDashboard.Value.Version),
+            CancellationToken.None);
+
+        var dashboards =
+            new AuthorizedDashboardService(
+                context.Store,
+                context.Clock);
+        var viewer =
+            context.LinkedSession(
+                includeAlarm: false,
+                includeHistory: false);
+        var runtime =
+            await dashboards.ReadRuntimeManifestAsync(
+                viewer,
+                context.FirstDashboardId,
+                windowId,
+                CancellationToken.None);
+        Assert.True(runtime.IsSuccess);
+        Assert.Equal(
+            windowId,
+            runtime.Value.SelectedWindowId);
+        var resolved =
+            Assert.Single(runtime.Value.Mimics);
+        Assert.Equal(
+            publishedMimic.Value.RevisionId,
+            resolved.Revision.RevisionId.Value);
+        Assert.Contains(
+            "data-binding-id",
+            resolved.Revision.Svg,
+            StringComparison.Ordinal);
+
+        var subscriptions =
+            new DashboardSubscriptionService(
+                dashboards,
+                new DashboardRuntimeLimits(1, 4),
+                generations);
+        var subscription =
+            await subscriptions.CreateAsync(
+                viewer,
+                context.FirstDashboardId,
+                [windowId],
+                CancellationToken.None);
+        Assert.Equal(
+            "Current",
+            Assert.Single(
+                    subscription.Value.Links)
+                .Source);
+        Assert.Equal(
+            context.AllowedBindingId.Value,
+            Assert.Single(
+                Assert.Single(
+                        subscription.Value.Windows)
+                    .MimicBindingIds!));
+    }
+
     private sealed class DashboardTestContext : IAsyncDisposable
     {
         private DashboardTestContext(TestDatabase database, NpgsqlDataSource dataSource)

@@ -1,0 +1,258 @@
+@page "/d/{DashboardId:guid}"
+@page "/d/{DashboardId:guid}/{WindowId:guid}"
+@implements IAsyncDisposable
+@inject DashboardApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>@(manifest?.Name ?? "Dashboard")</PageTitle>
+
+<GuardedContent Route="@Route">
+    <section class="dashboard-runtime @(fullscreen ? "dashboard-runtime--fullscreen" : string.Empty)"
+             data-dashboard-id="@DashboardId"
+             data-dashboard-revision="@manifest?.RevisionId"
+             data-window-id="@selected?.WindowId">
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <UiStatePanel Kind="@UiStateKind.Error"
+                          Title="Dashboard unavailable"
+                          Message="@error"
+                          ActionLabel="Retry"
+                          OnAction="@LoadAsync" />
+        }
+        else if (loading)
+        {
+            <UiStatePanel Kind="@UiStateKind.Loading"
+                          Title="Loading dashboard"
+                          Message="Opening the exact published revision." />
+        }
+        else if (manifest is not null &&
+                 selected is not null)
+        {
+            <header class="dashboard-runtime__header">
+                <div>
+                    <a href="/dashboards">All dashboards</a>
+                    <h1>@manifest.Name</h1>
+                    <p>
+                        @selected.Title · revision
+                        @manifest.RevisionNumber
+                    </p>
+                </div>
+                <div class="dashboard-runtime__status">
+                    <UiBadge Text="Connected"
+                             Tone="@UiBadgeTone.Positive" />
+                    <UiBadge Text="Physical commands denied"
+                             Tone="@UiBadgeTone.Neutral" />
+                    <button type="button"
+                            @onclick="ToggleFullscreen">
+                        @(fullscreen ? "Exit fullscreen" : "Operational fullscreen")
+                    </button>
+                </div>
+            </header>
+
+            @if (resyncNotice)
+            {
+                <div role="status"
+                     data-dashboard-resync="true"
+                     class="event-resync">
+                    A published revision changed. The complete runtime manifest was resynchronized.
+                </div>
+            }
+
+            @if (manifest.Windows.Count > 1)
+            {
+                <nav class="dashboard-window-nav"
+                     aria-label="Dashboard windows">
+                    @foreach (var window in manifest.Windows)
+                    {
+                        <a href="@($"/d/{DashboardId:D}/{window.WindowId:D}")"
+                           aria-current="@(window.WindowId == selected.WindowId ? "page" : null)">
+                            @window.Title
+                        </a>
+                    }
+                </nav>
+            }
+
+            <div class="dashboard-runtime__content"
+                 data-layout="@selected.Layout">
+                @if (selected.Layout is "Mimic" or "Combined")
+                {
+                    var mimic = manifest.Mimics
+                        .SingleOrDefault(item =>
+                            item.WindowId ==
+                            selected.WindowId);
+                    if (mimic is null)
+                    {
+                        <UiStatePanel Kind="@UiStateKind.Error"
+                                      Title="Mimic unavailable"
+                                      Message="The exact published Mimic revision is missing." />
+                    }
+                    else
+                    {
+                        @if (mimic.CanEdit)
+                        {
+                            <a href="@($"/mimic-editor/{mimic.MimicId:D}")">
+                                Edit Mimic
+                            </a>
+                        }
+                        <MimicRuntime Mimic="@mimic" />
+                    }
+                }
+
+                @if (selected.Layout is "Widgets" or "Combined")
+                {
+                    <div class="dashboard-widget-grid">
+                        @foreach (var widget in
+                            selected.Widgets)
+                        {
+                            <DashboardWidgetHost Widget="@widget"
+                                                 Bindings="@selected.Bindings" />
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    private CancellationTokenSource?
+        cancellation;
+    private DashboardManifestPayload? manifest;
+    private DashboardWindowPayload? selected;
+    private DashboardSubscriptionPayload?
+        subscription;
+    private Task? polling;
+    private string? error;
+    private bool loading = true;
+    private bool fullscreen;
+    private bool resyncNotice;
+
+    [Parameter]
+    public Guid DashboardId { get; set; }
+
+    [Parameter]
+    public Guid WindowId { get; set; }
+
+    private string Route =>
+        WindowId == Guid.Empty
+            ? $"/d/{DashboardId:D}"
+            : $"/d/{DashboardId:D}/{WindowId:D}";
+
+    protected override Task OnParametersSetAsync() =>
+        LoadAsync();
+
+    public async ValueTask DisposeAsync()
+    {
+        var active = cancellation;
+        cancellation = null;
+        active?.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        active?.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        var previous = cancellation;
+        cancellation =
+            new CancellationTokenSource();
+        previous?.Cancel();
+        previous?.Dispose();
+        var token = cancellation.Token;
+        loading = true;
+        error = null;
+        try
+        {
+            manifest =
+                await Api.ReadManifestAsync(
+                    DashboardId,
+                    WindowId == Guid.Empty
+                        ? null
+                        : WindowId,
+                    token);
+            var selectedId =
+                manifest.SelectedWindowId ??
+                throw new InvalidOperationException(
+                    "The Dashboard has no published windows.");
+            selected =
+                manifest.Windows.Single(item =>
+                    item.WindowId == selectedId);
+            subscription =
+                await Api.CreateSubscriptionAsync(
+                    DashboardId,
+                    [selected.WindowId],
+                    token);
+            await Api.RecordOpenedAsync(
+                DashboardId,
+                token);
+            if (WindowId == Guid.Empty)
+            {
+                Navigation.NavigateTo(
+                    $"/d/{DashboardId:D}/{selected.WindowId:D}",
+                    replace: true);
+            }
+
+            polling = PollAsync(token);
+        }
+        catch (Exception exception)
+            when (exception is
+                HttpRequestException or
+                InvalidOperationException)
+        {
+            error =
+                "The requested published Dashboard window is unavailable.";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task PollAsync(
+        CancellationToken token)
+    {
+        using var timer =
+            new PeriodicTimer(
+                TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(
+                   token))
+        {
+            if (subscription is null ||
+                await Api.IsSubscriptionCurrentAsync(
+                    subscription.SubscriptionId,
+                    token))
+            {
+                continue;
+            }
+
+            resyncNotice = true;
+            manifest =
+                await Api.ReadManifestAsync(
+                    DashboardId,
+                    selected?.WindowId,
+                    token);
+            selected =
+                manifest.Windows.Single(item =>
+                    item.WindowId ==
+                    manifest.SelectedWindowId!.Value);
+            subscription =
+                await Api.CreateSubscriptionAsync(
+                    DashboardId,
+                    [selected.WindowId],
+                    token);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ToggleFullscreen() =>
+        fullscreen = !fullscreen;
+}

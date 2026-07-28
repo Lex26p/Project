@@ -20,7 +20,7 @@
 | C07 | Complete | Межпроцессный Simulator E2E и recovery corpus реализованы и приняты |
 | C08 | Complete | Web shell, visual system и browser baseline реализованы и приняты |
 | C09 | Complete | Event Dispatcher, Alarm actions и read-only History workspace реализованы и приняты |
-| C10 | Ready | Current feed и Web shell выполнены |
+| C10 | Complete | Dashboard, mimic и kiosk runtime/editor реализованы и приняты |
 | C11 | Ready | Межпроцессный Simulator E2E C07 выполнен |
 | C12 | Planned | После configuration reconciliation |
 | C13 | Planned | После configuration reconciliation |
@@ -30,7 +30,7 @@
 | C17 | Planned | После Incident/My Work |
 | C18 | Ready | Web shell C08 и Event core C09 выполнены |
 | C19 | Planned | После Notifications/Web shell |
-| C20 | Planned | Только Simulator commands |
+| C20 | Ready | Dashboard/mimic/kiosk C10 и межпроцессный Simulator E2E C07 выполнены |
 | C21 | Planned | После core product и protocol acceptance |
 | C22 | Planned | Финальная Windows-приёмка |
 | C23 | Planned | Условный анализ после C22 |

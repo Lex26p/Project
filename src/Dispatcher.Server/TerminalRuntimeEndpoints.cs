@@ -51,15 +51,23 @@ public sealed class AuthorizedTerminalRuntimeService
         var session = new SessionSnapshot(
             SessionId.New(), SubjectId.From(sync.Value.DeviceIdentityId.Value), PrincipalKind.Device,
             now, now.AddMinutes(1), new EffectivePermissions(permissions));
-        var manifest = await dashboards.ReadManifestAsync(
-            session, DashboardId.From(sync.Value.Content.ContentId), token).ConfigureAwait(false);
+        var manifest =
+            await dashboards.ReadRuntimeManifestAsync(
+                    session,
+                    DashboardId.From(
+                        sync.Value.Content.ContentId),
+                    null,
+                    token)
+                .ConfigureAwait(false);
         if (manifest.IsFailure) return Result.Failure<TerminalAssignedRuntimePayload>(manifest.Error!);
         return Result.Success(new TerminalAssignedRuntimePayload(
             sync.Value.TerminalId.Value, sync.Value.DeviceIdentityId.Value, sync.Value.ProfileId.Value,
             sync.Value.ProfileVersion.Value, sync.Value.Policy.Experience.ToString(),
             sync.Value.Policy.OfflineMode.ToString(),
             sync.Value.Policy.EmployeeReauthentication == TerminalEmployeeReauthentication.Required,
-            DashboardEndpoints.ToPayload(manifest.Value), sync.Value.SynchronizedAt));
+            DashboardEndpoints.ToPayload(
+                manifest.Value),
+            sync.Value.SynchronizedAt));
     }
 
     public Task<Result<TerminalHeartbeat>> HeartbeatAsync(

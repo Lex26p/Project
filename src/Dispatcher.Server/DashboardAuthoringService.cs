@@ -63,6 +63,117 @@ public sealed class DashboardAuthoringService
             MimicEditorPermissions.Read(mimicId),
             () => store.ReadMimicDraftAsync(mimicId, cancellationToken));
 
+    public async Task<Result<
+        DashboardPublicationImpact>>
+        ReadDashboardImpactAsync(
+            SessionSnapshot? session,
+            DashboardId dashboardId,
+            Guid revisionId,
+            CancellationToken cancellationToken)
+    {
+        var authorization =
+            SessionAuthorization.AuthorizeAccess(
+                session,
+                DashboardEditorPermissions.Read(
+                    dashboardId),
+                clock);
+        if (authorization.IsFailure)
+        {
+            return Result.Failure<
+                DashboardPublicationImpact>(
+                authorization.Error!);
+        }
+
+        var draft =
+            await store.ReadDashboardDraftAsync(
+                    dashboardId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (draft is null ||
+            draft.Revision.RevisionId != revisionId)
+        {
+            return Result.Failure<
+                DashboardPublicationImpact>(
+                new OperationError(
+                    ErrorCode.From(
+                        "dashboard.draft_not_found"),
+                    "Editor draft was not found."));
+        }
+
+        var published =
+            await store.ReadPublishedAsync(
+                    dashboardId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return Result.Success(
+            new DashboardPublicationImpact(
+                revisionId,
+                published?.Revision.RevisionId
+                    .Value,
+                draft.Content.Windows
+                    .Select(item =>
+                        item.WindowId.Value)
+                    .ToArray(),
+                draft.Content.Windows
+                    .Sum(item =>
+                        item.Bindings.Count),
+                draft.Content.Windows.Count(
+                    item => item.Mimic is not null),
+                true));
+    }
+
+    public async Task<Result<
+        DashboardPublicationImpact>>
+        ReadMimicImpactAsync(
+            SessionSnapshot? session,
+            MimicId mimicId,
+            Guid revisionId,
+            CancellationToken cancellationToken)
+    {
+        var authorization =
+            SessionAuthorization.AuthorizeAccess(
+                session,
+                MimicEditorPermissions.Read(
+                    mimicId),
+                clock);
+        if (authorization.IsFailure)
+        {
+            return Result.Failure<
+                DashboardPublicationImpact>(
+                authorization.Error!);
+        }
+
+        var draft =
+            await store.ReadMimicDraftAsync(
+                    mimicId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (draft is null ||
+            draft.Revision.RevisionId != revisionId)
+        {
+            return Result.Failure<
+                DashboardPublicationImpact>(
+                new OperationError(
+                    ErrorCode.From(
+                        "dashboard.draft_not_found"),
+                    "Mimic draft was not found."));
+        }
+
+        var state =
+            await store.ReadAuthoringStateAsync(
+                    mimicId.Value,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return Result.Success(
+            new DashboardPublicationImpact(
+                revisionId,
+                state?.PublishedRevisionId,
+                [],
+                draft.Content.Bindings.Count,
+                1,
+                true));
+    }
+
     public Result<string> PreviewMimic(
         SessionSnapshot? session,
         MimicId mimicId,
@@ -86,18 +197,73 @@ public sealed class DashboardAuthoringService
         }
     }
 
-    public Task<Result<DashboardAuthoringRevisionSnapshot>> ValidateDashboardAsync(
+    public async Task<Result<DashboardAuthoringRevisionSnapshot>> ValidateDashboardAsync(
         SessionSnapshot? session,
         DashboardId dashboardId,
         Guid revisionId,
         long expectedVersion,
-        CancellationToken cancellationToken) =>
-        ExecuteAsync(
-            session,
-            DashboardEditorPermissions.Validate(dashboardId),
-            authorization => store.ValidateAuthoringAsync(
-                authorization, dashboardId.Value, DashboardAuthoringKind.Dashboard,
-                revisionId, expectedVersion, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var authorization =
+            SessionAuthorization.AuthorizeMutation(
+                session,
+                DashboardEditorPermissions.Validate(
+                    dashboardId),
+                clock);
+        if (authorization.IsFailure)
+        {
+            return Result.Failure<
+                DashboardAuthoringRevisionSnapshot>(
+                authorization.Error!);
+        }
+
+        var draft =
+            await store.ReadDashboardDraftAsync(
+                    dashboardId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (draft is null ||
+            draft.Revision.RevisionId != revisionId ||
+            draft.Revision.Version != expectedVersion)
+        {
+            return Result.Failure<
+                DashboardAuthoringRevisionSnapshot>(
+                new OperationError(
+                    ErrorCode.From(
+                        "dashboard.version_conflict"),
+                    "Editor draft changed concurrently."));
+        }
+
+        foreach (var reference in
+                 draft.Content.Windows
+                     .Select(window => window.Mimic)
+                     .OfType<
+                         DashboardMimicReference>())
+        {
+            if (await store.ReadPublishedMimicAsync(
+                        reference.MimicId,
+                        reference.RevisionId,
+                        cancellationToken)
+                    .ConfigureAwait(false) is null)
+            {
+                return Result.Failure<
+                    DashboardAuthoringRevisionSnapshot>(
+                    new OperationError(
+                        ErrorCode.From(
+                            "dashboard.validation_failed"),
+                        "A window references a missing or unpublished Mimic revision."));
+            }
+        }
+
+        return await store.ValidateAuthoringAsync(
+                authorization.Value,
+                dashboardId.Value,
+                DashboardAuthoringKind.Dashboard,
+                revisionId,
+                expectedVersion,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public Task<Result<DashboardAuthoringRevisionSnapshot>> ValidateMimicAsync(
         SessionSnapshot? session,
@@ -195,3 +361,11 @@ public sealed class DashboardAuthoringService
             : Result.Failure<T?>(authorization.Error!);
     }
 }
+
+public sealed record DashboardPublicationImpact(
+    Guid RevisionId,
+    Guid? ReplacesRevisionId,
+    IReadOnlyList<Guid> WindowIds,
+    int BindingCount,
+    int MimicCount,
+    bool RequiresRuntimeResnapshot);

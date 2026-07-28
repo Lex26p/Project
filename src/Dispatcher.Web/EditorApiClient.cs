@@ -11,6 +11,26 @@ public sealed class EditorApiClient(HttpClient http)
     public Task<MimicEditorDraftPayload?> ReadMimicAsync(Guid id, CancellationToken token = default) =>
         ReadAsync<MimicEditorDraftPayload>($"api/mimic-editor/{id:D}", token);
 
+    public Task<EditorPublicationImpactPayload?>
+        ReadDashboardImpactAsync(
+            Guid id,
+            Guid revisionId,
+            CancellationToken token =
+                default) =>
+        ReadAsync<EditorPublicationImpactPayload>(
+            $"api/dashboard-editor/{id:D}/impact?revisionId={revisionId:D}",
+            token);
+
+    public Task<EditorPublicationImpactPayload?>
+        ReadMimicImpactAsync(
+            Guid id,
+            Guid revisionId,
+            CancellationToken token =
+                default) =>
+        ReadAsync<EditorPublicationImpactPayload>(
+            $"api/mimic-editor/{id:D}/impact?revisionId={revisionId:D}",
+            token);
+
     public Task<EditorRevisionPayload> SaveDashboardAsync(
         Guid id, SaveDashboardEditorRequest request, CancellationToken token = default) =>
         SendRevisionAsync(HttpMethod.Put, $"api/dashboard-editor/{id:D}/draft", request, token);
@@ -66,7 +86,7 @@ public sealed class EditorApiClient(HttpClient http)
             ?? throw new InvalidOperationException("Editor revision response was empty.");
     }
 
-    private static Task EnsureAsync(HttpResponseMessage response)
+    private static async Task EnsureAsync(HttpResponseMessage response)
     {
         if (response.StatusCode == HttpStatusCode.Forbidden || response.StatusCode == HttpStatusCode.Unauthorized)
         {
@@ -78,7 +98,22 @@ public sealed class EditorApiClient(HttpClient http)
             throw new EditorConflictException();
         }
 
+        if (!response.IsSuccessStatusCode &&
+            response.StatusCode ==
+                HttpStatusCode.BadRequest)
+        {
+            var problem =
+                await response.Content
+                    .ReadFromJsonAsync<
+                        EditorProblemPayload>();
+            throw new EditorValidationException(
+                problem?.Detail ??
+                "Editor validation failed.");
+        }
+
         response.EnsureSuccessStatusCode();
-        return Task.CompletedTask;
     }
+
+    private sealed record EditorProblemPayload(
+        string? Detail);
 }

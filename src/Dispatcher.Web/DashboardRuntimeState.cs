@@ -52,7 +52,14 @@ public sealed class DashboardRuntimeState
 
         var bindingIds = subscription.Links.Select(link => link.BindingId).ToHashSet();
         if (subscription.Windows.SelectMany(window => window.Widgets)
-            .Any(widget => widget.BindingIds.Count == 0 || widget.BindingIds.Any(id => !bindingIds.Contains(id))))
+                .Any(widget =>
+                    widget.BindingIds.Count == 0 ||
+                    widget.BindingIds.Any(id =>
+                        !bindingIds.Contains(id))) ||
+            subscription.Windows.Any(window =>
+                window.MimicBindingIds?.Any(id =>
+                    !bindingIds.Contains(id)) ==
+                true))
         {
             throw new ArgumentException("Dashboard widgets must reference subscription bindings.", nameof(subscription));
         }

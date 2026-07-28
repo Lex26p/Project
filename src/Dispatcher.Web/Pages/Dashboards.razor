@@ -1,0 +1,155 @@
+@page "/dashboards"
+@inject DashboardApiClient Api
+
+<PageTitle>Dashboards</PageTitle>
+
+<GuardedContent Route="/dashboards">
+    <section class="dashboard-catalog"
+             aria-labelledby="dashboard-catalog-title">
+        <header class="workspace-page-heading">
+            <div>
+                <span class="workspace-page-heading__eyebrow">
+                    Operations
+                </span>
+                <h1 id="dashboard-catalog-title">
+                    Dashboards
+                </h1>
+            </div>
+            <UiBadge Text="Published"
+                     Tone="@UiBadgeTone.Positive" />
+        </header>
+
+        <div class="dashboard-catalog__toolbar">
+            <label>
+                <span>Search</span>
+                <input type="search"
+                       @bind="search"
+                       @bind:event="oninput"
+                       placeholder="Name or purpose" />
+            </label>
+            <label>
+                <span>View</span>
+                <select @bind="view">
+                    <option>All</option>
+                    <option>Favorites</option>
+                    <option>Recent</option>
+                </select>
+            </label>
+            <button type="button"
+                    @onclick="LoadAsync">
+                Refresh
+            </button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <UiStatePanel Kind="@UiStateKind.Error"
+                          Title="Dashboard catalog unavailable"
+                          Message="@error"
+                          ActionLabel="Retry"
+                          OnAction="@LoadAsync" />
+        }
+        else if (loading)
+        {
+            <UiStatePanel Kind="@UiStateKind.Loading"
+                          Title="Loading dashboards"
+                          Message="Reading available published dashboards." />
+        }
+        else if (VisibleItems.Count == 0)
+        {
+            <UiStatePanel Kind="@UiStateKind.Empty"
+                          Title="No matching dashboards"
+                          Message="Change the search or catalog view." />
+        }
+        else
+        {
+            <div class="dashboard-catalog__grid">
+                @foreach (var item in VisibleItems)
+                {
+                    <article class="dashboard-card"
+                             data-dashboard-id="@item.DashboardId">
+                        <div>
+                            <UiBadge Text="@(item.IsFavorite ? "Favorite" : "Published")"
+                                     Tone="@(item.IsFavorite ? UiBadgeTone.Warning : UiBadgeTone.Positive)" />
+                            <h2>@item.Name</h2>
+                            <p>@(item.Description ?? "Operational dashboard")</p>
+                        </div>
+                        <div class="dashboard-card__meta">
+                            @if (item.LastOpenedAt is not null)
+                            {
+                                <span>Opened @item.LastOpenedAt.Value.ToLocalTime().ToString("g")</span>
+                            }
+                        </div>
+                        <a href="@($"/d/{item.DashboardId:D}")">
+                            Open
+                        </a>
+                        @if (item.CanEdit)
+                        {
+                            <a href="@($"/dashboard-editor/{item.DashboardId:D}")">
+                                Edit
+                            </a>
+                        }
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    private IReadOnlyList<DashboardCatalogPayload>
+        items = [];
+    private string search = string.Empty;
+    private string view = "All";
+    private string? error;
+    private bool loading = true;
+
+    private IReadOnlyList<DashboardCatalogPayload>
+        VisibleItems =>
+        items.Where(item =>
+                (view == "All" ||
+                 view == "Favorites" &&
+                 item.IsFavorite ||
+                 view == "Recent" &&
+                 item.LastOpenedAt is not null) &&
+                (string.IsNullOrWhiteSpace(search) ||
+                 item.Name.Contains(
+                     search,
+                     StringComparison
+                         .OrdinalIgnoreCase) ||
+                 (item.Description?.Contains(
+                      search,
+                      StringComparison
+                          .OrdinalIgnoreCase) ??
+                  false)))
+            .OrderByDescending(item =>
+                item.IsFavorite)
+            .ThenByDescending(item =>
+                item.LastOpenedAt)
+            .ThenBy(item => item.Name)
+            .ToArray();
+
+    protected override Task OnInitializedAsync() =>
+        LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            items =
+                await Api.ReadCatalogAsync(
+                    CancellationToken.None);
+        }
+        catch (HttpRequestException)
+        {
+            error =
+                "The Dashboard server is unavailable.";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

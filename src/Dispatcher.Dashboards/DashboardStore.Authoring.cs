@@ -317,6 +317,62 @@ public sealed partial class DashboardStore
                 MimicSvgSanitizer.Decode(stored.ContentJson, stored.DependenciesJson));
     }
 
+    public async Task<PublishedMimicRevision?>
+        ReadPublishedMimicAsync(
+            MimicId mimicId,
+            MimicRevisionId revisionId,
+            CancellationToken cancellationToken =
+                default)
+    {
+        await using var connection =
+            await dataSource.OpenConnectionAsync(
+                cancellationToken)
+                .ConfigureAwait(false);
+        await using var transaction =
+            await connection.BeginTransactionAsync(
+                cancellationToken)
+                .ConfigureAwait(false);
+        await SetRoleAsync(
+                connection,
+                transaction,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var stored =
+            await ReadStoredRevisionAsync(
+                    connection,
+                    transaction,
+                    revisionId.Value,
+                    false,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        await transaction.CommitAsync(
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (stored is null ||
+            stored.Snapshot.ResourceId !=
+                mimicId.Value ||
+            stored.Snapshot.Kind !=
+                DashboardAuthoringKind.Mimic ||
+            stored.Snapshot.PublishedAt is null)
+        {
+            return null;
+        }
+
+        var content =
+            MimicSvgSanitizer.Decode(
+                stored.ContentJson,
+                stored.DependenciesJson);
+        return new PublishedMimicRevision(
+            mimicId,
+            revisionId,
+            stored.Snapshot.RevisionNumber,
+            content.Name,
+            content.Svg,
+            content.Bindings,
+            content.Dependencies,
+            stored.Snapshot.PublishedAt.Value);
+    }
+
     private async Task<StoredRevision?> ReadDraftAsync(
         Guid resourceId,
         DashboardAuthoringKind kind,

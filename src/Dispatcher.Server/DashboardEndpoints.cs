@@ -75,7 +75,105 @@ public sealed class AuthorizedDashboardService
         return Result.Success(published.Revision with { Windows = windows, Dependencies = dependencies });
     }
 
-    private static bool CanReadSource(EffectivePermissions permissions, DashboardBindingSource source) =>
+    public async Task<Result<DashboardRuntimeManifest>>
+        ReadRuntimeManifestAsync(
+            SessionSnapshot? session,
+            DashboardId dashboardId,
+            DashboardWindowId? selectedWindowId,
+            CancellationToken cancellationToken)
+    {
+        var manifest =
+            await ReadManifestAsync(
+                    session,
+                    dashboardId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (manifest.IsFailure)
+        {
+            return Result.Failure<
+                DashboardRuntimeManifest>(
+                manifest.Error!);
+        }
+
+        var selected =
+            selectedWindowId ??
+            (manifest.Value.Windows.Count == 0
+                ? null
+                : manifest.Value.Windows[0]
+                    .WindowId);
+        if (selected is null ||
+            manifest.Value.Windows.All(
+                window =>
+                    window.WindowId != selected.Value))
+        {
+            return Failure<
+                DashboardRuntimeManifest>(
+                "dashboard.window_not_found",
+                "The requested Dashboard window was not found.");
+        }
+
+        var mimics =
+            new List<DashboardRuntimeMimic>();
+        foreach (var window in
+                 manifest.Value.Windows.Where(
+                     item => item.Mimic is not null))
+        {
+            var reference = window.Mimic!;
+            var published =
+                await store.ReadPublishedMimicAsync(
+                        reference.MimicId,
+                        reference.RevisionId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            if (published is null)
+            {
+                return Failure<
+                    DashboardRuntimeManifest>(
+                    "dashboard.mimic_not_found",
+                    "The exact published Mimic revision was not found.");
+            }
+
+            var allowedBindings =
+                published.Bindings
+                    .Where(binding =>
+                        session!.Permissions.Allows(
+                            binding
+                                .RequiredPermission) &&
+                        CanReadSource(
+                            session.Permissions,
+                            binding.Source))
+                    .ToArray();
+            var allowedIds =
+                allowedBindings
+                    .Select(item => item.BindingId)
+                    .ToHashSet();
+            mimics.Add(
+                new DashboardRuntimeMimic(
+                    window.WindowId,
+                    published with
+                    {
+                        Bindings =
+                            allowedBindings,
+                        Dependencies =
+                            published.Dependencies
+                                .Where(item =>
+                                    allowedIds.Contains(
+                                        item.BindingId))
+                                .ToArray(),
+                    },
+                    session!.Permissions.Allows(
+                        MimicEditorPermissions.Read(
+                            published.MimicId))));
+        }
+
+        return Result.Success(
+            new DashboardRuntimeManifest(
+                manifest.Value,
+                selected.Value,
+                mimics));
+    }
+
+    internal static bool CanReadSource(EffectivePermissions permissions, DashboardBindingSource source) =>
         source switch
         {
             DashboardBindingSource.Current => permissions.Allows(RuntimePermissions.ReadCurrent),
@@ -206,9 +304,18 @@ public static class DashboardEndpoints
     {
         var result = await dashboards.ReadCatalogAsync(sessions.Resolve(context), cancellationToken)
             .ConfigureAwait(false);
+        var session = sessions.Resolve(context);
         return result.IsSuccess
             ? Results.Ok(result.Value.Select(item => new DashboardCatalogPayload(
-                item.DashboardId.Value, item.Name, item.Description, item.IsFavorite, item.LastOpenedAt)))
+                item.DashboardId.Value,
+                item.Name,
+                item.Description,
+                item.IsFavorite,
+                item.LastOpenedAt,
+                session?.Permissions.Allows(
+                    DashboardEditorPermissions.Read(
+                        item.DashboardId)) ==
+                true)))
             : Problem(result.Error!);
     }
 
@@ -225,13 +332,22 @@ public static class DashboardEndpoints
 
     private static async Task<IResult> ReadManifestAsync(
         Guid dashboardId,
+        Guid? windowId,
         HttpContext context,
         RequestSessionResolver sessions,
         AuthorizedDashboardService dashboards,
         CancellationToken cancellationToken)
     {
-        var result = await dashboards.ReadManifestAsync(
-            sessions.Resolve(context), DashboardId.From(dashboardId), cancellationToken).ConfigureAwait(false);
+        var result =
+            await dashboards.ReadRuntimeManifestAsync(
+                    sessions.Resolve(context),
+                    DashboardId.From(dashboardId),
+                    windowId is null
+                        ? null
+                        : DashboardWindowId.From(
+                            windowId.Value),
+                    cancellationToken)
+                .ConfigureAwait(false);
         return result.IsSuccess ? Results.Ok(ToPayload(result.Value)) : Problem(result.Error!);
     }
 
@@ -298,11 +414,53 @@ public static class DashboardEndpoints
                 widget.WidgetId.Value, widget.Kind, widget.Title,
                 widget.BindingIds.Select(id => id.Value).ToArray())).ToArray(),
             window.Bindings.Select(binding => new DashboardBindingPayload(
-                binding.BindingId.Value, binding.Source.ToString(), binding.ScopeId.Value, binding.PointId.Value))
-                .ToArray())).ToArray(),
+                binding.BindingId.Value,
+                binding.Source.ToString(),
+                binding.ScopeId.Value,
+                binding.PointId.Value,
+                binding.HistorySourceId?.Value))
+                .ToArray(),
+            window.Layout.ToString(),
+            window.Mimic?.MimicId.Value,
+            window.Mimic?.RevisionId.Value)).ToArray(),
         revision.Dependencies.Select(item => new DashboardDependencyPayload(
             item.BindingId.Value, item.Key, item.Fingerprint)).ToArray(),
-        revision.PublishedAt);
+        revision.PublishedAt,
+        revision.Windows.Count == 0
+            ? null
+            : revision.Windows[0].WindowId.Value,
+        []);
+
+    internal static DashboardManifestPayload ToPayload(
+        DashboardRuntimeManifest manifest)
+    {
+        var payload = ToPayload(manifest.Revision);
+        return payload with
+        {
+            SelectedWindowId =
+                manifest.SelectedWindowId.Value,
+            Mimics =
+                manifest.Mimics.Select(item =>
+                    new DashboardMimicPayload(
+                        item.WindowId.Value,
+                        item.Revision.MimicId.Value,
+                        item.Revision.RevisionId.Value,
+                        item.Revision.RevisionNumber,
+                        item.Revision.Name,
+                        item.Revision.Svg,
+                        item.Revision.Bindings.Select(
+                            binding =>
+                                new DashboardBindingPayload(
+                                    binding.BindingId.Value,
+                                    binding.Source.ToString(),
+                                    binding.ScopeId.Value,
+                                    binding.PointId.Value,
+                                    binding.HistorySourceId?.Value))
+                            .ToArray(),
+                        item.CanEdit))
+                    .ToArray(),
+        };
+    }
 
     private static IResult Problem(OperationError error) => Results.Problem(
         statusCode: error.Code.Value switch
@@ -310,7 +468,8 @@ public static class DashboardEndpoints
             "session.anonymous" or "session.revoked" or "session.expired" => StatusCodes.Status401Unauthorized,
             "permission.denied" => StatusCodes.Status403Forbidden,
             "dashboard.not_found" => StatusCodes.Status404NotFound,
-            "dashboard.window_not_found" => StatusCodes.Status404NotFound,
+            "dashboard.window_not_found" or
+            "dashboard.mimic_not_found" => StatusCodes.Status404NotFound,
             _ => StatusCodes.Status400BadRequest,
         },
         title: error.Code.Value,
@@ -321,17 +480,51 @@ public sealed record DashboardFavoriteRequest(bool Favorite);
 public sealed record DashboardSubscriptionRequest(IReadOnlyList<Guid> VisibleWindowIds);
 public sealed record DashboardSubscriptionStatusPayload(bool IsCurrent);
 public sealed record DashboardCatalogPayload(
-    Guid DashboardId, string Name, string? Description, bool IsFavorite, DateTimeOffset? LastOpenedAt);
+    Guid DashboardId,
+    string Name,
+    string? Description,
+    bool IsFavorite,
+    DateTimeOffset? LastOpenedAt,
+    bool CanEdit);
 public sealed record DashboardLandingPayload(Guid? DashboardId);
 public sealed record DashboardManifestPayload(
     Guid DashboardId, Guid RevisionId, ulong RevisionNumber, string Name, string? Description,
     IReadOnlyList<DashboardWindowPayload> Windows,
     IReadOnlyList<DashboardDependencyPayload> Dependencies,
-    DateTimeOffset PublishedAt);
+    DateTimeOffset PublishedAt,
+    Guid? SelectedWindowId,
+    IReadOnlyList<DashboardMimicPayload> Mimics);
 public sealed record DashboardWindowPayload(
     Guid WindowId, string Title, IReadOnlyList<DashboardWidgetPayload> Widgets,
-    IReadOnlyList<DashboardBindingPayload> Bindings);
+    IReadOnlyList<DashboardBindingPayload> Bindings,
+    string Layout = "Widgets",
+    Guid? MimicId = null,
+    Guid? MimicRevisionId = null);
 public sealed record DashboardWidgetPayload(
     Guid WidgetId, string Kind, string Title, IReadOnlyList<Guid> BindingIds);
-public sealed record DashboardBindingPayload(Guid BindingId, string Source, Guid ScopeId, Guid PointId);
+public sealed record DashboardBindingPayload(
+    Guid BindingId,
+    string Source,
+    Guid ScopeId,
+    Guid PointId,
+    Guid? HistorySourceId = null);
 public sealed record DashboardDependencyPayload(Guid BindingId, string Key, string Fingerprint);
+public sealed record DashboardMimicPayload(
+    Guid WindowId,
+    Guid MimicId,
+    Guid RevisionId,
+    ulong RevisionNumber,
+    string Name,
+    string SanitizedSvg,
+    IReadOnlyList<DashboardBindingPayload> Bindings,
+    bool CanEdit);
+
+public sealed record DashboardRuntimeManifest(
+    DashboardRevision Revision,
+    DashboardWindowId SelectedWindowId,
+    IReadOnlyList<DashboardRuntimeMimic> Mimics);
+
+public sealed record DashboardRuntimeMimic(
+    DashboardWindowId WindowId,
+    PublishedMimicRevision Revision,
+    bool CanEdit);

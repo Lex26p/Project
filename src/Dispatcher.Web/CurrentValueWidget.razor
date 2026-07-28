@@ -34,6 +34,13 @@
     public Guid ScopeId { get; set; }
 
     [Parameter]
+    public IReadOnlyCollection<Guid>? PointIds
+    {
+        get;
+        set;
+    }
+
+    [Parameter]
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
 
     protected override async Task OnInitializedAsync()
@@ -41,7 +48,10 @@
         Client.RenderRequested += RenderAsync;
         try
         {
-            await Client.StartAsync(ScopeId, cancellation.Token);
+            await Client.StartAsync(
+                ScopeId,
+                cancellation.Token,
+                PointIds);
             polling = PollAsync(cancellation.Token);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

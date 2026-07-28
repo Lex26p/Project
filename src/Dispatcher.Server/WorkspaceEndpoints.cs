@@ -1,3 +1,4 @@
+using Dispatcher.Dashboards;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
 using Dispatcher.Workspace;
@@ -81,6 +82,52 @@ public static class WorkspaceEndpoints
                             access.Error!));
             }
 
+            var path = route.Split('?', 2)[0];
+            if (string.Equals(
+                    path,
+                    "/dashboards",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                var access =
+                    SessionAuthorization.AuthorizeAccess(
+                        session,
+                        DashboardPermissions.CatalogRead,
+                        SystemClock.Instance);
+                return ToHttpResult(
+                    access.IsSuccess
+                        ? Result.Success(true)
+                        : Result.Failure<bool>(
+                            access.Error!));
+            }
+
+            var segments =
+                path.Split(
+                    '/',
+                    StringSplitOptions
+                        .RemoveEmptyEntries);
+            if (segments.Length >= 2 &&
+                string.Equals(
+                    segments[0],
+                    "d",
+                    StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParse(
+                    segments[1],
+                    out var dashboardId))
+            {
+                var access =
+                    SessionAuthorization.AuthorizeAccess(
+                        session,
+                        DashboardPermissions.Read(
+                            DashboardId.From(
+                                dashboardId)),
+                        SystemClock.Instance);
+                return ToHttpResult(
+                    access.IsSuccess
+                        ? Result.Success(true)
+                        : Result.Failure<bool>(
+                            access.Error!));
+            }
+
             return ToHttpResult(workspace.CanAccess(session, route));
         });
 
@@ -115,6 +162,16 @@ public static class WorkspaceEndpoints
                     new WorkspaceNavigationPayload(
                         "Events",
                         "/events"));
+            }
+            if (session is not null &&
+                session.Permissions.Allows(
+                    DashboardPermissions
+                        .CatalogRead))
+            {
+                items.Add(
+                    new WorkspaceNavigationPayload(
+                        "Dashboards",
+                        "/dashboards"));
             }
 
             var registry = context.RequestServices.GetService<RegistryProjectionService>();

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Playwright;
@@ -10,6 +11,11 @@ public sealed class BrowserScenario :
     private static readonly JsonSerializerOptions
         SerializerOptions =
             new(JsonSerializerDefaults.Web);
+    private static readonly string[]
+        TextTransferFormats =
+        [
+            "Text",
+        ];
     private static readonly Guid AccountId =
         Guid.Parse(
             "81000000-0000-0000-0000-000000000001");
@@ -61,6 +67,33 @@ public sealed class BrowserScenario :
     private static readonly Guid HistorySourceId =
         Guid.Parse(
             "81000000-0000-0000-0000-000000000017");
+    private static readonly Guid TrendWidgetId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000018");
+    private static readonly Guid EventWidgetId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000019");
+    private static readonly Guid CurrentBindingId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000020");
+    private static readonly Guid HistoryBindingId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000021");
+    private static readonly Guid AlarmBindingId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000022");
+    private static readonly Guid MimicBindingId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000023");
+    private static readonly Guid MimicId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000024");
+    private static readonly Guid MimicRevisionId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000025");
+    private static readonly Guid SecondRevisionId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000026");
     private const string AccessToken =
         "browser-access-token";
     private const string RefreshToken =
@@ -69,6 +102,7 @@ public sealed class BrowserScenario :
     private bool sessionActive;
     private bool sessionExpired;
     private bool c09Enabled;
+    private bool c10Enabled;
     private bool eventGap;
     private bool additionalOccurrence;
     private ulong occurrenceCursor = 1;
@@ -78,6 +112,22 @@ public sealed class BrowserScenario :
         "Unacknowledged";
     private Guid? assignedTo;
     private DateTimeOffset? shelvedUntil;
+    private readonly ConcurrentDictionary<
+        string,
+        ConcurrentQueue<string>>
+        hubMessages = [];
+    private readonly ConcurrentDictionary<
+        string,
+        Guid[]> hubPoints = [];
+    private long currentValue = 42;
+    private ulong runtimeCursor = 1;
+    private ulong dashboardRevision = 1;
+    private ulong subscriptionRevision = 1;
+    private bool kioskOffline;
+    private bool kioskRevoked;
+    private ulong kioskProfileVersion = 1;
+    private long editorVersion;
+    private long hubConnectionSequence;
 
     private BrowserScenario(
         IBrowserContext context,
@@ -101,6 +151,23 @@ public sealed class BrowserScenario :
 
     public static Guid HistoryStreamSourceId =>
         HistorySourceId;
+
+    public static Guid RuntimeDashboardId =>
+        DashboardId;
+
+    public static Guid RuntimeWindowId =>
+        WindowId;
+
+    public static Guid RuntimeMimicId =>
+        MimicId;
+
+    public static Guid RuntimeMimicBindingId =>
+        MimicBindingId;
+
+    public Guid PublishedDashboardRevisionId =>
+        dashboardRevision == 1
+            ? RevisionId
+            : SecondRevisionId;
 
     public static async Task<BrowserScenario>
         CreateAsync(
@@ -135,6 +202,10 @@ public sealed class BrowserScenario :
                 "**/api/**",
                 scenario.HandleApiAsync)
             .ConfigureAwait(false);
+        await context.RouteAsync(
+                "**/hubs/runtime**",
+                scenario.HandleRuntimeHubAsync)
+            .ConfigureAwait(false);
         return scenario;
     }
 
@@ -152,6 +223,42 @@ public sealed class BrowserScenario :
     public void EnableC09()
     {
         c09Enabled = true;
+    }
+
+    public void EnableC10()
+    {
+        c10Enabled = true;
+    }
+
+    public void UpdateDashboardCurrent(long value)
+    {
+        currentValue = value;
+        runtimeCursor =
+            checked(runtimeCursor + 1);
+    }
+
+    public void PublishDashboardRevision()
+    {
+        dashboardRevision =
+            checked(dashboardRevision + 1);
+    }
+
+    public void SetKioskOffline(bool value)
+    {
+        kioskOffline = value;
+    }
+
+    public void RevokeKiosk()
+    {
+        kioskRevoked = true;
+    }
+
+    public void RestoreKiosk()
+    {
+        kioskRevoked = false;
+        kioskOffline = false;
+        kioskProfileVersion =
+            checked(kioskProfileVersion + 1);
     }
 
     public void RaiseNewOccurrence()
@@ -184,6 +291,233 @@ public sealed class BrowserScenario :
         await context.CloseAsync()
             .ConfigureAwait(false);
     }
+
+    private async Task HandleRuntimeHubAsync(
+        IRoute route)
+    {
+        var request = route.Request;
+        var uri = new Uri(request.Url);
+        if (uri.AbsolutePath.EndsWith(
+                "/negotiate",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var token =
+                $"browser-hub-{Interlocked.Increment(ref hubConnectionSequence)}";
+            hubMessages[token] =
+                new ConcurrentQueue<string>();
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        negotiateVersion = 1,
+                        connectionId = token,
+                        connectionToken = token,
+                        availableTransports =
+                            new[]
+                            {
+                                new
+                                {
+                                    transport =
+                                        "LongPolling",
+                                    transferFormats =
+                                        TextTransferFormats,
+                                },
+                            },
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var connectionToken =
+            ReadQueryParameter(
+                uri.Query,
+                "id") ??
+            "browser-hub-unknown";
+        var messages =
+            hubMessages.GetOrAdd(
+                connectionToken,
+                _ =>
+                    new ConcurrentQueue<
+                        string>());
+        if (request.Method == "DELETE")
+        {
+            await StatusAsync(route, 202)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (request.Method == "POST")
+        {
+            foreach (var frame in
+                     (request.PostData ??
+                      string.Empty).Split(
+                         '\u001e',
+                         StringSplitOptions
+                             .RemoveEmptyEntries))
+            {
+                using var document =
+                    JsonDocument.Parse(frame);
+                var root =
+                    document.RootElement;
+                if (root.TryGetProperty(
+                        "protocol",
+                        out _))
+                {
+                    messages.Enqueue(
+                        "{}\u001e");
+                    continue;
+                }
+
+                if (!root.TryGetProperty(
+                        "type",
+                        out var type) ||
+                    type.GetInt32() != 1)
+                {
+                    continue;
+                }
+
+                var invocationId =
+                    root.GetProperty(
+                            "invocationId")
+                        .GetString()!;
+                var target =
+                    root.GetProperty("target")
+                        .GetString();
+                var arguments =
+                    root.GetProperty(
+                        "arguments");
+                object result;
+                if (target ==
+                    "BootstrapPoints")
+                {
+                    var scopeId =
+                        arguments[0].GetGuid();
+                    var points =
+                        arguments[1]
+                            .EnumerateArray()
+                            .Select(item =>
+                                item.GetGuid())
+                            .ToArray();
+                    hubPoints[connectionToken] =
+                        points;
+                    result =
+                        RuntimeSnapshotPayload(
+                            scopeId,
+                            points);
+                }
+                else if (target == "Poll")
+                {
+                    var scopeId =
+                        arguments[0].GetGuid();
+                    var cursor =
+                        arguments[1].GetUInt64();
+                    result =
+                        RuntimePollPayload(
+                            scopeId,
+                            cursor,
+                            hubPoints.GetValueOrDefault(
+                                connectionToken) ??
+                            []);
+                }
+                else
+                {
+                    result = new { };
+                }
+
+                messages.Enqueue(
+                    JsonSerializer.Serialize(
+                        new
+                        {
+                            type = 3,
+                            invocationId,
+                            result,
+                        },
+                        SerializerOptions) +
+                    "\u001e");
+            }
+
+            await StatusAsync(route, 200)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (!messages.TryDequeue(
+                out var payload))
+        {
+            await Task.Delay(50)
+                .ConfigureAwait(false);
+            payload =
+                messages.TryDequeue(
+                    out var delayed)
+                    ? delayed
+                    : "{\"type\":6}\u001e";
+        }
+
+        await route.FulfillAsync(
+                new RouteFulfillOptions
+                {
+                    Status = 200,
+                    ContentType =
+                        "application/octet-stream",
+                    Body = payload,
+                })
+            .ConfigureAwait(false);
+    }
+
+    private object RuntimeSnapshotPayload(
+        Guid scopeId,
+        IReadOnlyCollection<Guid> points) =>
+        new
+        {
+            scopeId,
+            cursor = runtimeCursor,
+            points =
+                points.Select(
+                        RuntimePointPayload)
+                    .ToArray(),
+        };
+
+    private object RuntimePollPayload(
+        Guid scopeId,
+        ulong cursor,
+        IReadOnlyCollection<Guid> points) =>
+        cursor < runtimeCursor
+            ? new
+            {
+                kind = 1,
+                delta = new
+                {
+                    scopeId,
+                    from = cursor,
+                    to = runtimeCursor,
+                    changes =
+                        points.Select(
+                                RuntimePointPayload)
+                            .ToArray(),
+                },
+            }
+            : new
+            {
+                kind = 2,
+                delta = (object?)null,
+            };
+
+    private object RuntimePointPayload(
+        Guid pointId) =>
+        new
+        {
+            pointId,
+            value = currentValue,
+            unit = "°C",
+            quality = "Good",
+            freshness = "Fresh",
+            sourceTimestamp =
+                DateTimeOffset.UtcNow,
+            receiveTimestamp =
+                DateTimeOffset.UtcNow,
+            processedTimestamp =
+                DateTimeOffset.UtcNow,
+        };
 
     private async Task HandleApiAsync(
         IRoute route)
@@ -289,6 +623,34 @@ public sealed class BrowserScenario :
             return;
         }
 
+        if (c10Enabled &&
+            (path.StartsWith(
+                 "/api/dashboards",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/dashboard-editor",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/mimic-editor",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/terminal/runtime",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/history/",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith(
+                 "/occurrences/snapshot",
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleC10Async(
+                    route,
+                    request,
+                    uri)
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (c09Enabled &&
             (path.StartsWith(
                  "/api/events/",
@@ -346,6 +708,308 @@ public sealed class BrowserScenario :
         await StatusAsync(
                 route,
                 404)
+            .ConfigureAwait(false);
+    }
+
+    private async Task HandleC10Async(
+        IRoute route,
+        IRequest request,
+        Uri uri)
+    {
+        var path = uri.AbsolutePath;
+        if (path.StartsWith(
+                "/api/terminal/runtime",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (kioskOffline)
+            {
+                await route.AbortAsync()
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (kioskRevoked)
+            {
+                await StatusAsync(route, 403)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (path.EndsWith(
+                    "/heartbeat",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await JsonAsync(
+                        route,
+                        new
+                        {
+                            acceptedAt =
+                                DateTimeOffset.UtcNow,
+                            profileVersion =
+                                kioskProfileVersion,
+                            resyncRequired =
+                                dashboardRevision >
+                                1,
+                        })
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        terminalId = TerminalId,
+                        deviceIdentityId =
+                            DeviceIdentityId,
+                        profileId = ProfileId,
+                        profileVersion =
+                            kioskProfileVersion,
+                        experience = "Wallboard",
+                        offlineMode =
+                            "ReadOnlyLastSynchronized",
+                        employeeReauthenticationRequired =
+                            false,
+                        dashboard =
+                            DashboardManifestPayload(),
+                        synchronizedAt =
+                            DateTimeOffset.UtcNow,
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (!IsAuthorized(request))
+        {
+            await StatusAsync(route, 401)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(
+                path,
+                "/api/dashboards",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new[]
+                    {
+                        new
+                        {
+                            dashboardId = DashboardId,
+                            name = "Operations overview",
+                            description =
+                                "Published current, History and events",
+                            isFavorite = true,
+                            lastOpenedAt =
+                                DateTimeOffset.UtcNow
+                                    .AddMinutes(-5),
+                            canEdit = true,
+                        },
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/opened",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await StatusAsync(route, 204)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/status",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        isCurrent =
+                            subscriptionRevision ==
+                            dashboardRevision,
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/subscriptions",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            subscriptionRevision =
+                dashboardRevision;
+            await JsonAsync(
+                    route,
+                    DashboardSubscriptionPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.StartsWith(
+                $"/api/dashboards/{DashboardId:D}",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    DashboardManifestPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.StartsWith(
+                "/api/dashboard-editor/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (path.EndsWith(
+                    "/impact",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await JsonAsync(
+                        route,
+                        EditorImpactPayload())
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (request.Method == "GET")
+            {
+                await StatusAsync(route, 204)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            editorVersion =
+                checked(editorVersion + 1);
+            await JsonAsync(
+                    route,
+                    EditorRevisionPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.StartsWith(
+                "/api/mimic-editor/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (path.EndsWith(
+                    "/impact",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await JsonAsync(
+                        route,
+                        EditorImpactPayload())
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (request.Method == "GET")
+            {
+                await StatusAsync(route, 204)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (path.EndsWith(
+                    "/preview",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (request.PostData?.Contains(
+                        "script",
+                        StringComparison.OrdinalIgnoreCase) ==
+                    true)
+                {
+                    await route.FulfillAsync(
+                            new RouteFulfillOptions
+                            {
+                                Status = 400,
+                                ContentType =
+                                    "application/problem+json",
+                                Body =
+                                    """
+                                    {"detail":"SVG script elements are not allowed."}
+                                    """,
+                            })
+                        .ConfigureAwait(false);
+                    return;
+                }
+
+                await JsonAsync(
+                        route,
+                        new
+                        {
+                            sanitizedSvg =
+                                SafeMimicSvg(),
+                        })
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            editorVersion =
+                checked(editorVersion + 1);
+            await JsonAsync(
+                    route,
+                    EditorRevisionPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/aggregate",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var now = DateTimeOffset.UtcNow;
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        policyVersion = 1,
+                        resolutionSeconds = 60d,
+                        buckets = new[]
+                        {
+                            new
+                            {
+                                fromInclusive =
+                                    now.AddMinutes(-1),
+                                toExclusive = now,
+                                count = 2L,
+                                average =
+                                    (double)currentValue,
+                                minimum =
+                                    currentValue - 1,
+                                maximum =
+                                    currentValue + 1,
+                                quality = "Good",
+                                freshness = "Fresh",
+                                hasGap = false,
+                            },
+                        },
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/occurrences/snapshot",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        cursor = occurrenceCursor,
+                        occurrences =
+                            OccurrencesPayload(),
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await StatusAsync(route, 404)
             .ConfigureAwait(false);
     }
 
@@ -787,8 +1451,59 @@ public sealed class BrowserScenario :
         };
     }
 
-    private object BootstrapPayload() =>
-        new
+    private object BootstrapPayload()
+    {
+        var permissions =
+            new List<string>
+            {
+                "workspace.home.read",
+                "runtime.current.read",
+            };
+        if (c09Enabled || c10Enabled)
+        {
+            permissions.Add(
+                "history.range.read");
+            permissions.Add(
+                "events.dispatcher.read");
+        }
+
+        if (c09Enabled)
+        {
+            permissions.Add(
+                "alarm.occurrence.acknowledge");
+            permissions.Add(
+                "alarm.occurrence.assign");
+            permissions.Add(
+                "alarm.occurrence.shelve");
+        }
+
+        if (c10Enabled)
+        {
+            permissions.Add(
+                "dashboards.catalog.read");
+            permissions.Add(
+                $"dashboards.d{DashboardId:N}.read");
+            permissions.Add(
+                $"dashboards.d{DashboardId:N}.editor.read");
+            permissions.Add(
+                $"dashboards.d{DashboardId:N}.editor.save");
+            permissions.Add(
+                $"dashboards.d{DashboardId:N}.editor.validate");
+            permissions.Add(
+                $"dashboards.d{DashboardId:N}.editor.publish");
+            permissions.Add(
+                $"mimics.m{MimicId:N}.editor.read");
+            permissions.Add(
+                $"mimics.m{MimicId:N}.editor.save");
+            permissions.Add(
+                $"mimics.m{MimicId:N}.editor.validate");
+            permissions.Add(
+                $"mimics.m{MimicId:N}.editor.publish");
+            permissions.Add(
+                $"runtime.point.p{EventPointId:N}.read");
+        }
+
+        return new
         {
             accountId = AccountId,
             sessionId = SessionId,
@@ -803,23 +1518,10 @@ public sealed class BrowserScenario :
                 },
             defaultScopeId =
                 ScopeId,
-            permissions = c09Enabled
-                ? new[]
-                {
-                    "workspace.home.read",
-                    "runtime.current.read",
-                    "history.range.read",
-                    "events.dispatcher.read",
-                    "alarm.occurrence.acknowledge",
-                    "alarm.occurrence.assign",
-                    "alarm.occurrence.shelve",
-                }
-                : new[]
-                {
-                    "workspace.home.read",
-                    "runtime.current.read",
-                },
+            permissions =
+                permissions.ToArray(),
         };
+    }
 
     private object[] NavigationPayload()
     {
@@ -851,9 +1553,284 @@ public sealed class BrowserScenario :
                     route = "/history",
                 });
         }
+        if (c10Enabled)
+        {
+            items.Add(
+                new
+                {
+                    label = "Dashboards",
+                    route = "/dashboards",
+                });
+        }
 
         return items.ToArray();
     }
+
+    private object DashboardManifestPayload() =>
+        new
+        {
+            dashboardId = DashboardId,
+            revisionId =
+                dashboardRevision == 1
+                    ? RevisionId
+                    : SecondRevisionId,
+            revisionNumber =
+                dashboardRevision,
+            name = "Operations overview",
+            description =
+                "Published current, History and events",
+            windows = new[]
+            {
+                new
+                {
+                    windowId = WindowId,
+                    title = "Main process",
+                    widgets = new[]
+                    {
+                        new
+                        {
+                            widgetId = WidgetId,
+                            kind = "value",
+                            title = "Process value",
+                            bindingIds =
+                                new[]
+                                {
+                                    CurrentBindingId,
+                                },
+                        },
+                        new
+                        {
+                            widgetId = TrendWidgetId,
+                            kind = "trend:L",
+                            title = "Process trend",
+                            bindingIds =
+                                new[]
+                                {
+                                    HistoryBindingId,
+                                },
+                        },
+                        new
+                        {
+                            widgetId = EventWidgetId,
+                            kind = "events",
+                            title = "Active events",
+                            bindingIds =
+                                new[]
+                                {
+                                    AlarmBindingId,
+                                },
+                        },
+                    },
+                    bindings =
+                        DashboardBindings(),
+                    layout = "Combined",
+                    mimicId = MimicId,
+                    mimicRevisionId =
+                        MimicRevisionId,
+                },
+            },
+            dependencies =
+                Array.Empty<object>(),
+            publishedAt =
+                DateTimeOffset.UtcNow,
+            selectedWindowId = WindowId,
+            mimics = new[]
+            {
+                new
+                {
+                    windowId = WindowId,
+                    mimicId = MimicId,
+                    revisionId =
+                        MimicRevisionId,
+                    revisionNumber = 1UL,
+                    name = "Process Mimic",
+                    sanitizedSvg =
+                        SafeMimicSvg(),
+                    bindings = new[]
+                    {
+                        new
+                        {
+                            bindingId =
+                                MimicBindingId,
+                            source = "Current",
+                            scopeId = ScopeId,
+                            pointId =
+                                EventPointId,
+                            historySourceId =
+                                (Guid?)null,
+                        },
+                    },
+                    canEdit = true,
+                },
+            },
+        };
+
+    private static object[] DashboardBindings() =>
+        [
+            new
+            {
+                bindingId =
+                    CurrentBindingId,
+                source = "Current",
+                scopeId = ScopeId,
+                pointId = EventPointId,
+                historySourceId =
+                    (Guid?)null,
+            },
+            new
+            {
+                bindingId =
+                    HistoryBindingId,
+                source = "History",
+                scopeId = ScopeId,
+                pointId = EventPointId,
+                historySourceId =
+                    (Guid?)HistorySourceId,
+            },
+            new
+            {
+                bindingId = AlarmBindingId,
+                source = "Alarm",
+                scopeId = ScopeId,
+                pointId = EventPointId,
+                historySourceId =
+                    (Guid?)null,
+            },
+        ];
+
+    private object DashboardSubscriptionPayload() =>
+        new
+        {
+            subscriptionId =
+                Guid.Parse(
+                    "81000000-0000-0000-0000-000000000027"),
+            dashboardId = DashboardId,
+            revisionId =
+                dashboardRevision == 1
+                    ? RevisionId
+                    : SecondRevisionId,
+            windows = new[]
+            {
+                new
+                {
+                    windowId = WindowId,
+                    widgets = new[]
+                    {
+                        new
+                        {
+                            widgetId = WidgetId,
+                            bindingIds =
+                                new[]
+                                {
+                                    CurrentBindingId,
+                                },
+                        },
+                        new
+                        {
+                            widgetId = TrendWidgetId,
+                            bindingIds =
+                                new[]
+                                {
+                                    HistoryBindingId,
+                                },
+                        },
+                        new
+                        {
+                            widgetId = EventWidgetId,
+                            bindingIds =
+                                new[]
+                                {
+                                    AlarmBindingId,
+                                },
+                        },
+                    },
+                    mimicBindingIds =
+                        new[]
+                        {
+                            MimicBindingId,
+                        },
+                },
+            },
+            links = new[]
+            {
+                new
+                {
+                    bindingId =
+                        CurrentBindingId,
+                    source = "Current",
+                    scopeId = ScopeId,
+                    pointId = EventPointId,
+                    endpoint =
+                        "/hubs/runtime",
+                },
+                new
+                {
+                    bindingId =
+                        HistoryBindingId,
+                    source = "History",
+                    scopeId = ScopeId,
+                    pointId = EventPointId,
+                    endpoint =
+                        "/api/history/aggregate",
+                },
+                new
+                {
+                    bindingId = AlarmBindingId,
+                    source = "Alarm",
+                    scopeId = ScopeId,
+                    pointId = EventPointId,
+                    endpoint = "/hubs/events",
+                },
+                new
+                {
+                    bindingId = MimicBindingId,
+                    source = "Current",
+                    scopeId = ScopeId,
+                    pointId = EventPointId,
+                    endpoint =
+                        "/hubs/runtime",
+                },
+            },
+        };
+
+    private object EditorRevisionPayload() =>
+        new
+        {
+            revisionId = RevisionId,
+            revisionNumber = 1UL,
+            version = editorVersion,
+            validatedAt =
+                editorVersion >= 2
+                    ? DateTimeOffset.UtcNow
+                    : (DateTimeOffset?)null,
+            publishedAt =
+                editorVersion >= 3
+                    ? DateTimeOffset.UtcNow
+                    : (DateTimeOffset?)null,
+        };
+
+    private static object EditorImpactPayload() =>
+        new
+        {
+            revisionId = RevisionId,
+            replacesRevisionId =
+                (Guid?)null,
+            windowIds =
+                new[]
+                {
+                    WindowId,
+                },
+            bindingCount = 1,
+            mimicCount = 0,
+            requiresRuntimeResnapshot = true,
+        };
+
+    private static string SafeMimicSvg() =>
+        $"""
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40">
+          <rect id="pump" x="5" y="5" width="90" height="30" fill="none" stroke="currentColor" data-binding-id="{MimicBindingId:D}" />
+        </svg>
+        """;
 
     private object[] OccurrencesPayload()
     {

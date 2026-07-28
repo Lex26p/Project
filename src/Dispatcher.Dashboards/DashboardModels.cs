@@ -70,11 +70,25 @@ public sealed record Widget(
     string Title,
     IReadOnlyList<DashboardBindingId> BindingIds);
 
+public enum DashboardWindowLayout
+{
+    Widgets = 1,
+    Mimic = 2,
+    Combined = 3,
+}
+
+public sealed record DashboardMimicReference(
+    MimicId MimicId,
+    MimicRevisionId RevisionId);
+
 public sealed record DashboardWindow(
     DashboardWindowId WindowId,
     string Title,
     IReadOnlyList<Widget> Widgets,
-    IReadOnlyList<DashboardBinding> Bindings);
+    IReadOnlyList<DashboardBinding> Bindings,
+    DashboardWindowLayout Layout =
+        DashboardWindowLayout.Widgets,
+    DashboardMimicReference? Mimic = null);
 
 public sealed record DashboardDependency(
     DashboardBindingId BindingId,
@@ -96,6 +110,16 @@ public sealed record PublishedDashboardManifest(
     string ManifestJson,
     string ManifestFingerprint,
     string DependencyFingerprint);
+
+public sealed record PublishedMimicRevision(
+    MimicId MimicId,
+    MimicRevisionId RevisionId,
+    ulong RevisionNumber,
+    string Name,
+    string Svg,
+    IReadOnlyList<DashboardBinding> Bindings,
+    IReadOnlyList<DashboardDependency> Dependencies,
+    DateTimeOffset PublishedAt);
 
 public sealed record DashboardCatalogItem(
     DashboardId DashboardId,

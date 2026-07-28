@@ -35,7 +35,10 @@ internal static class DashboardManifestCodec
                     binding.ScopeId.Value,
                     binding.PointId.Value,
                     binding.RequiredPermission.Value,
-                    binding.HistorySourceId?.Value)).ToArray())).ToArray(),
+                    binding.HistorySourceId?.Value)).ToArray(),
+                (int)window.Layout,
+                window.Mimic?.MimicId.Value,
+                window.Mimic?.RevisionId.Value)).ToArray(),
             revision.PublishedAt);
         var dependencies = revision.Dependencies
             .OrderBy(item => item.BindingId.Value)
@@ -72,7 +75,17 @@ internal static class DashboardManifestCodec
                     RuntimeScopeId.From(binding.ScopeId),
                     PointId.From(binding.PointId),
                     PermissionCode.From(binding.RequiredPermission),
-                    binding.HistorySourceId is null ? null : SourceId.From(binding.HistorySourceId.Value))).ToArray())).ToArray(),
+                    binding.HistorySourceId is null ? null : SourceId.From(binding.HistorySourceId.Value))).ToArray(),
+                (DashboardWindowLayout)window.Layout,
+                window.MimicId is null ||
+                window.MimicRevisionId is null
+                    ? null
+                    : new DashboardMimicReference(
+                        MimicId.From(
+                            window.MimicId.Value),
+                        MimicRevisionId.From(
+                            window.MimicRevisionId
+                                .Value)))).ToArray(),
             dependencies.Select(item => new DashboardDependency(
                 DashboardBindingId.From(item.BindingId), item.Key, item.Fingerprint)).ToArray(),
             manifest.PublishedAt);
@@ -86,6 +99,19 @@ internal static class DashboardManifestCodec
         if (revision.Windows.Count == 0 || revision.Windows.Any(window => string.IsNullOrWhiteSpace(window.Title)))
         {
             throw new ArgumentException("A Dashboard revision must contain named windows.", nameof(revision));
+        }
+        if (revision.Windows.Any(window =>
+                !Enum.IsDefined(window.Layout) ||
+                window.Layout ==
+                    DashboardWindowLayout.Widgets &&
+                window.Mimic is not null ||
+                window.Layout !=
+                    DashboardWindowLayout.Widgets &&
+                window.Mimic is null))
+        {
+            throw new ArgumentException(
+                "Mimic and Combined windows require an exact published Mimic revision.",
+                nameof(revision));
         }
 
         var windows = revision.Windows.Select(item => item.WindowId).ToArray();
@@ -115,8 +141,7 @@ internal static class DashboardManifestCodec
             throw new ArgumentException("History bindings require an exact source identity.", nameof(revision));
         }
 
-        if (revision.Dependencies.Count == 0 ||
-            !dependencyBindings.SetEquals(bindingSet) ||
+        if (!dependencyBindings.SetEquals(bindingSet) ||
             revision.Dependencies.Any(item => !bindingSet.Contains(item.BindingId) ||
                 string.IsNullOrWhiteSpace(item.Key) || string.IsNullOrWhiteSpace(item.Fingerprint)) ||
             revision.Dependencies.Select(item => (item.BindingId, item.Key)).Distinct().Count() != revision.Dependencies.Count)
@@ -136,7 +161,14 @@ internal static class DashboardManifestCodec
         string? Description,
         WindowDto[] Windows,
         DateTimeOffset PublishedAt);
-    private sealed record WindowDto(Guid WindowId, string Title, WidgetDto[] Widgets, BindingDto[] Bindings);
+    private sealed record WindowDto(
+        Guid WindowId,
+        string Title,
+        WidgetDto[] Widgets,
+        BindingDto[] Bindings,
+        int Layout = (int)DashboardWindowLayout.Widgets,
+        Guid? MimicId = null,
+        Guid? MimicRevisionId = null);
     private sealed record WidgetDto(Guid WidgetId, string Kind, string Title, Guid[] BindingIds);
     private sealed record BindingDto(
         Guid BindingId, int Source, Guid ScopeId, Guid PointId, string RequiredPermission, Guid? HistorySourceId);

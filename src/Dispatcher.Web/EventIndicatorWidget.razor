@@ -1,0 +1,130 @@
+@implements IAsyncDisposable
+@inject EventApiClient Events
+
+<section aria-label="Event indicator">
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <p role="alert">@error</p>
+    }
+    else if (loading)
+    {
+        <p>Loading events…</p>
+    }
+    else
+    {
+        <strong class="event-indicator__count">
+            @visible.Count
+        </strong>
+        <span>active occurrences</span>
+        @if (visible.Count > 0)
+        {
+            <ul>
+                @foreach (var occurrence in
+                    visible.Take(5))
+                {
+                    <li>
+                        <UiBadge Text="@occurrence.Priority"
+                                 Category="@UiBadgeCategory.Severity"
+                                 Tone="@PriorityTone(occurrence.Priority)" />
+                        @occurrence.ConditionState
+                    </li>
+                }
+            </ul>
+        }
+    }
+</section>
+
+@code {
+    private readonly CancellationTokenSource
+        cancellation = new();
+    private IReadOnlyList<OccurrencePayload>
+        visible = [];
+    private Task? polling;
+    private string? error;
+    private bool loading = true;
+
+    [Parameter]
+    public Guid ScopeId { get; set; }
+
+    [Parameter]
+    public IReadOnlyCollection<Guid> PointIds
+    {
+        get;
+        set;
+    } = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+        polling = PollAsync(cancellation.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        cancellation.Dispose();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var result =
+            await Events.ReadOccurrenceSnapshotAsync(
+                ScopeId,
+                cancellation.Token);
+        if (result.Status !=
+                EventApiStatus.Available ||
+            result.Payload is null)
+        {
+            error =
+                "Event state is unavailable.";
+        }
+        else
+        {
+            var points = PointIds.ToHashSet();
+            visible =
+                result.Payload.Occurrences
+                    .Where(item =>
+                        points.Contains(item.PointId) &&
+                        item.ConditionState != "Normal")
+                    .ToArray();
+            error = null;
+        }
+
+        loading = false;
+    }
+
+    private async Task PollAsync(
+        CancellationToken token)
+    {
+        using var timer =
+            new PeriodicTimer(
+                TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(
+                   token))
+        {
+            await ReloadAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static UiBadgeTone PriorityTone(
+        string priority) =>
+        priority switch
+        {
+            "Critical" => UiBadgeTone.Critical,
+            "High" or "Medium" =>
+                UiBadgeTone.Warning,
+            _ => UiBadgeTone.Information,
+        };
+}

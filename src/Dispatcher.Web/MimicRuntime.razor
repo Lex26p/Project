@@ -1,0 +1,244 @@
+@using System.Globalization
+@using System.Xml.Linq
+@using Microsoft.Extensions.DependencyInjection
+@implements IAsyncDisposable
+@inject IServiceProvider Services
+
+<section class="mimic-runtime"
+         aria-label="@Mimic.Name"
+         data-mimic-id="@Mimic.MimicId"
+         data-mimic-revision="@Mimic.RevisionId">
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <UiStatePanel Kind="@UiStateKind.Error"
+                      Title="Mimic unavailable"
+                      Message="@error" />
+    }
+    else
+    {
+        <div class="mimic-runtime__controls"
+             aria-label="Mimic view controls">
+            <button type="button"
+                    aria-label="Zoom out"
+                    @onclick="() => SetScale(scale - 0.1)">
+                −
+            </button>
+            <button type="button"
+                    aria-label="Zoom in"
+                    @onclick="() => SetScale(scale + 0.1)">
+                +
+            </button>
+            <button type="button"
+                    @onclick="() => SetScale(1)">
+                100%
+            </button>
+            <button type="button"
+                    @onclick="() => SetScale(0.85)">
+                Fit
+            </button>
+            <button type="button"
+                    @onclick="() => SetScale(1.1)">
+                Fit width
+            </button>
+            <button type="button"
+                    @onclick="ResetAuthorView">
+                Reset author view
+            </button>
+            <button type="button"
+                    aria-pressed="@layersVisible"
+                    @onclick="() => layersVisible = !layersVisible">
+                Layers
+            </button>
+            <output aria-label="Mimic zoom">
+                @Math.Round(scale * 100)%
+            </output>
+        </div>
+        @if (layersVisible)
+        {
+            <div class="mimic-runtime__layers"
+                 role="status">
+                Published layer · bindings
+            </div>
+        }
+        <div class="mimic-runtime__viewport"
+             tabindex="0"
+             style="@TransformStyle">
+            @((MarkupString)BoundSvg)
+        </div>
+    }
+</section>
+
+@code {
+    private readonly Dictionary<Guid,
+        RealtimeWidgetClient> clients = [];
+    private readonly CancellationTokenSource
+        cancellation = new();
+    private Task? polling;
+    private string? error;
+    private double scale = 1;
+    private bool layersVisible;
+
+    [Parameter, EditorRequired]
+    public DashboardMimicPayload Mimic
+    {
+        get;
+        set;
+    } = null!;
+
+    private string BoundSvg
+    {
+        get
+        {
+            var document =
+                XDocument.Parse(
+                    Mimic.SanitizedSvg,
+                    LoadOptions.None);
+            foreach (var element in
+                     document.Descendants()
+                         .Where(item =>
+                             item.Attribute(
+                                 "data-binding-id") is
+                             not null))
+            {
+                if (!Guid.TryParse(
+                        element.Attribute(
+                                "data-binding-id")
+                            ?.Value,
+                        out var bindingId))
+                {
+                    continue;
+                }
+
+                var binding =
+                    Mimic.Bindings.SingleOrDefault(
+                        item =>
+                            item.BindingId ==
+                            bindingId);
+                var point =
+                    binding is not null &&
+                    clients.TryGetValue(
+                        binding.ScopeId,
+                        out var client)
+                        ? client.State.Points
+                            .SingleOrDefault(item =>
+                                item.PointId ==
+                                binding.PointId)
+                        : null;
+                element.SetAttributeValue(
+                    "data-quality",
+                    point?.Quality ?? "Unknown");
+                element.SetAttributeValue(
+                    "data-freshness",
+                    point?.Freshness ?? "Offline");
+                element.SetAttributeValue(
+                    "data-value",
+                    point?.Value.ToString(
+                        CultureInfo
+                            .InvariantCulture) ??
+                    string.Empty);
+                element.SetAttributeValue(
+                    "class",
+                    $"mimic-bound mimic-quality-{(point?.Quality ?? "unknown").ToLowerInvariant()}");
+            }
+
+            return document.ToString(
+                SaveOptions.DisableFormatting);
+        }
+    }
+
+    private string TransformStyle =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"--mimic-scale:{scale:0.00}");
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            foreach (var group in
+                     Mimic.Bindings
+                         .Where(item =>
+                             item.Source == "Current")
+                         .GroupBy(item =>
+                             item.ScopeId))
+            {
+                var client =
+                    Services.GetRequiredService<
+                        RealtimeWidgetClient>();
+                client.RenderRequested +=
+                    RenderAsync;
+                clients[group.Key] = client;
+                await client.StartAsync(
+                    group.Key,
+                    cancellation.Token,
+                    group.Select(item =>
+                            item.PointId)
+                        .Distinct()
+                        .ToArray());
+            }
+
+            polling =
+                PollAsync(cancellation.Token);
+        }
+        catch (Exception exception)
+            when (exception is not
+                  OperationCanceledException)
+        {
+            error =
+                "Realtime Mimic bindings could not be initialized.";
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        foreach (var client in clients.Values)
+        {
+            client.RenderRequested -=
+                RenderAsync;
+            await client.DisposeAsync();
+        }
+
+        cancellation.Dispose();
+    }
+
+    private async Task PollAsync(
+        CancellationToken token)
+    {
+        using var timer =
+            new PeriodicTimer(
+                TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(
+                   token))
+        {
+            foreach (var client in
+                     clients.Values)
+            {
+                await client.PollAsync(token);
+            }
+        }
+    }
+
+    private Task RenderAsync() =>
+        InvokeAsync(StateHasChanged);
+
+    private void SetScale(double value) =>
+        scale = Math.Clamp(value, 0.25, 4);
+
+    private void ResetAuthorView()
+    {
+        scale = 1;
+        layersVisible = false;
+    }
+}

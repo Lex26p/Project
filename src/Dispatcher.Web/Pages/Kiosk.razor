@@ -1,5 +1,6 @@
 @page "/kiosk"
 @layout KioskLayout
+@implements IAsyncDisposable
 @inject KioskApiClient Api
 
 <PageTitle>Dispatcher Kiosk</PageTitle>
@@ -13,12 +14,29 @@
 }
 else
 {
-    <section data-terminal="@State.Runtime.TerminalId">
+    <section data-terminal="@State.Runtime.TerminalId"
+             data-kiosk-online="@(State.Online ? "true" : "false")"
+             data-kiosk-revision="@State.Runtime.Dashboard.RevisionId">
         <h1>@State.Runtime.Dashboard.Name</h1>
-        @foreach (var window in State.Runtime.Dashboard.Windows)
+        @foreach (var window in VisibleWindows)
         {
             <article>
                 <h2>@window.Title</h2>
+                @if (window.Layout is "Mimic" or "Combined")
+                {
+                    var mimic =
+                        State.Runtime.Dashboard.Mimics?
+                            .SingleOrDefault(item =>
+                                item.WindowId ==
+                                window.WindowId);
+                    if (mimic is not null)
+                    {
+                        <div class="mimic-runtime__viewport"
+                             data-mimic-revision="@mimic.RevisionId">
+                            @((MarkupString)mimic.SanitizedSvg)
+                        </div>
+                    }
+                }
                 @foreach (var widget in window.Widgets)
                 {
                     <div data-widget="@widget.WidgetId">@widget.Title</div>
@@ -34,19 +52,114 @@ else
 
 @code {
     private readonly KioskRuntimeState State = new();
+    private readonly CancellationTokenSource
+        cancellation = new();
+    private Task? monitoring;
     private string Status = "Authenticating terminal…";
+
+    private IReadOnlyList<KioskWindowPayload>
+        VisibleWindows =>
+        State.Runtime?.Dashboard.SelectedWindowId is
+            { } selected
+            ? State.Runtime.Dashboard.Windows
+                .Where(item =>
+                    item.WindowId == selected)
+                .ToArray()
+            : State.Runtime?.Dashboard.Windows ??
+              [];
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
-            State.Synchronized(await Api.SynchronizeAsync(CancellationToken.None));
+            State.Synchronized(
+                await Api.SynchronizeAsync(
+                    cancellation.Token));
             Status = "Synchronized";
         }
-        catch
+        catch (KioskAuthorizationException)
+        {
+            State.Revoked();
+            Status =
+                "Terminal identity is blocked or revoked.";
+        }
+        catch (HttpRequestException)
         {
             State.Disconnected();
-            Status = "Terminal authorization or assigned content is unavailable.";
+            Status =
+                "Terminal is offline.";
+        }
+
+        monitoring =
+            MonitorAsync(cancellation.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (monitoring is not null)
+        {
+            try
+            {
+                await monitoring;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        cancellation.Dispose();
+    }
+
+    private async Task MonitorAsync(
+        CancellationToken token)
+    {
+        using var timer =
+            new PeriodicTimer(
+                TimeSpan.FromSeconds(3));
+        while (await timer.WaitForNextTickAsync(
+                   token))
+        {
+            try
+            {
+                if (!State.Online ||
+                    State.Runtime is null)
+                {
+                    State.Synchronized(
+                        await Api.SynchronizeAsync(
+                            token));
+                }
+                else
+                {
+                    var heartbeat =
+                        await Api.HeartbeatAsync(
+                            State.Runtime
+                                .ProfileVersion,
+                            token);
+                    if (heartbeat.ResyncRequired)
+                    {
+                        State.Synchronized(
+                            await Api.SynchronizeAsync(
+                                token));
+                    }
+                }
+
+                Status = "Synchronized";
+            }
+            catch (KioskAuthorizationException)
+            {
+                State.Revoked();
+                Status =
+                    "Terminal identity is blocked or revoked.";
+            }
+            catch (HttpRequestException)
+            {
+                State.Disconnected();
+                Status =
+                    "Terminal is offline.";
+            }
+
+            await InvokeAsync(StateHasChanged);
         }
     }
 }

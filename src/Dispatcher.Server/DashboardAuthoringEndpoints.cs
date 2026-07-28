@@ -11,12 +11,14 @@ public static class DashboardAuthoringEndpoints
     {
         var dashboards = endpoints.MapGroup("/api/dashboard-editor");
         dashboards.MapGet("/{dashboardId:guid}", ReadDashboardAsync);
+        dashboards.MapGet("/{dashboardId:guid}/impact", ReadDashboardImpactAsync);
         dashboards.MapPut("/{dashboardId:guid}/draft", SaveDashboardAsync);
         dashboards.MapPost("/{dashboardId:guid}/validate", ValidateDashboardAsync);
         dashboards.MapPost("/{dashboardId:guid}/publish", PublishDashboardAsync);
 
         var mimics = endpoints.MapGroup("/api/mimic-editor");
         mimics.MapGet("/{mimicId:guid}", ReadMimicAsync);
+        mimics.MapGet("/{mimicId:guid}/impact", ReadMimicImpactAsync);
         mimics.MapPost("/{mimicId:guid}/preview", PreviewMimic);
         mimics.MapPut("/{mimicId:guid}/draft", SaveMimicAsync);
         mimics.MapPost("/{mimicId:guid}/validate", ValidateMimicAsync);
@@ -60,6 +62,29 @@ public static class DashboardAuthoringEndpoints
         {
             return Results.BadRequest(new { error = "dashboard.content_invalid", detail = exception.Message });
         }
+    }
+
+    private static async Task<IResult>
+        ReadDashboardImpactAsync(
+            Guid dashboardId,
+            Guid revisionId,
+            HttpContext context,
+            RequestSessionResolver sessions,
+            DashboardAuthoringService authoring,
+            CancellationToken cancellationToken)
+    {
+        var result =
+            await authoring
+                .ReadDashboardImpactAsync(
+                    sessions.Resolve(context),
+                    DashboardId.From(
+                        dashboardId),
+                    revisionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return result.IsSuccess
+            ? Results.Ok(ToPayload(result.Value))
+            : Problem(result.Error!);
     }
 
     private static Task<IResult> ValidateDashboardAsync(
@@ -143,6 +168,27 @@ public static class DashboardAuthoringEndpoints
         }
     }
 
+    private static async Task<IResult>
+        ReadMimicImpactAsync(
+            Guid mimicId,
+            Guid revisionId,
+            HttpContext context,
+            RequestSessionResolver sessions,
+            DashboardAuthoringService authoring,
+            CancellationToken cancellationToken)
+    {
+        var result =
+            await authoring.ReadMimicImpactAsync(
+                    sessions.Resolve(context),
+                    MimicId.From(mimicId),
+                    revisionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return result.IsSuccess
+            ? Results.Ok(ToPayload(result.Value))
+            : Problem(result.Error!);
+    }
+
     private static Task<IResult> ValidateMimicAsync(
         Guid mimicId,
         EditorRevisionRequest request,
@@ -181,7 +227,19 @@ public static class DashboardAuthoringEndpoints
             window.Widgets.Select(widget => new Widget(
                 WidgetId.From(widget.WidgetId), widget.Kind, widget.Title,
                 widget.BindingIds.Select(DashboardBindingId.From).ToArray())).ToArray(),
-            window.Bindings.Select(ToDomain).ToArray())).ToArray(),
+            window.Bindings.Select(ToDomain).ToArray(),
+            Enum.Parse<DashboardWindowLayout>(
+                window.Layout,
+                ignoreCase: true),
+            window.MimicId is null ||
+            window.MimicRevisionId is null
+                ? null
+                : new DashboardMimicReference(
+                    MimicId.From(
+                        window.MimicId.Value),
+                    MimicRevisionId.From(
+                        window.MimicRevisionId
+                            .Value)))).ToArray(),
         payload.Dependencies.Select(item => new DashboardDependency(
             DashboardBindingId.From(item.BindingId), item.Key, item.Fingerprint)).ToArray());
 
@@ -209,7 +267,10 @@ public static class DashboardAuthoringEndpoints
             window.Widgets.Select(widget => new EditorWidgetPayload(
                 widget.WidgetId.Value, widget.Kind, widget.Title,
                 widget.BindingIds.Select(id => id.Value).ToArray())).ToArray(),
-            window.Bindings.Select(ToPayload).ToArray())).ToArray(),
+            window.Bindings.Select(ToPayload).ToArray(),
+            window.Layout.ToString(),
+            window.Mimic?.MimicId.Value,
+            window.Mimic?.RevisionId.Value)).ToArray(),
         content.Dependencies.Select(item => new EditorDependencyPayload(
             item.BindingId.Value, item.Key, item.Fingerprint)).ToArray());
 
@@ -234,6 +295,17 @@ public static class DashboardAuthoringEndpoints
         revision.Version,
         revision.ValidatedAt,
         revision.PublishedAt);
+
+    private static EditorPublicationImpactPayload
+        ToPayload(
+            DashboardPublicationImpact impact) =>
+        new(
+            impact.RevisionId,
+            impact.ReplacesRevisionId,
+            impact.WindowIds,
+            impact.BindingCount,
+            impact.MimicCount,
+            impact.RequiresRuntimeResnapshot);
 
     private static IResult Problem(OperationError error) => Results.Problem(
         statusCode: error.Code.Value switch
@@ -264,7 +336,10 @@ public sealed record MimicEditorDocumentPayload(
     IReadOnlyList<EditorDependencyPayload> Dependencies);
 public sealed record EditorWindowPayload(
     Guid WindowId, string Title, IReadOnlyList<EditorWidgetPayload> Widgets,
-    IReadOnlyList<EditorBindingPayload> Bindings);
+    IReadOnlyList<EditorBindingPayload> Bindings,
+    string Layout = "Widgets",
+    Guid? MimicId = null,
+    Guid? MimicRevisionId = null);
 public sealed record EditorWidgetPayload(
     Guid WidgetId, string Kind, string Title, IReadOnlyList<Guid> BindingIds);
 public sealed record EditorBindingPayload(
@@ -272,3 +347,10 @@ public sealed record EditorBindingPayload(
     string RequiredPermission, Guid? HistorySourceId);
 public sealed record EditorDependencyPayload(Guid BindingId, string Key, string Fingerprint);
 public sealed record MimicPreviewPayload(string SanitizedSvg);
+public sealed record EditorPublicationImpactPayload(
+    Guid RevisionId,
+    Guid? ReplacesRevisionId,
+    IReadOnlyList<Guid> WindowIds,
+    int BindingCount,
+    int MimicCount,
+    bool RequiresRuntimeResnapshot);

@@ -48,21 +48,43 @@ public sealed class DashboardSubscriptionService
             return Failure("dashboard.visible_window_capacity", "Visible Dashboard window capacity was exceeded.");
         }
 
-        var manifest = await dashboards.ReadManifestAsync(session, dashboardId, cancellationToken)
+        var manifest = await dashboards.ReadRuntimeManifestAsync(
+                session,
+                dashboardId,
+                null,
+                cancellationToken)
             .ConfigureAwait(false);
         if (manifest.IsFailure)
         {
             return Result.Failure<DashboardSubscriptionPayload>(manifest.Error!);
         }
 
-        var knownWindows = manifest.Value.Windows.Select(window => window.WindowId).ToHashSet();
+        var knownWindows = manifest.Value.Revision.Windows
+            .Select(window => window.WindowId)
+            .ToHashSet();
         if (!requested.IsSubsetOf(knownWindows))
         {
             return Failure("dashboard.window_not_found", "A visible Dashboard window was not found.");
         }
 
-        var windows = manifest.Value.Windows.Where(window => requested.Contains(window.WindowId)).ToArray();
-        var bindings = windows.SelectMany(window => window.Bindings).ToArray();
+        var windows = manifest.Value.Revision.Windows
+            .Where(window =>
+                requested.Contains(window.WindowId))
+            .ToArray();
+        var mimics = manifest.Value.Mimics
+            .Where(item =>
+                requested.Contains(item.WindowId))
+            .ToDictionary(item => item.WindowId);
+        var bindings = windows
+            .SelectMany(window =>
+                window.Bindings.Concat(
+                    mimics.TryGetValue(
+                        window.WindowId,
+                        out var mimic)
+                            ? mimic.Revision.Bindings
+                            : []))
+            .DistinctBy(item => item.BindingId)
+            .ToArray();
         if (bindings.Length > limits.MaxBindings)
         {
             return Failure("dashboard.binding_capacity", "Dashboard subscription binding capacity was exceeded.");
@@ -70,16 +92,27 @@ public sealed class DashboardSubscriptionService
 
         var links = bindings.Select(ToLink).ToArray();
         var subscriptionId = generations.Open(
-            session!.Id, manifest.Value.DashboardId, manifest.Value.RevisionId);
+            session!.Id,
+            manifest.Value.Revision.DashboardId,
+            manifest.Value.Revision.RevisionId);
         return Result.Success(new DashboardSubscriptionPayload(
             subscriptionId,
-            manifest.Value.DashboardId.Value,
-            manifest.Value.RevisionId.Value,
+            manifest.Value.Revision.DashboardId.Value,
+            manifest.Value.Revision.RevisionId.Value,
             windows.Select(window => new DashboardSubscriptionWindowPayload(
                 window.WindowId.Value,
                 window.Widgets.Select(widget => new DashboardSubscriptionWidgetPayload(
                     widget.WidgetId.Value,
-                    widget.BindingIds.Select(id => id.Value).ToArray())).ToArray())).ToArray(),
+                    widget.BindingIds.Select(id => id.Value).ToArray())).ToArray(),
+                mimics.TryGetValue(
+                    window.WindowId,
+                    out var mimic)
+                        ? mimic.Revision.Bindings
+                            .Select(item =>
+                                item.BindingId.Value)
+                            .ToArray()
+                        : []))
+                .ToArray(),
             links));
     }
 
@@ -142,7 +175,9 @@ public sealed record DashboardSubscriptionPayload(
     IReadOnlyList<DashboardSubscriptionLinkPayload> Links);
 public sealed record DashboardSubscriptionWindowPayload(
     Guid WindowId,
-    IReadOnlyList<DashboardSubscriptionWidgetPayload> Widgets);
+    IReadOnlyList<DashboardSubscriptionWidgetPayload> Widgets,
+    IReadOnlyList<Guid>? MimicBindingIds =
+        null);
 public sealed record DashboardSubscriptionWidgetPayload(Guid WidgetId, IReadOnlyList<Guid> BindingIds);
 public sealed record DashboardSubscriptionLinkPayload(
     Guid BindingId, string Source, Guid ScopeId, Guid PointId, string Endpoint);

@@ -13,6 +13,8 @@ else if (!loaded)
 }
 else
 {
+    <section class="authoring-workspace"
+             data-editor-kind="mimic">
     <h1>SVG Mimic Editor</h1>
     <p>Mimic: @MimicId</p>
     <label>Name <input value="@name" @oninput="ChangeName" /></label>
@@ -39,7 +41,30 @@ else
     }
     @if (workflow.IsUnsaved) { <p role="status">Unsaved changes.</p> }
     @if (workflow.HasConflict) { <p role="alert">The Mimic draft changed concurrently. Reload before saving.</p> }
+    @if (validationErrors.Count > 0)
+    {
+        <section class="authoring-validation"
+                 role="alert">
+            <h2>Validation errors</h2>
+            <ul>
+                @foreach (var item in validationErrors)
+                {
+                    <li>@item</li>
+                }
+            </ul>
+        </section>
+    }
+    @if (impact is not null &&
+         !workflow.IsUnsaved)
+    {
+        <section class="authoring-impact"
+                 aria-label="Publication impact">
+            <h2>Publication impact</h2>
+            <p>@impact.BindingCount bindings will be replaced as one published Mimic revision.</p>
+        </section>
+    }
     @if (!string.IsNullOrEmpty(status)) { <p role="status">@status</p> }
+    </section>
 }
 
 @code {
@@ -50,6 +75,9 @@ else
     private string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
     private string? preview;
     private string? status;
+    private EditorPublicationImpactPayload? impact;
+    private readonly List<string>
+        validationErrors = [];
     private bool loaded;
     private bool accessDenied;
 
@@ -109,6 +137,10 @@ else
         var revision = RequiredRevision();
         workflow.Validated(await Api.ValidateMimicAsync(
             MimicId, new EditorRevisionRequest(revision.RevisionId, revision.Version)));
+        impact = await Api.ReadMimicImpactAsync(
+            MimicId,
+            workflow.Revision!.RevisionId);
+        validationErrors.Clear();
         status = "Exact Mimic revision validated.";
     });
 
@@ -124,6 +156,12 @@ else
     {
         try { await action(); }
         catch (EditorConflictException) { workflow.MarkConflict(); status = null; }
+        catch (EditorValidationException exception)
+        {
+            validationErrors.Clear();
+            validationErrors.Add(exception.Message);
+            status = null;
+        }
         catch (HttpRequestException exception) { status = exception.Message; }
     }
 

@@ -21,6 +21,12 @@ public sealed class KioskRuntimeStateTests
         Assert.Null(state.Runtime);
         Assert.False(state.TryQueueCommand());
         Assert.Equal(0, state.PendingCommandCount);
+
+        state.Synchronized(
+            Runtime("ReadOnlyLastSynchronized"));
+        state.Revoked();
+        Assert.Null(state.Runtime);
+        Assert.False(state.Online);
     }
 
     private static KioskAssignedRuntimePayload Runtime(string offlineMode) => new(

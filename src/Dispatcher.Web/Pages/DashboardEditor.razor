@@ -13,6 +13,8 @@ else if (!loaded)
 }
 else
 {
+    <section class="authoring-workspace"
+             data-editor-kind="dashboard">
     <h1>Dashboard Editor</h1>
     <p>Dashboard: @DashboardId</p>
     <label>Name <input value="@name" @oninput="ChangeName" /></label>
@@ -24,6 +26,25 @@ else
         <section @key="window.WindowId">
             <h2>Window</h2>
             <input value="@window.Title" @oninput="args => ChangeWindowTitle(window, args)" />
+            <label>Layout
+                <select value="@window.Layout"
+                        @onchange="args => ChangeLayout(window, args)">
+                    <option>Widgets</option>
+                    <option>Mimic</option>
+                    <option>Combined</option>
+                </select>
+            </label>
+            @if (window.Layout is "Mimic" or "Combined")
+            {
+                <label>Mimic ID
+                    <input value="@window.MimicId"
+                           @onchange="args => ChangeMimicId(window, args)" />
+                </label>
+                <label>Published Mimic revision ID
+                    <input value="@window.MimicRevisionId"
+                           @onchange="args => ChangeMimicRevisionId(window, args)" />
+                </label>
+            }
             <button type="button" @onclick="() => AddBinding(window)">Add widget binding</button>
             @foreach (var binding in window.Bindings)
             {
@@ -53,7 +74,31 @@ else
     </div>
     @if (workflow.IsUnsaved) { <p role="status">Unsaved changes.</p> }
     @if (workflow.HasConflict) { <p role="alert">The draft changed concurrently. Reload before saving.</p> }
+    @if (validationErrors.Count > 0)
+    {
+        <section class="authoring-validation"
+                 role="alert">
+            <h2>Validation errors</h2>
+            <ul>
+                @foreach (var item in validationErrors)
+                {
+                    <li>@item</li>
+                }
+            </ul>
+        </section>
+    }
+    @if (impact is not null &&
+         !workflow.IsUnsaved)
+    {
+        <section class="authoring-impact"
+                 aria-label="Publication impact">
+            <h2>Publication impact</h2>
+            <p>@impact.WindowIds.Count windows, @impact.BindingCount bindings, @impact.MimicCount Mimics.</p>
+            <p>The runtime will replace the complete revision and resnapshot visible bindings.</p>
+        </section>
+    }
     @if (!string.IsNullOrEmpty(status)) { <p role="status">@status</p> }
+    </section>
 }
 
 @code {
@@ -64,6 +109,9 @@ else
     private string name = "New Dashboard";
     private string? description;
     private string? status;
+    private EditorPublicationImpactPayload? impact;
+    private readonly List<string>
+        validationErrors = [];
     private bool loaded;
     private bool accessDenied;
 
@@ -81,7 +129,12 @@ else
                 var dependencies = draft.Document.Dependencies.ToDictionary(item => item.BindingId);
                 foreach (var item in draft.Document.Windows)
                 {
-                    var window = new WindowForm(item.WindowId, item.Title);
+                    var window = new WindowForm(
+                        item.WindowId,
+                        item.Title,
+                        item.Layout,
+                        item.MimicId,
+                        item.MimicRevisionId);
                     foreach (var binding in item.Bindings)
                     {
                         var widget = item.Widgets.First(widget => widget.BindingIds.Contains(binding.BindingId));
@@ -109,6 +162,9 @@ else
     private void ChangeName(ChangeEventArgs args) { name = Text(args); workflow.MarkChanged(); }
     private void ChangeDescription(ChangeEventArgs args) { description = Text(args); workflow.MarkChanged(); }
     private void ChangeWindowTitle(WindowForm item, ChangeEventArgs args) { item.Title = Text(args); workflow.MarkChanged(); }
+    private void ChangeLayout(WindowForm item, ChangeEventArgs args) { item.Layout = Text(args); workflow.MarkChanged(); }
+    private void ChangeMimicId(WindowForm item, ChangeEventArgs args) { item.MimicId = Guid.TryParse(Text(args), out var id) ? id : null; workflow.MarkChanged(); }
+    private void ChangeMimicRevisionId(WindowForm item, ChangeEventArgs args) { item.MimicRevisionId = Guid.TryParse(Text(args), out var id) ? id : null; workflow.MarkChanged(); }
     private void ChangeWidgetTitle(BindingForm item, ChangeEventArgs args) { item.WidgetTitle = Text(args); workflow.MarkChanged(); }
     private void ChangeWidgetKind(BindingForm item, ChangeEventArgs args) { item.WidgetKind = Text(args); workflow.MarkChanged(); }
     private void ChangeSource(BindingForm item, ChangeEventArgs args) { item.Source = Text(args); workflow.MarkChanged(); }
@@ -118,7 +174,7 @@ else
     private void ChangePoint(BindingForm item, ChangeEventArgs args) { if (Guid.TryParse(Text(args), out var id)) item.PointId = id; workflow.MarkChanged(); }
     private void ChangeHistorySource(BindingForm item, ChangeEventArgs args) { item.HistorySourceId = Guid.TryParse(Text(args), out var id) ? id : null; workflow.MarkChanged(); }
 
-    private void AddWindow() { windows.Add(new WindowForm(Guid.NewGuid(), $"Window {windows.Count + 1}")); workflow.MarkChanged(); }
+    private void AddWindow() { windows.Add(new WindowForm(Guid.NewGuid(), $"Window {windows.Count + 1}", "Widgets", null, null)); workflow.MarkChanged(); }
 
     private void AddBinding(WindowForm window)
     {
@@ -143,6 +199,10 @@ else
         var revision = RequiredRevision();
         workflow.Validated(await Api.ValidateDashboardAsync(
             DashboardId, new EditorRevisionRequest(revision.RevisionId, revision.Version)));
+        impact = await Api.ReadDashboardImpactAsync(
+            DashboardId,
+            workflow.Revision!.RevisionId);
+        validationErrors.Clear();
         status = "Exact revision validated.";
     });
 
@@ -158,6 +218,12 @@ else
     {
         try { await action(); }
         catch (EditorConflictException) { workflow.MarkConflict(); status = null; }
+        catch (EditorValidationException exception)
+        {
+            validationErrors.Clear();
+            validationErrors.Add(exception.Message);
+            status = null;
+        }
         catch (HttpRequestException exception) { status = exception.Message; }
     }
 
@@ -169,7 +235,10 @@ else
             window.Title,
             window.Bindings.Select(binding => new EditorWidgetPayload(
                 binding.WidgetId, binding.WidgetKind, binding.WidgetTitle, [binding.BindingId])).ToArray(),
-            window.Bindings.Select(binding => binding.Payload()).ToArray())).ToArray(),
+            window.Bindings.Select(binding => binding.Payload()).ToArray(),
+            window.Layout,
+            window.MimicId,
+            window.MimicRevisionId)).ToArray(),
         windows.SelectMany(window => window.Bindings).Select(binding => new EditorDependencyPayload(
             binding.BindingId, $"point:{binding.PointId:N}:{binding.Source}", binding.DependencyFingerprint)).ToArray());
 
@@ -177,10 +246,19 @@ else
         ?? throw new InvalidOperationException("Save the draft first.");
     private static string Text(ChangeEventArgs args) => args.Value?.ToString() ?? string.Empty;
 
-    private sealed class WindowForm(Guid windowId, string title)
+    private sealed class WindowForm(
+        Guid windowId,
+        string title,
+        string layout,
+        Guid? mimicId,
+        Guid? mimicRevisionId)
     {
         public Guid WindowId { get; } = windowId;
         public string Title { get; set; } = title;
+        public string Layout { get; set; } = layout;
+        public Guid? MimicId { get; set; } = mimicId;
+        public Guid? MimicRevisionId { get; set; } =
+            mimicRevisionId;
         public List<BindingForm> Bindings { get; } = [];
     }
 

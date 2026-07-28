@@ -15,7 +15,10 @@ public sealed record MimicEditorDocumentPayload(
     IReadOnlyList<EditorDependencyPayload> Dependencies);
 public sealed record EditorWindowPayload(
     Guid WindowId, string Title, IReadOnlyList<EditorWidgetPayload> Widgets,
-    IReadOnlyList<EditorBindingPayload> Bindings);
+    IReadOnlyList<EditorBindingPayload> Bindings,
+    string Layout = "Widgets",
+    Guid? MimicId = null,
+    Guid? MimicRevisionId = null);
 public sealed record EditorWidgetPayload(
     Guid WidgetId, string Kind, string Title, IReadOnlyList<Guid> BindingIds);
 public sealed record EditorBindingPayload(
@@ -23,6 +26,15 @@ public sealed record EditorBindingPayload(
     string RequiredPermission, Guid? HistorySourceId);
 public sealed record EditorDependencyPayload(Guid BindingId, string Key, string Fingerprint);
 public sealed record MimicPreviewPayload(string SanitizedSvg);
+public sealed record EditorPublicationImpactPayload(
+    Guid RevisionId,
+    Guid? ReplacesRevisionId,
+    IReadOnlyList<Guid> WindowIds,
+    int BindingCount,
+    int MimicCount,
+    bool RequiresRuntimeResnapshot);
 
 public sealed class EditorAccessDeniedException : Exception;
 public sealed class EditorConflictException : Exception;
+public sealed class EditorValidationException(
+    string message) : Exception(message);

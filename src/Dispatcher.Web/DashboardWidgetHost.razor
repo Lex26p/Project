@@ -1,0 +1,155 @@
+<article class="dashboard-widget dashboard-widget--@Size"
+         data-widget-id="@Widget.WidgetId"
+         data-widget-kind="@Widget.Kind">
+    <header>
+        <h3>@Widget.Title</h3>
+        <UiBadge Text="@Family"
+                 Tone="@UiBadgeTone.Neutral" />
+    </header>
+
+    @if (IsCommandFamily)
+    {
+        <UiStatePanel Kind="@UiStateKind.Forbidden"
+                      Title="Physical control disabled"
+                      Message="This runtime does not expose physical Modbus or SNMP commands." />
+    }
+    else if (HistoryBinding is not null)
+    {
+        <HistoryTrendWidget ScopeId="@HistoryBinding.ScopeId"
+                            SourceId="@HistoryBinding.HistorySourceId!.Value"
+                            PointId="@HistoryBinding.PointId"
+                            From="@from"
+                            To="@to"
+                            ResolutionSeconds="60" />
+    }
+    else if (AlarmBindings.Count > 0)
+    {
+        @foreach (var group in
+            AlarmBindings.GroupBy(item =>
+                item.ScopeId))
+        {
+            <EventIndicatorWidget ScopeId="@group.Key"
+                                  PointIds="@group.Select(item => item.PointId).ToArray()" />
+        }
+    }
+    else if (CurrentBindings.Count > 0)
+    {
+        @foreach (var group in
+            CurrentBindings.GroupBy(item =>
+                item.ScopeId))
+        {
+            <CurrentValueWidget ScopeId="@group.Key"
+                                PointIds="@group.Select(item => item.PointId).ToArray()" />
+        }
+    }
+    else
+    {
+        <UiStatePanel Kind="@UiStateKind.Empty"
+                      Title="No permitted data"
+                      Message="The widget has no visible bindings for this session." />
+    }
+</article>
+
+@code {
+    private readonly DateTimeOffset to =
+        DateTimeOffset.UtcNow;
+    private readonly DateTimeOffset from =
+        DateTimeOffset.UtcNow.AddHours(-1);
+
+    [Parameter, EditorRequired]
+    public DashboardWidgetPayload Widget
+    {
+        get;
+        set;
+    } = null!;
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<DashboardBindingPayload>
+        Bindings
+    {
+        get;
+        set;
+    } = [];
+
+    private IReadOnlyList<DashboardBindingPayload>
+        WidgetBindings =>
+        Bindings.Where(item =>
+                Widget.BindingIds.Contains(
+                    item.BindingId))
+            .ToArray();
+
+    private IReadOnlyList<DashboardBindingPayload>
+        CurrentBindings =>
+        WidgetBindings.Where(item =>
+                item.Source == "Current")
+            .ToArray();
+
+    private IReadOnlyList<DashboardBindingPayload>
+        AlarmBindings =>
+        WidgetBindings.Where(item =>
+                item.Source == "Alarm")
+            .ToArray();
+
+    private DashboardBindingPayload? HistoryBinding =>
+        WidgetBindings.FirstOrDefault(item =>
+            item.Source == "History" &&
+            item.HistorySourceId is not null);
+
+    private bool IsCommandFamily =>
+        Widget.Kind.Contains(
+            "command",
+            StringComparison.OrdinalIgnoreCase) ||
+        Widget.Kind.Contains(
+            "control",
+            StringComparison.OrdinalIgnoreCase);
+
+    private string Family =>
+        IsCommandFamily
+            ? "Command"
+            : Widget.Kind.Split(':')[0]
+                .ToLowerInvariant() switch
+            {
+                "value" or "values" =>
+                    "Value",
+                "state" or "equipment" =>
+                    "Equipment state",
+                "indicator" or "gauge" =>
+                    "Indicator",
+                "trend" or "history" =>
+                    "Trend",
+                "table" or "list" =>
+                    "List",
+                "events" or "alarms" =>
+                    "Events",
+                "timeline" =>
+                    "Timeline",
+                "navigation" =>
+                    "Navigation",
+                "text" or "document" or
+                    "instruction" =>
+                    "Instruction",
+                "map" or "plan" or
+                    "mimic" =>
+                    "Mimic",
+                "calendar" or
+                    "maintenance" =>
+                    "Maintenance",
+                "kpi" => "KPI",
+                _ when HistoryBinding is not null =>
+                    "Trend",
+                _ when AlarmBindings.Count > 0 =>
+                    "Events",
+                _ => "Current",
+            };
+
+    private string Size =>
+        Widget.Kind.EndsWith(
+            ":L",
+            StringComparison.OrdinalIgnoreCase)
+            ? "l"
+            : Widget.Kind.EndsWith(
+                ":M",
+                StringComparison.OrdinalIgnoreCase)
+                ? "m"
+                : "s";
+}
