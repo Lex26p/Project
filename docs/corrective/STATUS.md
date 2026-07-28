@@ -18,9 +18,9 @@
 | C05 | Complete | PostgreSQL published current reader подключён к Server и принят |
 | C06 | Complete | Same-origin Web, production session и runtime realtime реализованы и приняты |
 | C07 | Complete | Межпроцессный Simulator E2E и recovery corpus реализованы и приняты |
-| C08 | Ready | Production Web composition C06 выполнена |
-| C09 | Planned | После runtime pipeline и Web shell |
-| C10 | Planned | После current feed и Web shell |
+| C08 | Complete | Web shell, visual system и browser baseline реализованы и приняты |
+| C09 | Ready | Runtime pipeline и Web shell выполнены |
+| C10 | Ready | Current feed и Web shell выполнены |
 | C11 | Ready | Межпроцессный Simulator E2E C07 выполнен |
 | C12 | Planned | После configuration reconciliation |
 | C13 | Planned | После configuration reconciliation |
