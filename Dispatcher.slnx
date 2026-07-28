@@ -28,6 +28,7 @@
   <Project Path="src/Dispatcher.Workspace/Dispatcher.Workspace.csproj" />
   <Project Path="src/Dispatcher.Facilities/Dispatcher.Facilities.csproj" />
   <Project Path="src/Dispatcher.Equipment/Dispatcher.Equipment.csproj" />
+  <Project Path="tests/Dispatcher.BrowserTests/Dispatcher.BrowserTests.csproj" />
   <Project Path="tests/Dispatcher.IntegrationTests/Dispatcher.IntegrationTests.csproj" />
   <Project Path="tests/Dispatcher.UnitTests/Dispatcher.UnitTests.csproj" />
 </Solution>
