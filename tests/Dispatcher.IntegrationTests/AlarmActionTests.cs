@@ -79,18 +79,31 @@ public sealed class AlarmActionTests
             "planned maintenance",
             StateVersion.Initial,
             "shelve-1");
+        var unshelved =
+            await coordinator.UnshelveAsync(
+                context.ActionSession,
+                context.ScopeId,
+                context.PointId,
+                occurrence.OccurrenceId,
+                StateVersion.From(2),
+                "unshelve-1");
 
         Assert.Equal(AlarmActionCompletion.Applied, acknowledged.Value.Completion);
         Assert.Equal(AlarmActionCompletion.Replayed, replay.Value.Completion);
         Assert.Equal(AlarmActionCompletion.Applied, assigned.Value.Completion);
         Assert.Equal(AlarmActionCompletion.Applied, shelved.Value.Completion);
+        Assert.Equal(
+            AlarmActionCompletion.Applied,
+            unshelved.Value.Completion);
         var final = Assert.Single(await context.Alarm.ReadOccurrencesAsync(context.ScopeId));
         Assert.Equal(StateVersion.Initial, final.Condition.Version);
         Assert.Equal(StateVersion.From(2), final.Acknowledgement.Version);
         Assert.Equal(StateVersion.From(2), final.Assignment.Version);
-        Assert.Equal(StateVersion.From(2), final.Shelving.Version);
+        Assert.Equal(StateVersion.From(3), final.Shelving.Version);
+        Assert.Null(final.Shelving.ShelvedUntil);
+        Assert.Null(final.Shelving.Reason);
         Assert.Equal(StateVersion.Initial, final.Suppression.Version);
-        Assert.Equal(3, await context.Actions.CountAuditAsync(context.ScopeId));
+        Assert.Equal(4, await context.Actions.CountAuditAsync(context.ScopeId));
 
         var events = await context.Events.QueryAsync(new EventQueryRequest(
             context.ScopeId,
@@ -107,7 +120,7 @@ public sealed class AlarmActionTests
         var projected = Assert.Single(projection.Occurrences).Occurrence;
         Assert.Equal(StateVersion.From(2), projected.Acknowledgement.Version);
         Assert.Equal(StateVersion.From(2), projected.Assignment.Version);
-        Assert.Equal(StateVersion.From(2), projected.Shelving.Version);
+        Assert.Equal(StateVersion.From(3), projected.Shelving.Version);
         var links = AlarmSourceLinkBuilder.From(context.PointId);
         Assert.Equal($"point:{context.PointId.Value:N}", links.DashboardBindingKey);
         Assert.True(RegistryRoutes.IsCanonical(links.EquipmentHref));

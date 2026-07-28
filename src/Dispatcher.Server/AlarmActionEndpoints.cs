@@ -122,6 +122,33 @@ public sealed class AlarmActionCoordinator
                 cancellationToken),
             cancellationToken);
 
+    public Task<Result<AlarmActionCompletionResult>> UnshelveAsync(
+        SessionSnapshot? session,
+        RuntimeScopeId scopeId,
+        PointId pointId,
+        AlarmOccurrenceId occurrenceId,
+        StateVersion expectedVersion,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(
+            session,
+            pointId,
+            occurrenceId,
+            idempotencyKey,
+            AlarmPermissions.Shelve,
+            authorization => actions.UnshelveAsync(
+                authorization,
+                new UnshelveAlarmRequest(
+                    scopeId,
+                    pointId,
+                    occurrenceId,
+                    expectedVersion,
+                    idempotencyKey,
+                    constraints.Resolve(
+                        occurrenceId)),
+                cancellationToken),
+            cancellationToken);
+
     private async Task<Result<AlarmActionCompletionResult>> ExecuteAsync(
         SessionSnapshot? session,
         PointId pointId,
@@ -205,6 +232,7 @@ public static class AlarmActionEndpoints
         group.MapPost("/acknowledge", AcknowledgeAsync);
         group.MapPost("/assign", AssignAsync);
         group.MapPost("/shelve", ShelveAsync);
+        group.MapPost("/unshelve", UnshelveAsync);
         return endpoints;
     }
 
@@ -266,6 +294,27 @@ public static class AlarmActionEndpoints
             request.ShelvedUntil,
             request.Reason,
             StateVersion.From(request.ExpectedVersion),
+            request.IdempotencyKey,
+            cancellationToken).ConfigureAwait(false);
+        return Response(result);
+    }
+
+    private static async Task<IResult> UnshelveAsync(
+        Guid scopeId,
+        Guid occurrenceId,
+        AlarmFacetActionRequest request,
+        HttpContext context,
+        RequestSessionResolver sessions,
+        AlarmActionCoordinator actions,
+        CancellationToken cancellationToken)
+    {
+        var result = await actions.UnshelveAsync(
+            sessions.Resolve(context),
+            RuntimeScopeId.From(scopeId),
+            PointId.From(request.PointId),
+            AlarmOccurrenceId.From(occurrenceId),
+            StateVersion.From(
+                request.ExpectedVersion),
             request.IdempotencyKey,
             cancellationToken).ConfigureAwait(false);
         return Response(result);

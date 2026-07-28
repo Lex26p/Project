@@ -1,0 +1,839 @@
+@page "/events"
+@implements IAsyncDisposable
+@inject EventApiClient Api
+@inject IdentitySessionState Session
+
+<PageTitle>Events</PageTitle>
+
+<GuardedContent Route="/events">
+    <section class="event-workspace"
+             aria-labelledby="event-workspace-title">
+        <header class="workspace-page-heading">
+            <div>
+                <span class="workspace-page-heading__eyebrow">
+                    Operations
+                </span>
+                <h1 id="event-workspace-title">
+                    Event Dispatcher
+                </h1>
+            </div>
+            <UiBadge Text="@(mode == "Realtime" ? "Realtime" : "History")"
+                     Tone="@(mode == "Realtime" ? UiBadgeTone.Positive : UiBadgeTone.Neutral)" />
+        </header>
+
+        @if (scopeId == Guid.Empty)
+        {
+            <UiStatePanel Kind="@UiStateKind.Empty"
+                          Title="No runtime scope"
+                          Message="The current session has no default runtime scope." />
+        }
+        else
+        {
+            <div class="event-toolbar"
+                 aria-label="Event filters">
+                <label>
+                    <span>Mode</span>
+                    <select value="@mode"
+                            @onchange="ChangeModeAsync">
+                        <option>Realtime</option>
+                        <option>History</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Severity</span>
+                    <select @bind="priority">
+                        <option>All</option>
+                        <option>Critical</option>
+                        <option>High</option>
+                        <option>Medium</option>
+                        <option>Low</option>
+                    </select>
+                </label>
+                @if (mode == "Realtime")
+                {
+                    <label>
+                        <span>Condition</span>
+                        <select @bind="condition">
+                            <option>All</option>
+                            <option>Active</option>
+                            <option>PendingClear</option>
+                            <option>Normal</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Acknowledgement</span>
+                        <select @bind="acknowledgement">
+                            <option>All</option>
+                            <option>Unacknowledged</option>
+                            <option>Acknowledged</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Assignment</span>
+                        <select @bind="assignment">
+                            <option>All</option>
+                            <option>Assigned</option>
+                            <option>Unassigned</option>
+                            <option>Mine</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Special</span>
+                        <select @bind="special">
+                            <option>All</option>
+                            <option>Normal queue</option>
+                            <option>Shelved</option>
+                            <option>Suppressed</option>
+                        </select>
+                    </label>
+                    <label class="event-toolbar__search">
+                        <span>Search</span>
+                        <input type="search"
+                               @bind="search"
+                               placeholder="Point or occurrence ID" />
+                    </label>
+                }
+                <button type="button"
+                        @onclick="ReloadAsync">
+                    Refresh
+                </button>
+            </div>
+
+            @if (resyncNotice)
+            {
+                <div class="event-resync"
+                     role="status"
+                     data-realtime-state="resynced">
+                    A realtime gap was detected. A fresh server snapshot was loaded.
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(error))
+            {
+                <UiStatePanel Kind="@UiStateKind.Error"
+                              Title="Event Dispatcher unavailable"
+                              Message="@error"
+                              ActionLabel="Retry"
+                              OnAction="@ReloadAsync" />
+            }
+            else if (loading)
+            {
+                <UiStatePanel Kind="@UiStateKind.Loading"
+                              Title="Loading events"
+                              Message="Reading the current event snapshot." />
+            }
+            else if (mode == "Realtime")
+            {
+                @RealtimeContent()
+            }
+            else
+            {
+                @HistoryContent()
+            }
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    private readonly EventDispatcherState state =
+        new();
+    private readonly CancellationTokenSource
+        cancellation = new();
+    private IReadOnlyList<EventPayload>
+        historyEvents = [];
+    private EventDispatcherCounters? historyCounters;
+    private OccurrencePayload? selected;
+    private Task? polling;
+    private Guid scopeId;
+    private string mode = "Realtime";
+    private string priority = "All";
+    private string condition = "All";
+    private string acknowledgement = "All";
+    private string assignment = "All";
+    private string special = "All";
+    private string search = string.Empty;
+    private string shelvingReason =
+        "Operator review";
+    private string? error;
+    private bool loading = true;
+    private bool actionBusy;
+    private bool resyncNotice;
+    private ulong? historyNextAfter;
+    private ulong? historyNextUpper;
+
+    private Guid? CurrentSubjectId =>
+        Session.Bootstrap?.SubjectId;
+
+    private EventFilter CurrentFilter =>
+        new(
+            priority,
+            condition,
+            acknowledgement,
+            assignment,
+            special,
+            search);
+
+    private IReadOnlyList<OccurrencePayload>
+        VisibleOccurrences =>
+        state.Filter(
+            CurrentFilter,
+            CurrentSubjectId,
+            DateTimeOffset.UtcNow);
+
+    private EventViewCounters CurrentCounters =>
+        state.Count(
+            CurrentFilter,
+            CurrentSubjectId,
+            DateTimeOffset.UtcNow);
+
+    protected override async Task
+        OnInitializedAsync()
+    {
+        scopeId =
+            Session.Bootstrap?.DefaultScopeId ??
+            Guid.Empty;
+        Session.Changed += OnSessionChanged;
+        if (scopeId != Guid.Empty)
+        {
+            await LoadSnapshotAsync();
+            polling = PollAsync(
+                cancellation.Token);
+        }
+        else
+        {
+            loading = false;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Session.Changed -= OnSessionChanged;
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        cancellation.Dispose();
+    }
+
+    private RenderFragment RealtimeContent() =>
+        @<div class="event-realtime-content">
+            <div class="event-counters"
+                 aria-label="Filtered event counters">
+                <div><span>Result</span><strong>@CurrentCounters.Total</strong></div>
+                <div><span>Active</span><strong>@CurrentCounters.Active</strong></div>
+                <div><span>Unacknowledged</span><strong>@CurrentCounters.Unacknowledged</strong></div>
+                <div><span>Shelved</span><strong>@CurrentCounters.Shelved</strong></div>
+            </div>
+
+            @if (VisibleOccurrences.Count == 0)
+            {
+                <UiStatePanel Kind="@UiStateKind.Empty"
+                              Title="No matching occurrences"
+                              Message="Change the active filters or wait for a new occurrence." />
+            }
+            else
+            {
+                <div class="event-content-grid">
+                    <div class="event-table-wrap">
+                        <table class="event-table">
+                            <thead>
+                                <tr>
+                                    <th>Severity</th>
+                                    <th>Condition</th>
+                                    <th>Acknowledgement</th>
+                                    <th>Opened</th>
+                                    <th>Source</th>
+                                    <th>Assignment</th>
+                                    <th>Special</th>
+                                    <th><span class="visually-hidden">Details</span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var occurrence in VisibleOccurrences)
+                                {
+                                    <tr data-occurrence-id="@occurrence.OccurrenceId">
+                                        <td><UiBadge Text="@occurrence.Priority"
+                                                     Category="@UiBadgeCategory.Severity"
+                                                     Tone="@SeverityTone(occurrence.Priority)" /></td>
+                                        <td><UiBadge Text="@occurrence.ConditionState"
+                                                     Category="@UiBadgeCategory.State"
+                                                     Tone="@ConditionTone(occurrence)" /></td>
+                                        <td><UiBadge Text="@occurrence.AcknowledgementState"
+                                                     Category="@UiBadgeCategory.Acknowledgement"
+                                                     Tone="@AcknowledgementTone(occurrence)" /></td>
+                                        <td>@occurrence.OpenedAt.ToLocalTime().ToString("g")</td>
+                                        <td class="event-source">@Short(occurrence.PointId)</td>
+                                        <td><UiBadge Text="@AssignmentLabel(occurrence)"
+                                                     Category="@UiBadgeCategory.Assignment"
+                                                     Tone="@(occurrence.AssignedTo is null ? UiBadgeTone.Muted : UiBadgeTone.Information)" /></td>
+                                        <td>@SpecialBadges(occurrence)</td>
+                                        <td>
+                                            <button type="button"
+                                                    class="event-detail-button"
+                                                    aria-label="@($"Open occurrence {occurrence.OccurrenceId:D}")"
+                                                    @onclick="() => Select(occurrence)">
+                                                Details
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    @OccurrenceDetail()
+                </div>
+            }
+        </div>;
+
+    private RenderFragment HistoryContent() =>
+        @<div class="event-history-content">
+            <div class="event-counters"
+                 aria-label="History counters">
+                <div><span>Events</span><strong>@(historyCounters?.EventCount ?? historyEvents.Count)</strong></div>
+                <div><span>Active occurrences</span><strong>@(historyCounters?.ActiveOccurrenceCount ?? 0)</strong></div>
+                <div><span>Unacknowledged</span><strong>@(historyCounters?.UnacknowledgedOccurrenceCount ?? 0)</strong></div>
+            </div>
+            @if (historyEvents.Count == 0)
+            {
+                <UiStatePanel Kind="@UiStateKind.Empty"
+                              Title="No history events"
+                              Message="No immutable event facts match this time range and severity." />
+            }
+            else
+            {
+                <div class="event-table-wrap"
+                     data-event-mode="history">
+                    <table class="event-table">
+                        <thead>
+                            <tr>
+                                <th>Severity</th>
+                                <th>Fact</th>
+                                <th>Occurred</th>
+                                <th>Point</th>
+                                <th>Occurrence</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in historyEvents)
+                            {
+                                <tr>
+                                    <td><UiBadge Text="@item.Priority"
+                                                 Category="@UiBadgeCategory.Severity"
+                                                 Tone="@SeverityTone(item.Priority)" /></td>
+                                    <td>@item.Kind</td>
+                                    <td>@item.OccurredAt.ToLocalTime().ToString("g")</td>
+                                    <td>@Short(item.PointId)</td>
+                                    <td>@Short(item.OccurrenceId)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (historyNextAfter is not null)
+                    {
+                        <button type="button"
+                                @onclick="LoadMoreHistoryAsync">
+                            Load more
+                        </button>
+                    }
+                </div>
+            }
+        </div>;
+
+    private RenderFragment OccurrenceDetail() =>
+        @<aside class="event-detail"
+                aria-label="Occurrence details">
+                @if (selected is null)
+                {
+                    <UiStatePanel Kind="@UiStateKind.Empty"
+                                  Title="Select an occurrence"
+                                  Message="Open a row to inspect facets, timeline and available actions."
+                                  Compact />
+                }
+                else
+                {
+                    <header>
+                        <div>
+                            <span>Occurrence</span>
+                            <h2>@Short(selected.OccurrenceId)</h2>
+                        </div>
+                        <UiBadge Text="@selected.Priority"
+                                 Category="@UiBadgeCategory.Severity"
+                                 Tone="@SeverityTone(selected.Priority)" />
+                    </header>
+                    <dl class="event-facets">
+                        <dt>Condition</dt><dd>@selected.ConditionState</dd>
+                        <dt>Acknowledgement</dt><dd>@selected.AcknowledgementState</dd>
+                        <dt>Assignment</dt><dd>@AssignmentLabel(selected)</dd>
+                        <dt>Shelving</dt><dd>@ShelvingLabel(selected)</dd>
+                        <dt>Suppression</dt><dd>@SuppressionLabel(selected)</dd>
+                    </dl>
+                    <section>
+                        <h3>Timeline</h3>
+                        <ol class="event-timeline">
+                            <li>Opened @selected.OpenedAt.ToLocalTime().ToString("g")</li>
+                            @if (selected.ConditionClearedAt is { } cleared)
+                            {
+                                <li>Returned to normal @cleared.ToLocalTime().ToString("g")</li>
+                            }
+                            @if (selected.AcknowledgedAt is { } acknowledged)
+                            {
+                                <li>Acknowledged @acknowledged.ToLocalTime().ToString("g")</li>
+                            }
+                            @if (selected.AssignedAt is { } assignedAt)
+                            {
+                                <li>Assigned @assignedAt.ToLocalTime().ToString("g")</li>
+                            }
+                            @if (selected.ShelvedUntil is { } shelvedUntil)
+                            {
+                                <li>Shelved until @shelvedUntil.ToLocalTime().ToString("g")</li>
+                            }
+                        </ol>
+                    </section>
+                    <nav class="event-context-links"
+                         aria-label="Occurrence context">
+                        <a href="@($"/equipment?pointId={selected.PointId:D}")">
+                            Equipment
+                        </a>
+                        <a href="@($"/history?scopeId={scopeId:D}&pointId={selected.PointId:D}")">
+                            History
+                        </a>
+                    </nav>
+                    @if (!selected.IsSuppressed)
+                    {
+                        <div class="event-actions"
+                             aria-label="Occurrence actions">
+                            @if (CanAcknowledge(selected))
+                            {
+                                <button type="button"
+                                        disabled="@actionBusy"
+                                        @onclick="AcknowledgeAsync">
+                                    Acknowledge
+                                </button>
+                            }
+                            @if (CanAssign(selected))
+                            {
+                                <button type="button"
+                                        disabled="@actionBusy"
+                                        @onclick="AssignAsync">
+                                    @(selected.AssignedTo is null ? "Assign to me" : "Reassign to me")
+                                </button>
+                            }
+                            @if (CanShelve(selected))
+                            {
+                                <label>
+                                    <span>Shelving reason</span>
+                                    <input @bind="shelvingReason" />
+                                </label>
+                                <button type="button"
+                                        disabled="@actionBusy"
+                                        @onclick="ShelveAsync">
+                                    Shelve 30 minutes
+                                </button>
+                            }
+                            @if (CanUnshelve(selected))
+                            {
+                                <button type="button"
+                                        disabled="@actionBusy"
+                                        @onclick="UnshelveAsync">
+                                    Unshelve
+                                </button>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="event-policy-note">
+                            Suppression is controlled by policy and cannot be removed here.
+                        </p>
+                    }
+                }
+        </aside>;
+
+    private RenderFragment SpecialBadges(
+        OccurrencePayload occurrence) =>
+        @<span class="event-special-badges">
+            @if (occurrence.IsShelved(
+                     DateTimeOffset.UtcNow))
+            {
+                <UiBadge Text="Shelved"
+                         Tone="@UiBadgeTone.Warning" />
+            }
+            @if (occurrence.IsSuppressed)
+            {
+                <UiBadge Text="Suppressed"
+                         Tone="@UiBadgeTone.Muted" />
+            }
+            @if (!occurrence.IsShelved(
+                    DateTimeOffset.UtcNow) &&
+                 !occurrence.IsSuppressed)
+            {
+                <span>—</span>
+            }
+        </span>;
+
+    private async Task ChangeModeAsync(
+        ChangeEventArgs arguments)
+    {
+        mode =
+            arguments.Value?.ToString() ??
+            "Realtime";
+        error = null;
+        if (mode == "History")
+        {
+            selected = null;
+            await LoadHistoryAsync(
+                append: false);
+        }
+    }
+
+    private Task ReloadAsync() =>
+        mode == "Realtime"
+            ? LoadSnapshotAsync()
+            : LoadHistoryAsync(
+                append: false);
+
+    private async Task LoadSnapshotAsync()
+    {
+        loading = true;
+        error = null;
+        var result =
+            await Api.ReadOccurrenceSnapshotAsync(
+                scopeId,
+                cancellation.Token);
+        if (ApplyFailure(result.Status))
+        {
+            loading = false;
+            return;
+        }
+
+        state.ApplySnapshot(result.Payload!);
+        selected = selected is null
+            ? null
+            : state.Find(
+                selected.OccurrenceId);
+        loading = false;
+    }
+
+    private async Task LoadHistoryAsync(
+        bool append)
+    {
+        loading = true;
+        error = null;
+        var to = DateTimeOffset.UtcNow;
+        var from = to.AddDays(-1);
+        var page =
+            await Api.ReadHistoryAsync(
+                scopeId,
+                priority,
+                from,
+                to,
+                pageSize: 100,
+                append
+                    ? historyNextAfter
+                    : null,
+                append
+                    ? historyNextUpper
+                    : null,
+                cancellation.Token);
+        var counters =
+            await Api.ReadHistoryCountersAsync(
+                scopeId,
+                priority,
+                from,
+                to,
+                cancellation.Token);
+        if (ApplyFailure(page.Status) ||
+            ApplyFailure(counters.Status))
+        {
+            loading = false;
+            return;
+        }
+
+        historyEvents = append
+            ? historyEvents
+                .Concat(page.Payload!.Events)
+                .DistinctBy(item => item.EventId)
+                .ToArray()
+            : page.Payload!.Events;
+        historyNextAfter =
+            page.Payload.NextAfter;
+        historyNextUpper =
+            page.Payload.NextUpper;
+        historyCounters =
+            counters.Payload;
+        loading = false;
+    }
+
+    private Task LoadMoreHistoryAsync() =>
+        LoadHistoryAsync(append: true);
+
+    private async Task PollAsync(
+        CancellationToken token)
+    {
+        using var timer =
+            new PeriodicTimer(
+                TimeSpan.FromSeconds(1));
+        while (await timer
+                   .WaitForNextTickAsync(token))
+        {
+            if (mode != "Realtime" ||
+                state.Cursor == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                var result =
+                    await Api.ReadOccurrenceFeedAsync(
+                        scopeId,
+                        state.Cursor,
+                        token);
+                if (ApplyFailure(result.Status))
+                {
+                    await InvokeAsync(
+                        StateHasChanged);
+                    continue;
+                }
+
+                if (!state.ApplyFeed(
+                        result.Payload!))
+                {
+                    if (state.RequiresResnapshot)
+                    {
+                        resyncNotice = true;
+                        await LoadSnapshotAsync();
+                    }
+                }
+
+                if (selected is not null)
+                {
+                    selected = state.Find(
+                        selected.OccurrenceId);
+                }
+
+                await InvokeAsync(
+                    StateHasChanged);
+            }
+            catch (HttpRequestException)
+            {
+                error =
+                    "Realtime connection is unavailable. Existing rows may be stale.";
+                await InvokeAsync(
+                    StateHasChanged);
+            }
+        }
+    }
+
+    private async Task AcknowledgeAsync() =>
+        await ExecuteActionAsync(
+            occurrence =>
+                Api.AcknowledgeAsync(
+                    scopeId,
+                    occurrence,
+                    cancellation.Token));
+
+    private async Task AssignAsync()
+    {
+        if (CurrentSubjectId is not Guid subjectId)
+        {
+            return;
+        }
+
+        await ExecuteActionAsync(
+            occurrence =>
+                Api.AssignAsync(
+                    scopeId,
+                    occurrence,
+                    subjectId,
+                    cancellation.Token));
+    }
+
+    private async Task ShelveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(
+                shelvingReason))
+        {
+            error =
+                "A shelving reason is required.";
+            return;
+        }
+
+        await ExecuteActionAsync(
+            occurrence =>
+                Api.ShelveAsync(
+                    scopeId,
+                    occurrence,
+                    DateTimeOffset.UtcNow
+                        .AddMinutes(30),
+                    shelvingReason.Trim(),
+                    cancellation.Token));
+    }
+
+    private async Task UnshelveAsync() =>
+        await ExecuteActionAsync(
+            occurrence =>
+                Api.UnshelveAsync(
+                    scopeId,
+                    occurrence,
+                    cancellation.Token));
+
+    private async Task ExecuteActionAsync(
+        Func<OccurrencePayload, Task<
+            EventApiResult<AlarmActionPayload>>>
+            execute)
+    {
+        if (selected is null ||
+            mode != "Realtime")
+        {
+            return;
+        }
+
+        actionBusy = true;
+        error = null;
+        var result =
+            await execute(selected);
+        actionBusy = false;
+        if (ApplyFailure(result.Status))
+        {
+            return;
+        }
+
+        await LoadSnapshotAsync();
+    }
+
+    private bool ApplyFailure(
+        EventApiStatus status)
+    {
+        switch (status)
+        {
+            case EventApiStatus.Available:
+                return false;
+            case EventApiStatus.SessionExpired:
+                state.Clear();
+                Session.Invalidate();
+                error =
+                    "The session expired. Sign in again.";
+                break;
+            case EventApiStatus.Forbidden:
+                state.Clear();
+                error =
+                    "The current session cannot access this event state.";
+                break;
+            case EventApiStatus.Conflict:
+                error =
+                    "The occurrence changed. Refresh and retry the action.";
+                break;
+            default:
+                error =
+                    "The server could not complete the event request.";
+                break;
+        }
+
+        return true;
+    }
+
+    private void Select(
+        OccurrencePayload occurrence) =>
+        selected = occurrence;
+
+    private void OnSessionChanged()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            state.Clear();
+            selected = null;
+        }
+    }
+
+    private bool CanAcknowledge(
+        OccurrencePayload occurrence) =>
+        mode == "Realtime" &&
+        occurrence.CanAcknowledge &&
+        string.Equals(
+            occurrence.AcknowledgementState,
+            "Unacknowledged",
+            StringComparison.Ordinal);
+
+    private bool CanAssign(
+        OccurrencePayload occurrence) =>
+        mode == "Realtime" &&
+        occurrence.CanAssign &&
+        occurrence.IsActive &&
+        CurrentSubjectId is not null;
+
+    private bool CanShelve(
+        OccurrencePayload occurrence) =>
+        mode == "Realtime" &&
+        occurrence.CanShelve &&
+        occurrence.IsActive &&
+        !occurrence.IsShelved(
+            DateTimeOffset.UtcNow);
+
+    private bool CanUnshelve(
+        OccurrencePayload occurrence) =>
+        mode == "Realtime" &&
+        occurrence.CanShelve &&
+        occurrence.IsActive &&
+        occurrence.IsShelved(
+            DateTimeOffset.UtcNow);
+
+    private static UiBadgeTone SeverityTone(
+        string value) =>
+        value switch
+        {
+            "Critical" =>
+                UiBadgeTone.Critical,
+            "High" =>
+                UiBadgeTone.Warning,
+            "Medium" =>
+                UiBadgeTone.Information,
+            _ => UiBadgeTone.Neutral,
+        };
+
+    private static UiBadgeTone ConditionTone(
+        OccurrencePayload occurrence) =>
+        occurrence.IsActive
+            ? UiBadgeTone.Critical
+            : UiBadgeTone.Positive;
+
+    private static UiBadgeTone AcknowledgementTone(
+        OccurrencePayload occurrence) =>
+        string.Equals(
+            occurrence.AcknowledgementState,
+            "Acknowledged",
+            StringComparison.Ordinal)
+                ? UiBadgeTone.Positive
+                : UiBadgeTone.Warning;
+
+    private static string AssignmentLabel(
+        OccurrencePayload occurrence) =>
+        occurrence.AssignedTo is { } assigned
+            ? Short(assigned)
+            : "Unassigned";
+
+    private static string ShelvingLabel(
+        OccurrencePayload occurrence) =>
+        occurrence.IsShelved(
+            DateTimeOffset.UtcNow)
+                ? $"Until {occurrence.ShelvedUntil!.Value.ToLocalTime():g}"
+                : "Not shelved";
+
+    private static string SuppressionLabel(
+        OccurrencePayload occurrence) =>
+        occurrence.IsSuppressed
+            ? occurrence.SuppressionReason ??
+              "Suppressed by policy"
+            : "Not suppressed";
+
+    private static string Short(Guid value) =>
+        value.ToString("N")[..8];
+}

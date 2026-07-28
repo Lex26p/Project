@@ -125,6 +125,34 @@ public sealed partial class AlarmActionStore
             cancellationToken);
     }
 
+    public Task<Result<AlarmActionResult>> UnshelveAsync(
+        AuthorizedMutation authorization,
+        UnshelveAlarmRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return ExecuteAsync(
+            authorization,
+            request.ScopeId,
+            request.PointId,
+            request.OccurrenceId,
+            request.ExpectedVersion,
+            request.IdempotencyKey,
+            request.Constraint,
+            AlarmActionKind.Unshelve,
+            JsonSerializer.Serialize(new
+            {
+                OccurrenceId =
+                    request.OccurrenceId.Value,
+                ExpectedVersion =
+                    request.ExpectedVersion.Value,
+            }),
+            occurrence =>
+                Unshelve(occurrence, request),
+            UpdateUnshelvingAsync,
+            cancellationToken);
+    }
+
     public async Task<long> CountAuditAsync(
         RuntimeScopeId scopeId,
         CancellationToken cancellationToken = default)
@@ -356,6 +384,50 @@ public sealed partial class AlarmActionStore
         });
     }
 
+    private static Result<AlarmOccurrenceSnapshot> Unshelve(
+        AlarmOccurrenceSnapshot occurrence,
+        UnshelveAlarmRequest request)
+    {
+        var active = RequireActive(occurrence);
+        if (active.IsFailure)
+        {
+            return Result.Failure<
+                AlarmOccurrenceSnapshot>(
+                active.Error!);
+        }
+
+        if (!request.Constraint.ShelvingAllowed)
+        {
+            return Failure<AlarmOccurrenceSnapshot>(
+                "alarm.maintenance_blocked",
+                "Maintenance constraint blocks unshelving.");
+        }
+
+        if (occurrence.Shelving.Version !=
+            request.ExpectedVersion)
+        {
+            return Failure<AlarmOccurrenceSnapshot>(
+                "alarm.expected_version",
+                "Shelving version is stale.");
+        }
+
+        if (occurrence.Shelving.ShelvedUntil is null)
+        {
+            return Failure<AlarmOccurrenceSnapshot>(
+                "alarm.not_shelved",
+                "Alarm occurrence is not shelved.");
+        }
+
+        return Result.Success(occurrence with
+        {
+            Shelving =
+                new AlarmShelvingFacet(
+                    ShelvedUntil: null,
+                    Reason: null,
+                    request.ExpectedVersion.Next()),
+        });
+    }
+
     private static Result RequireActive(AlarmOccurrenceSnapshot occurrence) =>
         occurrence.ClosedAt is null && occurrence.Condition.State is
             AlarmConditionState.Active or AlarmConditionState.PendingClear
@@ -435,6 +507,36 @@ public sealed partial class AlarmActionStore
         command.Parameters.AddWithValue("reason", occurrence.Shelving.Reason!);
         command.Parameters.AddWithValue("next_version", checked((long)occurrence.Shelving.Version.Value));
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<int> UpdateUnshelvingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        AlarmOccurrenceSnapshot occurrence,
+        StateVersion expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            $"""
+            UPDATE {AlarmMigrations.Schema}.occurrence
+            SET shelved_until = NULL, shelving_reason = NULL,
+                shelving_version = @next_version
+            WHERE scope_id = @scope_id AND occurrence_id = @occurrence_id
+              AND shelving_version = @expected_version;
+            """,
+            connection,
+            transaction);
+        AddUpdateIdentity(
+            command,
+            occurrence,
+            expectedVersion);
+        command.Parameters.AddWithValue(
+            "next_version",
+            checked((long)occurrence
+                .Shelving.Version.Value));
+        return await command.ExecuteNonQueryAsync(
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static void AddUpdateIdentity(
@@ -636,7 +738,9 @@ public sealed partial class AlarmActionStore
     {
         AlarmActionKind.Acknowledge => occurrence.Acknowledgement.Version,
         AlarmActionKind.Assign => occurrence.Assignment.Version,
-        AlarmActionKind.Shelve => occurrence.Shelving.Version,
+        AlarmActionKind.Shelve or
+            AlarmActionKind.Unshelve =>
+            occurrence.Shelving.Version,
         _ => throw new ArgumentOutOfRangeException(nameof(action)),
     };
 
@@ -644,7 +748,9 @@ public sealed partial class AlarmActionStore
     {
         AlarmActionKind.Acknowledge => AlarmPermissions.Acknowledge,
         AlarmActionKind.Assign => AlarmPermissions.Assign,
-        AlarmActionKind.Shelve => AlarmPermissions.Shelve,
+        AlarmActionKind.Shelve or
+            AlarmActionKind.Unshelve =>
+            AlarmPermissions.Shelve,
         _ => throw new ArgumentOutOfRangeException(nameof(action)),
     };
 
@@ -682,6 +788,7 @@ public sealed partial class AlarmActionStore
         Acknowledge = 1,
         Assign = 2,
         Shelve = 3,
+        Unshelve = 4,
     }
 
     private sealed record ExistingAction(AlarmActionKind Action, string Fingerprint, string SnapshotJson);

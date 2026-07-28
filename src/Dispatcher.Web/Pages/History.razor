@@ -1,23 +1,48 @@
 @page "/history"
 @inject IConfiguration Configuration
+@inject IdentitySessionState Session
 
 <PageTitle>History</PageTitle>
 
 <GuardedContent Route="/history">
-    @if (Guid.TryParse(Configuration["Dispatcher:RuntimeScopeId"], out var scopeId) &&
-         Guid.TryParse(Configuration["Dispatcher:HistorySourceId"], out var sourceId) &&
-         Guid.TryParse(Configuration["Dispatcher:HistoryPointId"], out var pointId))
-    {
-        <HistoryTrendWidget
-            ScopeId="scopeId"
-            SourceId="sourceId"
-            PointId="pointId"
-            From="DateTimeOffset.UtcNow.AddHours(-1)"
-            To="DateTimeOffset.UtcNow"
-            ResolutionSeconds="60" />
-    }
-    else
-    {
-        <p>History trend is not configured.</p>
-    }
+    <HistoryWorkspace InitialScopeId="@ResolvedScopeId"
+                      InitialSourceId="@ResolvedSourceId"
+                      InitialPointId="@ResolvedPointId" />
 </GuardedContent>
+
+@code {
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "scopeId")]
+    public Guid? ScopeId { get; set; }
+
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "sourceId")]
+    public Guid? SourceId { get; set; }
+
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "pointId")]
+    public Guid? PointId { get; set; }
+
+    private Guid ResolvedScopeId =>
+        ScopeId ??
+        Session.Bootstrap?.DefaultScopeId ??
+        ReadGuid(
+            "Dispatcher:RuntimeScopeId");
+
+    private Guid ResolvedSourceId =>
+        SourceId ??
+        ReadGuid(
+            "Dispatcher:HistorySourceId");
+
+    private Guid ResolvedPointId =>
+        PointId ??
+        ReadGuid(
+            "Dispatcher:HistoryPointId");
+
+    private Guid ReadGuid(string key) =>
+        Guid.TryParse(
+            Configuration[key],
+            out var value)
+                ? value
+                : Guid.Empty;
+}

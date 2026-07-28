@@ -19,16 +19,16 @@
 | C06 | Complete | Same-origin Web, production session и runtime realtime реализованы и приняты |
 | C07 | Complete | Межпроцессный Simulator E2E и recovery corpus реализованы и приняты |
 | C08 | Complete | Web shell, visual system и browser baseline реализованы и приняты |
-| C09 | Ready | Runtime pipeline и Web shell выполнены |
+| C09 | Complete | Event Dispatcher, Alarm actions и read-only History workspace реализованы и приняты |
 | C10 | Ready | Current feed и Web shell выполнены |
 | C11 | Ready | Межпроцессный Simulator E2E C07 выполнен |
 | C12 | Planned | После configuration reconciliation |
 | C13 | Planned | После configuration reconciliation |
 | C14 | Planned | После обоих protocol adapters |
 | C15 | Planned | Требует доступа пользователя к устройствам |
-| C16 | Planned | После Event Dispatcher |
+| C16 | Ready | Event Dispatcher C09 выполнен |
 | C17 | Planned | После Incident/My Work |
-| C18 | Planned | После Web shell/Event core |
+| C18 | Ready | Web shell C08 и Event core C09 выполнены |
 | C19 | Planned | После Notifications/Web shell |
 | C20 | Planned | Только Simulator commands |
 | C21 | Planned | После core product и protocol acceptance |

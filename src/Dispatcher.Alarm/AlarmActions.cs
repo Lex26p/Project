@@ -90,6 +90,14 @@ public sealed record ShelveAlarmRequest(
     string IdempotencyKey,
     AlarmMaintenanceConstraintSnapshot Constraint);
 
+public sealed record UnshelveAlarmRequest(
+    RuntimeScopeId ScopeId,
+    PointId PointId,
+    AlarmOccurrenceId OccurrenceId,
+    StateVersion ExpectedVersion,
+    string IdempotencyKey,
+    AlarmMaintenanceConstraintSnapshot Constraint);
+
 public enum AlarmActionDisposition
 {
     Applied = 1,

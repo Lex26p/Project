@@ -1,0 +1,539 @@
+@implements IDisposable
+@inject HistoryApiClient History
+
+<section class="history-workspace"
+         aria-labelledby="history-workspace-title"
+         data-history-readonly="true">
+    <header class="workspace-page-heading">
+        <div>
+            <span class="workspace-page-heading__eyebrow">
+                Investigation
+            </span>
+            <h1 id="history-workspace-title">
+                History
+            </h1>
+        </div>
+        <UiBadge Text="Read-only"
+                 Tone="@UiBadgeTone.Information" />
+    </header>
+
+    <div class="history-toolbar"
+         aria-label="History query">
+        <label>
+            <span>Scope ID</span>
+            <input value="@scopeText"
+                   @onchange="arguments => scopeText = arguments.Value?.ToString() ?? string.Empty" />
+        </label>
+        <label>
+            <span>Source ID</span>
+            <input value="@sourceText"
+                   @onchange="arguments => sourceText = arguments.Value?.ToString() ?? string.Empty" />
+        </label>
+        <label>
+            <span>Point ID</span>
+            <input value="@pointText"
+                   @onchange="arguments => pointText = arguments.Value?.ToString() ?? string.Empty" />
+        </label>
+        <label>
+            <span>From</span>
+            <input type="datetime-local"
+                   value="@fromText"
+                   @onchange="arguments => fromText = arguments.Value?.ToString() ?? string.Empty" />
+        </label>
+        <label>
+            <span>To</span>
+            <input type="datetime-local"
+                   value="@toText"
+                   @onchange="arguments => toText = arguments.Value?.ToString() ?? string.Empty" />
+        </label>
+        <label>
+            <span>Resolution</span>
+            <select @bind="mode">
+                <option value="Aggregate">Aggregate</option>
+                <option value="Raw">Raw</option>
+            </select>
+        </label>
+        @if (mode == "Aggregate")
+        {
+            <label>
+                <span>Bucket</span>
+                <select @bind="resolutionSeconds">
+                    <option value="60">1 minute</option>
+                    <option value="300">5 minutes</option>
+                    <option value="900">15 minutes</option>
+                </select>
+            </label>
+        }
+        <button type="button"
+                @onclick="LoadAsync">
+            Load history
+        </button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <UiStatePanel Kind="@UiStateKind.Error"
+                      Title="History unavailable"
+                      Message="@error"
+                      ActionLabel="Retry"
+                      OnAction="@LoadAsync" />
+    }
+    else if (loading)
+    {
+        <UiStatePanel Kind="@UiStateKind.Loading"
+                      Title="Loading history"
+                      Message="Reading the selected point and time range." />
+    }
+    else if (!hasQuery)
+    {
+        <UiStatePanel Kind="@UiStateKind.Empty"
+                      Title="Select a point"
+                      Message="Provide scope, source and point identifiers to query History." />
+    }
+    else if (mode == "Aggregate")
+    {
+        @AggregateContent
+    }
+    else
+    {
+        @RawContent
+    }
+</section>
+
+@code {
+    private CancellationTokenSource?
+        loadCancellation;
+    private HistoryAggregatePayload?
+        aggregate;
+    private IReadOnlyList<
+        HistoryRecordPayload> records = [];
+    private string scopeText = string.Empty;
+    private string sourceText = string.Empty;
+    private string pointText = string.Empty;
+    private string fromText = string.Empty;
+    private string toText = string.Empty;
+    private string mode = "Aggregate";
+    private int resolutionSeconds = 60;
+    private bool initialized;
+    private bool loading;
+    private bool hasQuery;
+    private string? error;
+    private ulong? nextAfter;
+    private ulong? nextUpper;
+
+    [Parameter]
+    public Guid InitialScopeId { get; set; }
+
+    [Parameter]
+    public Guid InitialSourceId { get; set; }
+
+    [Parameter]
+    public Guid InitialPointId { get; set; }
+
+    private RenderFragment AggregateContent =>
+        @<div class="history-results"
+              data-history-mode="aggregate">
+            @if (aggregate is null ||
+                 aggregate.Buckets.Count == 0)
+            {
+                <UiStatePanel Kind="@UiStateKind.Empty"
+                              Title="No aggregate samples"
+                              Message="The selected interval has no History samples." />
+            }
+            else
+            {
+                <div class="history-chart"
+                     role="img"
+                     aria-label="Aggregate history trend">
+                    <svg viewBox="0 0 1000 260"
+                         preserveAspectRatio="none"
+                         aria-hidden="true">
+                        <polyline points="@TrendPoints"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="4"
+                                  vector-effect="non-scaling-stroke" />
+                        @foreach (var gap in GapMarkers)
+                        {
+                            <rect x="@gap"
+                                  y="0"
+                                  width="10"
+                                  height="260"
+                                  class="history-chart__gap" />
+                        }
+                    </svg>
+                </div>
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>From</th>
+                            <th>Average</th>
+                            <th>Range</th>
+                            <th>Quality</th>
+                            <th>Continuity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var bucket in aggregate.Buckets)
+                        {
+                            <tr data-history-gap="@(bucket.HasGap ? "true" : "false")">
+                                <td>@bucket.FromInclusive.ToLocalTime().ToString("g")</td>
+                                <td>@bucket.Average.ToString("0.##")</td>
+                                <td>@bucket.Minimum–@bucket.Maximum</td>
+                                <td>
+                                    <UiBadge Text="@bucket.Quality"
+                                             Category="@UiBadgeCategory.Quality"
+                                             Tone="@QualityTone(bucket.Quality)" />
+                                    <UiBadge Text="@bucket.Freshness"
+                                             Category="@UiBadgeCategory.Freshness"
+                                             Tone="@FreshnessTone(bucket.Freshness)" />
+                                </td>
+                                <td>@(bucket.HasGap ? "Gap" : "Continuous")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>;
+
+    private RenderFragment RawContent =>
+        @<div class="history-results"
+              data-history-mode="raw">
+            @if (records.Count == 0)
+            {
+                <UiStatePanel Kind="@UiStateKind.Empty"
+                              Title="No raw samples"
+                              Message="The selected interval has no History records." />
+            }
+            else
+            {
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Position</th>
+                            <th>Timestamp</th>
+                            <th>Value</th>
+                            <th>Quality</th>
+                            <th>Flags</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var record in records)
+                        {
+                            <tr data-history-kind="@record.Kind">
+                                <td>@record.Position</td>
+                                <td>@(record.SourceTimestamp?.ToLocalTime().ToString("O") ?? "—")</td>
+                                <td>@(record.Kind == "gap" ? "Data gap" : $"{record.Value} {record.Unit}")</td>
+                                <td>
+                                    @if (record.Quality is not null)
+                                    {
+                                        <UiBadge Text="@record.Quality"
+                                                 Category="@UiBadgeCategory.Quality"
+                                                 Tone="@QualityTone(record.Quality)" />
+                                    }
+                                    @if (record.Freshness is not null)
+                                    {
+                                        <UiBadge Text="@record.Freshness"
+                                                 Category="@UiBadgeCategory.Freshness"
+                                                 Tone="@FreshnessTone(record.Freshness)" />
+                                    }
+                                </td>
+                                <td>
+                                    @if (record.Kind == "gap")
+                                    {
+                                        <span>Gap @record.GapFirstSourcePosition–@record.GapLastSourcePosition: @record.GapReason</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@(record.IsLate == true ? "Late " : string.Empty)@(record.IsOutOfOrder == true ? "Out of order" : string.Empty)</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (nextAfter is not null)
+                {
+                    <button type="button"
+                            @onclick="LoadMoreAsync">
+                        Load more samples
+                    </button>
+                }
+            }
+        </div>;
+
+    private string TrendPoints
+    {
+        get
+        {
+            var buckets =
+                aggregate?.Buckets ?? [];
+            if (buckets.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var minimum =
+                buckets.Min(item =>
+                    item.Minimum);
+            var maximum =
+                buckets.Max(item =>
+                    item.Maximum);
+            var span =
+                Math.Max(1d, maximum - minimum);
+            return string.Join(
+                " ",
+                buckets.Select(
+                    (item, index) =>
+                    {
+                        var x =
+                            buckets.Count == 1
+                                ? 500d
+                                : index * 1000d /
+                                  (buckets.Count - 1);
+                        var y =
+                            240d -
+                            (item.Average - minimum) /
+                            span * 220d;
+                        return FormattableString
+                            .Invariant(
+                                $"{x:0.##},{y:0.##}");
+                    }));
+        }
+    }
+
+    private IReadOnlyList<string> GapMarkers =>
+        (aggregate?.Buckets ?? [])
+        .Select(
+            (item, index) =>
+                new
+                {
+                    item.HasGap,
+                    X =
+                        (aggregate!.Buckets.Count == 1
+                            ? 500d
+                            : index * 1000d /
+                              (aggregate.Buckets.Count -
+                               1))
+                        .ToString(
+                            "0.##",
+                            System.Globalization
+                                .CultureInfo
+                                .InvariantCulture),
+                })
+        .Where(item => item.HasGap)
+        .Select(item => item.X)
+        .ToArray();
+
+    protected override async Task
+        OnParametersSetAsync()
+    {
+        if (initialized)
+        {
+            return;
+        }
+
+        initialized = true;
+        scopeText =
+            InitialScopeId == Guid.Empty
+                ? string.Empty
+                : InitialScopeId.ToString("D");
+        sourceText =
+            InitialSourceId == Guid.Empty
+                ? string.Empty
+                : InitialSourceId.ToString("D");
+        pointText =
+            InitialPointId == Guid.Empty
+                ? string.Empty
+                : InitialPointId.ToString("D");
+        var now = DateTimeOffset.Now;
+        fromText =
+            now.AddHours(-1)
+                .ToString("yyyy-MM-ddTHH:mm");
+        toText =
+            now.ToString("yyyy-MM-ddTHH:mm");
+        if (CanQuery(out _, out _, out _))
+        {
+            await LoadAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        loadCancellation?.Cancel();
+        loadCancellation?.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!CanQuery(
+                out var scopeId,
+                out var sourceId,
+                out var pointId) ||
+            !DateTimeOffset.TryParse(
+                fromText,
+                out var from) ||
+            !DateTimeOffset.TryParse(
+                toText,
+                out var to) ||
+            from >= to)
+        {
+            hasQuery = false;
+            error =
+                "Provide valid identifiers and a non-empty time range.";
+            return;
+        }
+
+        hasQuery = true;
+        loading = true;
+        error = null;
+        var token =
+            ReplaceCancellation();
+        try
+        {
+            if (mode == "Aggregate")
+            {
+                aggregate =
+                    await History.ReadAggregatesAsync(
+                        scopeId,
+                        sourceId,
+                        pointId,
+                        from.ToUniversalTime(),
+                        to.ToUniversalTime(),
+                        resolutionSeconds,
+                        token);
+                records = [];
+                if (aggregate is null)
+                {
+                    error =
+                        "The aggregate History query failed.";
+                }
+            }
+            else
+            {
+                var page =
+                    await History.ReadRangeAsync(
+                        scopeId,
+                        sourceId,
+                        pointId,
+                        from.ToUniversalTime(),
+                        to.ToUniversalTime(),
+                        pageSize: 200,
+                        cancellationToken: token);
+                ApplyPage(page, append: false);
+                aggregate = null;
+            }
+        }
+        catch (OperationCanceledException)
+            when (token.IsCancellationRequested)
+        {
+        }
+        catch (HttpRequestException)
+        {
+            error =
+                "The History server is unavailable.";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (nextAfter is null ||
+            nextUpper is null ||
+            !CanQuery(
+                out var scopeId,
+                out var sourceId,
+                out var pointId) ||
+            !DateTimeOffset.TryParse(
+                fromText,
+                out var from) ||
+            !DateTimeOffset.TryParse(
+                toText,
+                out var to))
+        {
+            return;
+        }
+
+        var page =
+            await History.ReadRangeAsync(
+                scopeId,
+                sourceId,
+                pointId,
+                from.ToUniversalTime(),
+                to.ToUniversalTime(),
+                pageSize: 200,
+                nextAfter,
+                nextUpper,
+                ReplaceCancellation());
+        ApplyPage(page, append: true);
+    }
+
+    private void ApplyPage(
+        HistoryRangePayload? page,
+        bool append)
+    {
+        if (page is null)
+        {
+            error =
+                "The raw History query failed.";
+            return;
+        }
+
+        records = append
+            ? records.Concat(page.Records)
+                .DistinctBy(item => item.Position)
+                .ToArray()
+            : page.Records;
+        nextAfter = page.NextAfter;
+        nextUpper = page.NextUpper;
+    }
+
+    private CancellationToken ReplaceCancellation()
+    {
+        loadCancellation?.Cancel();
+        loadCancellation?.Dispose();
+        loadCancellation =
+            new CancellationTokenSource();
+        return loadCancellation.Token;
+    }
+
+    private bool CanQuery(
+        out Guid scopeId,
+        out Guid sourceId,
+        out Guid pointId)
+    {
+        var validScope = Guid.TryParse(
+            scopeText,
+            out scopeId);
+        var validSource = Guid.TryParse(
+            sourceText,
+            out sourceId);
+        var validPoint = Guid.TryParse(
+            pointText,
+            out pointId);
+        return validScope &&
+               validSource &&
+               validPoint;
+    }
+
+    private static UiBadgeTone QualityTone(
+        string quality) =>
+        quality switch
+        {
+            "Good" => UiBadgeTone.Positive,
+            "Uncertain" =>
+                UiBadgeTone.Warning,
+            _ => UiBadgeTone.Critical,
+        };
+
+    private static UiBadgeTone FreshnessTone(
+        string freshness) =>
+        freshness switch
+        {
+            "Fresh" => UiBadgeTone.Positive,
+            _ => UiBadgeTone.Warning,
+        };
+}

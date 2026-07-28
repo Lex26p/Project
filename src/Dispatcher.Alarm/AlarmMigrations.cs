@@ -146,5 +146,15 @@ public static class AlarmMigrations
                 CREATE INDEX alarm_audit_scope_idx
                     ON {Schema}.mutation_audit (scope_id, changed_at, audit_id);
                 """),
+            new MigrationStep(
+                3,
+                "unshelve alarm action",
+                $"""
+                ALTER TABLE {Schema}.action_request
+                    DROP CONSTRAINT action_request_action_kind_check;
+                ALTER TABLE {Schema}.action_request
+                    ADD CONSTRAINT action_request_action_kind_check
+                    CHECK (action_kind IN (1, 2, 3, 4));
+                """),
         ]);
 }

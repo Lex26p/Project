@@ -95,6 +95,31 @@ public sealed class AuthorizedEventDispatcher
             cancellationToken).ConfigureAwait(false));
     }
 
+    public async Task<Result<OccurrenceFeedPage>>
+        ReadOccurrenceFeedForCurrentPermissionsAsync(
+            SessionSnapshot? session,
+            RuntimeScopeId scopeId,
+            ulong cursor,
+            CancellationToken cancellationToken)
+    {
+        var points = await AuthorizePointsAsync(
+                session,
+                scopeId,
+                requestedPoints: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return points.IsSuccess
+            ? Result.Success(
+                await store.ReadProjectionFeedAsync(
+                        scopeId,
+                        cursor,
+                        points.Value,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+            : Result.Failure<OccurrenceFeedPage>(
+                points.Error!);
+    }
+
     private async Task<Result<IReadOnlySet<PointId>>> AuthorizePointsAsync(
         SessionSnapshot? session,
         RuntimeScopeId scopeId,
@@ -169,7 +194,9 @@ public sealed class EventRealtimeHub : Hub
             RuntimeScopeId.From(scopeId),
             result.Value.Snapshot.Cursor,
             result.Value.PointIds));
-        return ToPayload(result.Value.Snapshot);
+        return ToPayload(
+            result.Value.Snapshot,
+            session!);
     }
 
     public async Task<OccurrenceFeedPayload> Poll(Guid scopeId, ulong cursor)
@@ -204,11 +231,15 @@ public sealed class EventRealtimeHub : Hub
         if (page.Kind == OccurrenceFeedKind.Gap)
         {
             subscriptions.Remove(Context.ConnectionId);
-            return ToPayload(page);
+            return ToPayload(
+                page,
+                session);
         }
 
         subscriptions.Set(Context.ConnectionId, subscription with { Cursor = page.To });
-        return ToPayload(page);
+        return ToPayload(
+            page,
+            session);
     }
 
     public override Task OnDisconnectedAsync(Exception? exception)
@@ -217,28 +248,59 @@ public sealed class EventRealtimeHub : Hub
         return base.OnDisconnectedAsync(exception);
     }
 
-    private static OccurrenceSnapshotPayload ToPayload(OccurrenceProjectionSnapshot snapshot) => new(
+    private static OccurrenceSnapshotPayload ToPayload(
+        OccurrenceProjectionSnapshot snapshot,
+        SessionSnapshot session) => new(
         snapshot.Cursor,
-        snapshot.Occurrences.Select(ToPayload).ToArray());
+        snapshot.Occurrences
+            .Select(record =>
+                ToPayload(record, session))
+            .ToArray());
 
-    private static OccurrenceFeedPayload ToPayload(OccurrenceFeedPage page) => new(
+    private static OccurrenceFeedPayload ToPayload(
+        OccurrenceFeedPage page,
+        SessionSnapshot session) => new(
         page.Kind.ToString(),
         page.From,
         page.To,
-        page.Changes.Select(ToPayload).ToArray());
+        page.Changes
+            .Select(record =>
+                ToPayload(record, session))
+            .ToArray());
 
-    private static OccurrencePayload ToPayload(OccurrenceProjectionRecord record) => new(
+    internal static OccurrencePayload ToPayload(
+        OccurrenceProjectionRecord record,
+        SessionSnapshot session) => new(
         record.Version.Value,
         record.Occurrence.OccurrenceId.Value,
         record.Occurrence.PointId.Value,
         record.Occurrence.Priority.ToString(),
+        record.Occurrence.OpenedAt,
+        record.Occurrence.ClosedAt,
         record.Occurrence.Condition.State.ToString(),
+        record.Occurrence.Condition.PendingSince,
+        record.Occurrence.Condition.ActiveSince,
+        record.Occurrence.Condition.ClearedAt,
         record.Occurrence.Condition.Version.Value,
         record.Occurrence.Acknowledgement.State.ToString(),
+        record.Occurrence.Acknowledgement.AcknowledgedBy,
+        record.Occurrence.Acknowledgement.AcknowledgedAt,
         record.Occurrence.Acknowledgement.Version.Value,
+        record.Occurrence.Assignment.AssignedTo,
+        record.Occurrence.Assignment.AssignedAt,
         record.Occurrence.Assignment.Version.Value,
+        record.Occurrence.Shelving.ShelvedUntil,
+        record.Occurrence.Shelving.Reason,
         record.Occurrence.Shelving.Version.Value,
-        record.Occurrence.Suppression.Version.Value);
+        record.Occurrence.Suppression.IsSuppressed,
+        record.Occurrence.Suppression.Reason,
+        record.Occurrence.Suppression.Version.Value,
+        session.Permissions.Allows(
+            AlarmPermissions.Acknowledge),
+        session.Permissions.Allows(
+            AlarmPermissions.Assign),
+        session.Permissions.Allows(
+            AlarmPermissions.Shelve));
 }
 
 public static class EventEndpoints
@@ -267,8 +329,79 @@ public static class EventEndpoints
         var group = endpoints.MapGroup("/api/events");
         group.MapGet("/{scopeId:guid}", QueryAsync);
         group.MapGet("/{scopeId:guid}/counters", CountAsync);
+        group.MapGet(
+            "/{scopeId:guid}/occurrences/snapshot",
+            OccurrenceSnapshotAsync);
+        group.MapGet(
+            "/{scopeId:guid}/occurrences/feed",
+            OccurrenceFeedAsync);
         endpoints.MapHub<EventRealtimeHub>("/hubs/events");
         return endpoints;
+    }
+
+    private static async Task<IResult>
+        OccurrenceSnapshotAsync(
+            Guid scopeId,
+            HttpContext context,
+            RequestSessionResolver sessions,
+            AuthorizedEventDispatcher dispatcher,
+            CancellationToken cancellationToken)
+    {
+        var session = sessions.Resolve(context);
+        var result =
+            await dispatcher
+                .ReadOccurrenceSnapshotAsync(
+                    session,
+                    RuntimeScopeId.From(scopeId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return result.IsSuccess
+            ? Results.Ok(
+                new OccurrenceSnapshotPayload(
+                    result.Value.Snapshot.Cursor,
+                    result.Value.Snapshot
+                        .Occurrences
+                        .Select(record =>
+                            EventRealtimeHub
+                                .ToPayload(
+                                    record,
+                                    session!))
+                        .ToArray()))
+            : Problem(result.Error!);
+    }
+
+    private static async Task<IResult>
+        OccurrenceFeedAsync(
+            Guid scopeId,
+            ulong cursor,
+            HttpContext context,
+            RequestSessionResolver sessions,
+            AuthorizedEventDispatcher dispatcher,
+            CancellationToken cancellationToken)
+    {
+        var session = sessions.Resolve(context);
+        var result =
+            await dispatcher
+                .ReadOccurrenceFeedForCurrentPermissionsAsync(
+                    session,
+                    RuntimeScopeId.From(scopeId),
+                    cursor,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return result.IsSuccess
+            ? Results.Ok(
+                new OccurrenceFeedPayload(
+                    result.Value.Kind.ToString(),
+                    result.Value.From,
+                    result.Value.To,
+                    result.Value.Changes
+                        .Select(record =>
+                            EventRealtimeHub
+                                .ToPayload(
+                                    record,
+                                    session!))
+                        .ToArray()))
+            : Problem(result.Error!);
     }
 
     private static async Task<IResult> QueryAsync(
@@ -383,13 +516,29 @@ public sealed record OccurrencePayload(
     Guid OccurrenceId,
     Guid PointId,
     string Priority,
+    DateTimeOffset OpenedAt,
+    DateTimeOffset? ClosedAt,
     string ConditionState,
+    DateTimeOffset? ConditionPendingSince,
+    DateTimeOffset? ConditionActiveSince,
+    DateTimeOffset? ConditionClearedAt,
     ulong ConditionVersion,
     string AcknowledgementState,
+    Guid? AcknowledgedBy,
+    DateTimeOffset? AcknowledgedAt,
     ulong AcknowledgementVersion,
+    Guid? AssignedTo,
+    DateTimeOffset? AssignedAt,
     ulong AssignmentVersion,
+    DateTimeOffset? ShelvedUntil,
+    string? ShelvingReason,
     ulong ShelvingVersion,
-    ulong SuppressionVersion);
+    bool IsSuppressed,
+    string? SuppressionReason,
+    ulong SuppressionVersion,
+    bool CanAcknowledge,
+    bool CanAssign,
+    bool CanShelve);
 
 public sealed record OccurrenceSnapshotPayload(ulong Cursor, IReadOnlyList<OccurrencePayload> Occurrences);
 

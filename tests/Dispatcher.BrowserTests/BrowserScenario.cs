@@ -49,6 +49,18 @@ public sealed class BrowserScenario :
     private static readonly Guid WidgetId =
         Guid.Parse(
             "81000000-0000-0000-0000-000000000013");
+    private static readonly Guid EventPointId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000014");
+    private static readonly Guid EventOccurrenceId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000015");
+    private static readonly Guid NewEventOccurrenceId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000016");
+    private static readonly Guid HistorySourceId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000017");
     private const string AccessToken =
         "browser-access-token";
     private const string RefreshToken =
@@ -56,6 +68,16 @@ public sealed class BrowserScenario :
     private readonly IBrowserContext context;
     private bool sessionActive;
     private bool sessionExpired;
+    private bool c09Enabled;
+    private bool eventGap;
+    private bool additionalOccurrence;
+    private ulong occurrenceCursor = 1;
+    private ulong projectionVersion = 1;
+    private string conditionState = "Active";
+    private string acknowledgementState =
+        "Unacknowledged";
+    private Guid? assignedTo;
+    private DateTimeOffset? shelvedUntil;
 
     private BrowserScenario(
         IBrowserContext context,
@@ -70,6 +92,15 @@ public sealed class BrowserScenario :
     public IPage Page { get; }
 
     public Uri ServerAddress { get; }
+
+    public static Guid PrimaryOccurrenceId =>
+        EventOccurrenceId;
+
+    public static Guid HistoryPointId =>
+        EventPointId;
+
+    public static Guid HistoryStreamSourceId =>
+        HistorySourceId;
 
     public static async Task<BrowserScenario>
         CreateAsync(
@@ -117,6 +148,36 @@ public sealed class BrowserScenario :
     {
         sessionExpired = true;
     }
+
+    public void EnableC09()
+    {
+        c09Enabled = true;
+    }
+
+    public void RaiseNewOccurrence()
+    {
+        additionalOccurrence = true;
+        occurrenceCursor =
+            checked(occurrenceCursor + 1);
+    }
+
+    public void ReturnPrimaryToNormal()
+    {
+        conditionState = "Normal";
+        projectionVersion =
+            checked(projectionVersion + 1);
+        occurrenceCursor =
+            checked(occurrenceCursor + 1);
+    }
+
+    public void CauseEventGap()
+    {
+        eventGap = true;
+    }
+
+    public string HistoryUrl() =>
+        Url(
+            $"/history?scopeId={ScopeId:D}&sourceId={HistorySourceId:D}&pointId={EventPointId:D}");
 
     public async ValueTask DisposeAsync()
     {
@@ -192,19 +253,7 @@ public sealed class BrowserScenario :
         {
             await AuthorizedJsonAsync(
                     route,
-                    new[]
-                    {
-                        new
-                        {
-                            label = "Home",
-                            route = "/home",
-                        },
-                        new
-                        {
-                            label = "Current",
-                            route = "/current",
-                        },
-                    })
+                    NavigationPayload())
                 .ConfigureAwait(false);
             return;
         }
@@ -232,9 +281,29 @@ public sealed class BrowserScenario :
                     string.Equals(
                         routeValue,
                         "/history",
-                        StringComparison.OrdinalIgnoreCase)
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !c09Enabled
                             ? 403
                             : 204)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (c09Enabled &&
+            (path.StartsWith(
+                 "/api/events/",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/alarms/",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/history/",
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleC09Async(
+                    route,
+                    request,
+                    uri)
                 .ConfigureAwait(false);
             return;
         }
@@ -277,6 +346,332 @@ public sealed class BrowserScenario :
         await StatusAsync(
                 route,
                 404)
+            .ConfigureAwait(false);
+    }
+
+    private async Task HandleC09Async(
+        IRoute route,
+        IRequest request,
+        Uri uri)
+    {
+        if (!IsAuthorized(request))
+        {
+            await StatusAsync(route, 401)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var path = uri.AbsolutePath;
+        if (path.EndsWith(
+                "/occurrences/snapshot",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        cursor =
+                            occurrenceCursor,
+                        occurrences =
+                            OccurrencesPayload(),
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/occurrences/feed",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var requested =
+                ulong.TryParse(
+                    ReadQueryParameter(
+                        uri.Query,
+                        "cursor"),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var cursor)
+                        ? cursor
+                        : 0;
+            if (eventGap)
+            {
+                eventGap = false;
+                await JsonAsync(
+                        route,
+                        new
+                        {
+                            kind = "Gap",
+                            from = requested,
+                            to = requested,
+                            changes =
+                                Array.Empty<object>(),
+                        })
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        kind =
+                            requested <
+                            occurrenceCursor
+                                ? "Delta"
+                                : "NoChange",
+                        from = requested,
+                        to = occurrenceCursor,
+                        changes =
+                            requested <
+                            occurrenceCursor
+                                ? OccurrencesPayload()
+                                : Array.Empty<object>(),
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.Contains(
+                "/api/alarms/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (path.EndsWith(
+                    "/acknowledge",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                acknowledgementState =
+                    "Acknowledged";
+            }
+            else if (path.EndsWith(
+                         "/assign",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                assignedTo = SubjectId;
+            }
+            else if (path.EndsWith(
+                         "/shelve",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                shelvedUntil =
+                    DateTimeOffset.UtcNow
+                        .AddMinutes(30);
+            }
+            else if (path.EndsWith(
+                         "/unshelve",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                shelvedUntil = null;
+            }
+            else
+            {
+                await StatusAsync(route, 404)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            projectionVersion =
+                checked(projectionVersion + 1);
+            occurrenceCursor =
+                checked(occurrenceCursor + 1);
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        completion = "Applied",
+                        idempotencyKey =
+                            "browser-action",
+                        occurrenceId =
+                            EventOccurrenceId,
+                        pointId = EventPointId,
+                        priority = "Critical",
+                        dashboardBindingKey =
+                            $"point:{EventPointId:N}",
+                        equipmentHref =
+                            $"/equipment?pointId={EventPointId:D}",
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/counters",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        eventCount = 3,
+                        activeOccurrenceCount =
+                            conditionState ==
+                            "Active"
+                                ? 1
+                                : 0,
+                        unacknowledgedOccurrenceCount =
+                            acknowledgementState ==
+                            "Unacknowledged"
+                                ? 1
+                                : 0,
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.StartsWith(
+                "/api/events/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        events = new[]
+                        {
+                            new
+                            {
+                                eventId =
+                                    Guid.Parse(
+                                        "81000000-0000-0000-0000-000000000018"),
+                                position = 1UL,
+                                pointId =
+                                    EventPointId,
+                                occurrenceId =
+                                    EventOccurrenceId,
+                                sourceConditionVersion =
+                                    1UL,
+                                priority =
+                                    "Critical",
+                                kind =
+                                    "AlarmRaised",
+                                occurredAt =
+                                    DateTimeOffset
+                                        .UtcNow
+                                        .AddMinutes(-10),
+                                acceptedAt =
+                                    DateTimeOffset
+                                        .UtcNow
+                                        .AddMinutes(-10),
+                            },
+                        },
+                        upperBound = 1UL,
+                        nextAfter =
+                            (ulong?)null,
+                        nextUpper =
+                            (ulong?)null,
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/aggregate",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var now = DateTimeOffset.UtcNow;
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        policyVersion = 1,
+                        resolutionSeconds = 60d,
+                        buckets = new[]
+                        {
+                            new
+                            {
+                                fromInclusive =
+                                    now.AddMinutes(-2),
+                                toExclusive =
+                                    now.AddMinutes(-1),
+                                count = 2L,
+                                average = 41.5d,
+                                minimum = 40L,
+                                maximum = 43L,
+                                quality = "Good",
+                                freshness = "Fresh",
+                                hasGap = false,
+                            },
+                            new
+                            {
+                                fromInclusive =
+                                    now.AddMinutes(-1),
+                                toExclusive = now,
+                                count = 1L,
+                                average = 39d,
+                                minimum = 39L,
+                                maximum = 39L,
+                                quality = "Bad",
+                                freshness = "Stale",
+                                hasGap = true,
+                            },
+                        },
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith(
+                "/range",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(
+                    route,
+                    new
+                    {
+                        records = new object[]
+                        {
+                            new
+                            {
+                                position = 1UL,
+                                kind = "sample",
+                                value = 42L,
+                                unit = "°C",
+                                quality = "Good",
+                                freshness = "Fresh",
+                                sourceTimestamp =
+                                    DateTimeOffset.UtcNow
+                                        .AddMinutes(-2),
+                                isLate = false,
+                                isOutOfOrder = false,
+                                gapFirstSourcePosition =
+                                    (ulong?)null,
+                                gapLastSourcePosition =
+                                    (ulong?)null,
+                                gapReason =
+                                    (string?)null,
+                            },
+                            new
+                            {
+                                position = 2UL,
+                                kind = "gap",
+                                value = (long?)null,
+                                unit = (string?)null,
+                                quality = (string?)null,
+                                freshness =
+                                    (string?)null,
+                                sourceTimestamp =
+                                    (DateTimeOffset?)null,
+                                isLate = (bool?)null,
+                                isOutOfOrder =
+                                    (bool?)null,
+                                gapFirstSourcePosition =
+                                    10UL,
+                                gapLastSourcePosition =
+                                    12UL,
+                                gapReason =
+                                    "source unavailable",
+                            },
+                        },
+                        upperBound = 2UL,
+                        nextAfter =
+                            (ulong?)null,
+                        nextUpper =
+                            (ulong?)null,
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await StatusAsync(route, 404)
             .ConfigureAwait(false);
     }
 
@@ -392,7 +787,7 @@ public sealed class BrowserScenario :
         };
     }
 
-    private static object BootstrapPayload() =>
+    private object BootstrapPayload() =>
         new
         {
             accountId = AccountId,
@@ -408,13 +803,164 @@ public sealed class BrowserScenario :
                 },
             defaultScopeId =
                 ScopeId,
-            permissions =
-                new[]
+            permissions = c09Enabled
+                ? new[]
+                {
+                    "workspace.home.read",
+                    "runtime.current.read",
+                    "history.range.read",
+                    "events.dispatcher.read",
+                    "alarm.occurrence.acknowledge",
+                    "alarm.occurrence.assign",
+                    "alarm.occurrence.shelve",
+                }
+                : new[]
                 {
                     "workspace.home.read",
                     "runtime.current.read",
                 },
         };
+
+    private object[] NavigationPayload()
+    {
+        var items = new List<object>
+        {
+            new
+            {
+                label = "Home",
+                route = "/home",
+            },
+            new
+            {
+                label = "Current",
+                route = "/current",
+            },
+        };
+        if (c09Enabled)
+        {
+            items.Add(
+                new
+                {
+                    label = "Events",
+                    route = "/events",
+                });
+            items.Add(
+                new
+                {
+                    label = "History",
+                    route = "/history",
+                });
+        }
+
+        return items.ToArray();
+    }
+
+    private object[] OccurrencesPayload()
+    {
+        var items = new List<object>
+        {
+            OccurrencePayload(
+                EventOccurrenceId,
+                projectionVersion,
+                "Critical",
+                conditionState,
+                acknowledgementState,
+                assignedTo,
+                shelvedUntil),
+        };
+        if (additionalOccurrence)
+        {
+            items.Add(
+                OccurrencePayload(
+                    NewEventOccurrenceId,
+                    projectionVersion: 1,
+                    priority: "High",
+                    condition: "Active",
+                    acknowledgement:
+                        "Unacknowledged",
+                    assigned: null,
+                    shelved: null));
+        }
+
+        return items.ToArray();
+    }
+
+    private static object OccurrencePayload(
+        Guid occurrenceId,
+        ulong projectionVersion,
+        string priority,
+        string condition,
+        string acknowledgement,
+        Guid? assigned,
+        DateTimeOffset? shelved)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new
+        {
+            projectionVersion,
+            occurrenceId,
+            pointId = EventPointId,
+            priority,
+            openedAt = now.AddMinutes(-10),
+            closedAt =
+                condition == "Normal"
+                    ? now.AddMinutes(-1)
+                    : (DateTimeOffset?)null,
+            conditionState = condition,
+            conditionPendingSince =
+                (DateTimeOffset?)null,
+            conditionActiveSince =
+                now.AddMinutes(-10),
+            conditionClearedAt =
+                condition == "Normal"
+                    ? now.AddMinutes(-1)
+                    : (DateTimeOffset?)null,
+            conditionVersion =
+                projectionVersion,
+            acknowledgementState =
+                acknowledgement,
+            acknowledgedBy =
+                acknowledgement ==
+                "Acknowledged"
+                    ? SubjectId
+                    : (Guid?)null,
+            acknowledgedAt =
+                acknowledgement ==
+                "Acknowledged"
+                    ? now
+                    : (DateTimeOffset?)null,
+            acknowledgementVersion =
+                acknowledgement ==
+                "Acknowledged"
+                    ? 2UL
+                    : 1UL,
+            assignedTo = assigned,
+            assignedAt =
+                assigned is null
+                    ? (DateTimeOffset?)null
+                    : now,
+            assignmentVersion =
+                assigned is null
+                    ? 1UL
+                    : 2UL,
+            shelvedUntil = shelved,
+            shelvingReason =
+                shelved is null
+                    ? null
+                    : "Operator review",
+            shelvingVersion =
+                shelved is null
+                    ? 1UL
+                    : 2UL,
+            isSuppressed = false,
+            suppressionReason =
+                (string?)null,
+            suppressionVersion = 1UL,
+            canAcknowledge = true,
+            canAssign = true,
+            canShelve = true,
+        };
+    }
 
     private static object HomePayload() =>
         new

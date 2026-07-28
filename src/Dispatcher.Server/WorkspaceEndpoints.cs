@@ -65,6 +65,22 @@ public static class WorkspaceEndpoints
                     : Result.Failure<bool>(access.Error!));
             }
 
+            if (string.Equals(route.Split('?', 2)[0], "/events", StringComparison.OrdinalIgnoreCase))
+            {
+                var access =
+                    SessionAuthorization
+                        .AuthorizeAccess(
+                            session,
+                            EventPermissions
+                                .ReadDispatcher,
+                            SystemClock.Instance);
+                return ToHttpResult(
+                    access.IsSuccess
+                        ? Result.Success(true)
+                        : Result.Failure<bool>(
+                            access.Error!));
+            }
+
             return ToHttpResult(workspace.CanAccess(session, route));
         });
 
@@ -90,6 +106,15 @@ public static class WorkspaceEndpoints
             if (session is not null && session.Permissions.Allows(HistoryPermissions.ReadRange))
             {
                 items.Add(new WorkspaceNavigationPayload("History", "/history"));
+            }
+            if (session is not null &&
+                session.Permissions.Allows(
+                    EventPermissions.ReadDispatcher))
+            {
+                items.Add(
+                    new WorkspaceNavigationPayload(
+                        "Events",
+                        "/events"));
             }
 
             var registry = context.RequestServices.GetService<RegistryProjectionService>();
