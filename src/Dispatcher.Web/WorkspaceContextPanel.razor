@@ -1,4 +1,6 @@
+@implements IDisposable
 @inject IdentitySessionState Session
+@inject ShellRouteContextState RouteContext
 
 <aside class="shell-context" aria-label="Current workspace context">
     <div class="shell-panel-heading">
@@ -6,17 +8,34 @@
         <h2>Workspace</h2>
     </div>
 
-    @if (Session.Bootstrap is null)
-    {
-        <UiStatePanel Kind="@UiStateKind.Empty"
-                      Title="No active session"
-                      Message="Sign in to load permitted facilities and workspace context."
-                      Compact />
-    }
-    else
-    {
-        var bootstrap = Session.Bootstrap!;
-        <div class="context-stack">
+    <div class="context-stack">
+        <section class="context-card" aria-label="Current route">
+            <div class="context-card__header">
+                <span>Current view</span>
+                <UiBadge Text="@RouteBadge"
+                         Category="@UiBadgeCategory.State"
+                         Tone="@UiBadgeTone.Information" />
+            </div>
+            <p class="context-card__route">@RouteContext.Current.Section</p>
+            <p class="context-card__caption">@RouteContext.Current.EntityLabel</p>
+            @if (RouteContext.Current.HasEntity)
+            {
+                <code class="context-card__identifier">
+                    @RouteContext.Current.EntityId
+                </code>
+            }
+        </section>
+
+        @if (Session.Bootstrap is null)
+        {
+            <UiStatePanel Kind="@UiStateKind.Empty"
+                          Title="No active session"
+                          Message="Sign in to load permitted facilities and workspace context."
+                          Compact />
+        }
+        else
+        {
+            var bootstrap = Session.Bootstrap!;
             <section class="context-card" aria-label="Session">
                 <div class="context-card__header">
                     <span>Session</span>
@@ -65,11 +84,27 @@
                 <p class="context-card__metric">@bootstrap.Permissions.Count</p>
                 <p class="context-card__caption">effective capabilities</p>
             </section>
-        </div>
-    }
+        }
+    </div>
 </aside>
 
 @code {
+    private string RouteBadge =>
+        RouteContext.Current.HasEntity
+            ? RouteContext.Current.EntityKind!
+            : "Section";
+
+    protected override void OnInitialized() =>
+        RouteContext.Changed +=
+            HandleContextChanged;
+
+    public void Dispose() =>
+        RouteContext.Changed -=
+            HandleContextChanged;
+
+    private void HandleContextChanged() =>
+        _ = InvokeAsync(StateHasChanged);
+
     private static string Short(Guid value) =>
         value.ToString("N")[..8].ToUpperInvariant();
 

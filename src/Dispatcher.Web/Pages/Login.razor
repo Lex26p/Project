@@ -5,35 +5,206 @@
 
 <PageTitle>Sign in</PageTitle>
 
-<h1>Sign in to Dispatcher</h1>
-<form @onsubmit="SignInAsync" @onsubmit:preventDefault>
-    <p><label>User name <input @bind="userName" autocomplete="username" /></label></p>
-    <p><label>Password <input @bind="password" type="password" autocomplete="current-password" /></label></p>
-    <button type="submit" disabled="@busy">Sign in</button>
-</form>
-@if (invalid) { <p role="alert">The user name or password is invalid.</p> }
-@if (Session.IsAuthenticated)
-{
-    <p>Production session is active.</p>
-    <button type="button" @onclick="RefreshAsync">Refresh session</button>
-    <button type="button" @onclick="SignOutAsync">Sign out</button>
-}
+<div class="auth-page">
+    <section class="auth-card" aria-labelledby="login-title">
+        <header class="auth-card__header">
+            <div class="auth-card__mark" aria-hidden="true">
+                <span></span><span></span><span></span>
+            </div>
+            <div>
+                <p class="auth-card__eyebrow">Dispatcher access</p>
+                <h1 id="login-title">
+                    @(Session.IsAuthenticated ? "Session" : "Sign in")
+                </h1>
+            </div>
+        </header>
+
+        @if (Session.IsAuthenticated)
+        {
+            <div class="auth-session">
+                <div class="auth-session__heading">
+                    <div>
+                        <strong>Production session is active</strong>
+                        <span>@SessionExpiryLabel</span>
+                    </div>
+                    <UiBadge Text="Authenticated"
+                             Category="@UiBadgeCategory.State"
+                             Tone="@UiBadgeTone.Positive" />
+                </div>
+                <div class="auth-actions">
+                    <button class="button button--primary"
+                            type="button"
+                            disabled="@busy"
+                            @onclick="Continue">
+                        Continue
+                    </button>
+                    <button class="button button--secondary"
+                            type="button"
+                            disabled="@busy"
+                            @onclick="RefreshAsync">
+                        Refresh session
+                    </button>
+                    <button class="button button--quiet"
+                            type="button"
+                            disabled="@busy"
+                            @onclick="SignOutAsync">
+                        Sign out
+                    </button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <form class="auth-form"
+                  @onsubmit="SignInAsync"
+                  @onsubmit:preventDefault>
+                <label class="form-field">
+                    <span>User name</span>
+                    <input @bind="userName"
+                           autocomplete="username"
+                           inputmode="text"
+                           required
+                           disabled="@busy" />
+                </label>
+                <label class="form-field">
+                    <span>Password</span>
+                    <input @bind="password"
+                           type="password"
+                           autocomplete="current-password"
+                           required
+                           disabled="@busy" />
+                </label>
+                <button class="button button--primary auth-submit"
+                        type="submit"
+                        disabled="@busy">
+                    @(busy ? "Signing in…" : "Sign in")
+                </button>
+            </form>
+        }
+
+        @if (invalid)
+        {
+            <div class="inline-message inline-message--critical"
+                 role="alert">
+                The user name or password is invalid.
+            </div>
+        }
+        else if (transportUnavailable)
+        {
+            <div class="inline-message inline-message--warning"
+                 role="alert">
+                The authentication service is unavailable. Try again after connectivity is restored.
+            </div>
+        }
+    </section>
+
+    <aside class="auth-aside" aria-label="Session information">
+        <p class="auth-card__eyebrow">Secure workspace</p>
+        <h2>One session for Web, API and realtime</h2>
+        <p>
+            Dispatcher keeps authentication in the same origin and reloads
+            navigation from effective capabilities after sign-in, refresh or
+            sign-out.
+        </p>
+        <dl class="auth-facts">
+            <div>
+                <dt>Return route</dt>
+                <dd>@ReturnRoute</dd>
+            </div>
+            <div>
+                <dt>Transport</dt>
+                <dd>Same origin</dd>
+            </div>
+        </dl>
+    </aside>
+</div>
 
 @code {
     private string userName = string.Empty;
     private string password = string.Empty;
     private bool busy;
     private bool invalid;
+    private bool transportUnavailable;
+
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    private string ReturnRoute =>
+        ReturnUrlPolicy.Normalize(ReturnUrl);
+
+    private string SessionExpiryLabel =>
+        Session.Bootstrap is { } bootstrap
+            ? bootstrap.ExpiresAt
+                .ToLocalTime()
+                .ToString("g")
+            : "Expiry unavailable";
 
     private async Task SignInAsync()
     {
         busy = true;
-        invalid = !await Identity.LoginAsync(userName, password);
-        password = string.Empty;
-        busy = false;
-        if (!invalid) Navigation.NavigateTo("/home");
+        invalid = false;
+        transportUnavailable = false;
+        try
+        {
+            invalid =
+                !await Identity.LoginAsync(
+                        userName,
+                        password);
+            password = string.Empty;
+            if (!invalid)
+            {
+                Continue();
+            }
+        }
+        catch (HttpRequestException)
+        {
+            transportUnavailable = true;
+        }
+        finally
+        {
+            busy = false;
+        }
     }
 
-    private async Task RefreshAsync() => invalid = !await Identity.RefreshAsync();
-    private async Task SignOutAsync() { await Identity.RevokeAsync(); Navigation.NavigateTo("/login"); }
+    private async Task RefreshAsync()
+    {
+        busy = true;
+        invalid = false;
+        transportUnavailable = false;
+        try
+        {
+            invalid =
+                !await Identity.RefreshAsync();
+        }
+        catch (HttpRequestException)
+        {
+            transportUnavailable = true;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task SignOutAsync()
+    {
+        busy = true;
+        try
+        {
+            await Identity.RevokeAsync();
+        }
+        catch (HttpRequestException)
+        {
+            transportUnavailable = true;
+        }
+        finally
+        {
+            busy = false;
+            Navigation.NavigateTo("/login");
+        }
+    }
+
+    private void Continue() =>
+        Navigation.NavigateTo(ReturnRoute);
 }

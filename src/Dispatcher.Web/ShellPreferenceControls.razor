@@ -1,13 +1,16 @@
 @inject ShellPresentationState Presentation
+@inject Microsoft.JSInterop.IJSRuntime JavaScript
 
 <div class="shell-preference-controls"
      role="group"
-     aria-label="Appearance">
+     aria-label="Appearance"
+     aria-busy="@(!Presentation.IsInitialized)">
     <button class="shell-control"
             type="button"
             aria-label="Switch color theme"
             aria-pressed="@(Presentation.Theme == ShellTheme.Dark)"
-            @onclick="Presentation.ToggleTheme">
+            disabled="@(!Presentation.IsInitialized)"
+            @onclick="ToggleThemeAsync">
         <span aria-hidden="true">
             @(Presentation.Theme == ShellTheme.Dark ? "☾" : "☀")
         </span>
@@ -17,8 +20,21 @@
             type="button"
             aria-label="Switch interface density"
             aria-pressed="@(Presentation.Density == ShellDensity.Compact)"
-            @onclick="Presentation.ToggleDensity">
+            disabled="@(!Presentation.IsInitialized)"
+            @onclick="ToggleDensityAsync">
         <span aria-hidden="true">≡</span>
         <span>@Presentation.DensityLabel</span>
     </button>
 </div>
+
+@code {
+    protected override Task OnInitializedAsync() =>
+        Presentation.InitializeAsync(
+            JavaScript);
+
+    private Task ToggleThemeAsync() =>
+        Presentation.ToggleThemeAsync();
+
+    private Task ToggleDensityAsync() =>
+        Presentation.ToggleDensityAsync();
+}

@@ -2,6 +2,8 @@
 @implements IDisposable
 @inject IdentitySessionState Session
 @inject ShellPresentationState Presentation
+@inject Microsoft.JSInterop.IJSRuntime JavaScript
+@inject NavigationManager Navigation
 
 <div class="workspace-shell"
      data-theme="@Presentation.ThemeToken"
@@ -25,7 +27,7 @@
 
         <div class="shell-header__actions">
             <ShellPreferenceControls />
-            <NavLink class="session-link" href="/login">
+            <NavLink class="session-link" href="@SessionRoute">
                 <span class="session-link__indicator"
                       data-active="@Session.IsAuthenticated"
                       aria-hidden="true"></span>
@@ -54,16 +56,37 @@
 </div>
 
 @code {
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        Session.Changed += HandlePresentationChanged;
-        Presentation.Changed += HandlePresentationChanged;
+        Session.Changed +=
+            HandlePresentationChanged;
+        Presentation.Changed +=
+            HandlePresentationChanged;
+        await Presentation
+            .InitializeAsync(JavaScript);
     }
 
     public void Dispose()
     {
-        Session.Changed -= HandlePresentationChanged;
-        Presentation.Changed -= HandlePresentationChanged;
+        Session.Changed -=
+            HandlePresentationChanged;
+        Presentation.Changed -=
+            HandlePresentationChanged;
+    }
+
+    private string SessionRoute
+    {
+        get
+        {
+            var relative =
+                Navigation.ToBaseRelativePath(
+                    Navigation.Uri);
+            var returnUrl =
+                ReturnUrlPolicy.Normalize(
+                    $"/{relative}");
+            return
+                $"/login?returnUrl={Uri.EscapeDataString(returnUrl)}";
+        }
     }
 
     private void HandlePresentationChanged() =>

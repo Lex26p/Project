@@ -1,4 +1,7 @@
+@implements IDisposable
 @inject WorkspaceApiClient Api
+@inject IdentitySessionState Session
+@inject NavigationManager Navigation
 
 <nav class="primary-navigation" aria-label="Primary navigation">
     @if (loading)
@@ -15,6 +18,22 @@
                       Message="The server could not be reached. Existing content may be stale."
                       ActionLabel="Retry"
                       OnAction="@LoadAsync"
+                      Compact />
+    }
+    else if (requiresSignIn)
+    {
+        <UiStatePanel Kind="@UiStateKind.SessionExpired"
+                      Title="Sign in required"
+                      Message="Authenticate to load the sections available to your account."
+                      ActionLabel="Sign in"
+                      OnAction="@OpenLogin"
+                      Compact />
+    }
+    else if (forbidden)
+    {
+        <UiStatePanel Kind="@UiStateKind.Forbidden"
+                      Title="No workspace access"
+                      Message="The active session has no capability to read workspace navigation."
                       Compact />
     }
     else if (items is null || items.Count == 0)
@@ -49,30 +68,131 @@
 
 @code {
     private IReadOnlyList<WorkspaceNavigationPayload>? items;
+    private CancellationTokenSource? loadCancellation;
+    private long loadGeneration;
     private bool loading = true;
     private bool offline;
+    private bool requiresSignIn;
+    private bool forbidden;
 
-    protected override Task OnInitializedAsync() =>
-        LoadAsync();
+    protected override Task OnInitializedAsync()
+    {
+        Session.Changed +=
+            HandleSessionChanged;
+        return LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -=
+            HandleSessionChanged;
+        loadCancellation?.Cancel();
+        loadCancellation?.Dispose();
+    }
 
     private async Task LoadAsync()
     {
-        loading = true;
-        offline = false;
+        var generation =
+            checked(++loadGeneration);
+        var cancellation =
+            ReplaceCancellation();
+        ResetState();
+
+        if (!Session.IsAuthenticated)
+        {
+            requiresSignIn = true;
+            loading = false;
+            return;
+        }
+
         try
         {
-            items = await Api.ReadNavigationAsync();
+            var result =
+                await Api.ReadNavigationStateAsync(
+                    cancellation.Token);
+            if (generation != loadGeneration)
+            {
+                return;
+            }
+
+            Apply(result);
+        }
+        catch (OperationCanceledException)
+            when (cancellation.IsCancellationRequested)
+        {
+            // A newer session generation replaced this load.
         }
         catch (HttpRequestException)
         {
-            items = null;
-            offline = true;
+            if (generation == loadGeneration)
+            {
+                offline = true;
+            }
         }
         finally
         {
-            loading = false;
+            if (generation == loadGeneration)
+            {
+                loading = false;
+            }
         }
     }
+
+    private void Apply(
+        WorkspaceNavigationRead result)
+    {
+        switch (result.Status)
+        {
+            case WorkspaceNavigationStatus.Available:
+                items = result.Items;
+                break;
+            case WorkspaceNavigationStatus.SessionExpired:
+                requiresSignIn = true;
+                Session.Invalidate();
+                break;
+            case WorkspaceNavigationStatus.Forbidden:
+                forbidden = true;
+                break;
+            case WorkspaceNavigationStatus.Unavailable:
+                offline = true;
+                break;
+            default:
+                throw new InvalidOperationException(
+                    "Unsupported navigation status.");
+        }
+    }
+
+    private void ResetState()
+    {
+        loading = true;
+        offline = false;
+        requiresSignIn = false;
+        forbidden = false;
+        items = null;
+    }
+
+    private CancellationTokenSource
+        ReplaceCancellation()
+    {
+        loadCancellation?.Cancel();
+        loadCancellation?.Dispose();
+        loadCancellation =
+            new CancellationTokenSource();
+        return loadCancellation;
+    }
+
+    private void HandleSessionChanged() =>
+        _ = InvokeAsync(
+            ReloadForSessionAsync);
+
+    private async Task ReloadForSessionAsync()
+    {
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private void OpenLogin() =>
+        Navigation.NavigateTo("/login");
 
     private static NavLinkMatch Match(string route) =>
         string.Equals(

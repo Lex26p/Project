@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject ShellPresentationState Presentation
+@inject Microsoft.JSInterop.IJSRuntime JavaScript
 
 <div class="kiosk-shell"
      data-theme="@Presentation.ThemeToken"
@@ -27,11 +28,17 @@
 </div>
 
 @code {
-    protected override void OnInitialized() =>
-        Presentation.Changed += HandlePresentationChanged;
+    protected override async Task OnInitializedAsync()
+    {
+        Presentation.Changed +=
+            HandlePresentationChanged;
+        await Presentation
+            .InitializeAsync(JavaScript);
+    }
 
     public void Dispose() =>
-        Presentation.Changed -= HandlePresentationChanged;
+        Presentation.Changed -=
+            HandlePresentationChanged;
 
     private void HandlePresentationChanged() =>
         _ = InvokeAsync(StateHasChanged);

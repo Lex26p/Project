@@ -28,17 +28,36 @@ public sealed class IdentitySessionState(HttpClient http)
     public ulong Generation { get; private set; }
     public bool IsAuthenticated => Session is not null;
     public event Action? Changed;
-    internal void Set(ProductionSessionPayload value, SessionBootstrapPayload bootstrap)
+
+    public void Invalidate() =>
+        Clear();
+
+    internal void Set(
+        ProductionSessionPayload value,
+        SessionBootstrapPayload bootstrap)
     {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(bootstrap);
         Session = value;
         Bootstrap = bootstrap;
         http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Dispatcher-Session", value.AccessToken);
+            new AuthenticationHeaderValue(
+                "Dispatcher-Session",
+                value.AccessToken);
         Generation = checked(Generation + 1);
         Changed?.Invoke();
     }
+
     internal void Clear()
     {
+        if (Session is null &&
+            Bootstrap is null &&
+            http.DefaultRequestHeaders
+                .Authorization is null)
+        {
+            return;
+        }
+
         Session = null;
         Bootstrap = null;
         http.DefaultRequestHeaders.Authorization = null;
@@ -70,8 +89,20 @@ public sealed class IdentityApiClient(HttpClient http, IdentitySessionState stat
 
     public async Task RevokeAsync(CancellationToken token = default)
     {
-        if (state.Session is not null) await http.PostAsync("api/auth/revoke", null, token);
-        Clear();
+        try
+        {
+            if (state.Session is not null)
+            {
+                await http.PostAsync(
+                    "api/auth/revoke",
+                    null,
+                    token);
+            }
+        }
+        finally
+        {
+            Clear();
+        }
     }
 
     public async Task<IdentityDiagnosticPayload?> ReadDiagnosticAsync(CancellationToken token = default)

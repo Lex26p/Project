@@ -1,3 +1,5 @@
+using Microsoft.JSInterop;
+
 namespace Dispatcher.Web;
 
 public enum ShellTheme
@@ -12,13 +14,22 @@ public enum ShellDensity
     Compact = 2,
 }
 
+public sealed record ShellPreferenceSnapshot(
+    string? Theme,
+    string? Density);
+
 public sealed class ShellPresentationState
 {
+    private IJSRuntime? javaScript;
+    private Task? initialization;
+
     public ShellTheme Theme { get; private set; } =
         ShellTheme.Light;
 
     public ShellDensity Density { get; private set; } =
         ShellDensity.Comfortable;
+
+    public bool IsInitialized { get; private set; }
 
     public string ThemeToken =>
         Theme == ShellTheme.Dark
@@ -41,6 +52,27 @@ public sealed class ShellPresentationState
             : "Comfortable";
 
     public event Action? Changed;
+
+    public Task InitializeAsync(
+        IJSRuntime javaScript)
+    {
+        ArgumentNullException.ThrowIfNull(javaScript);
+        this.javaScript ??= javaScript;
+        return initialization ??=
+            InitializeCoreAsync();
+    }
+
+    public async Task ToggleThemeAsync()
+    {
+        ToggleTheme();
+        await PersistAsync();
+    }
+
+    public async Task ToggleDensityAsync()
+    {
+        ToggleDensity();
+        await PersistAsync();
+    }
 
     public void ToggleTheme() =>
         SetTheme(
@@ -87,4 +119,73 @@ public sealed class ShellPresentationState
         Density = density;
         Changed?.Invoke();
     }
+
+    public void Restore(
+        string? theme,
+        string? density)
+    {
+        var restoredTheme =
+            ParseTheme(theme);
+        var restoredDensity =
+            ParseDensity(density);
+        var changed =
+            restoredTheme != Theme ||
+            restoredDensity != Density;
+        Theme = restoredTheme;
+        Density = restoredDensity;
+        if (changed)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    private async Task InitializeCoreAsync()
+    {
+        try
+        {
+            var snapshot =
+                await javaScript!
+                    .InvokeAsync<
+                        ShellPreferenceSnapshot?>(
+                        "dispatcherUi.readPreferences");
+            Restore(
+                snapshot?.Theme,
+                snapshot?.Density);
+        }
+        catch (JSException)
+        {
+            Restore(
+                theme: null,
+                density: null);
+        }
+
+        IsInitialized = true;
+        Changed?.Invoke();
+    }
+
+    private ValueTask PersistAsync() =>
+        javaScript is null
+            ? ValueTask.CompletedTask
+            : javaScript.InvokeVoidAsync(
+                "dispatcherUi.writePreferences",
+                ThemeToken,
+                DensityToken);
+
+    private static ShellTheme ParseTheme(
+        string? value) =>
+        string.Equals(
+            value,
+            "dark",
+            StringComparison.OrdinalIgnoreCase)
+                ? ShellTheme.Dark
+                : ShellTheme.Light;
+
+    private static ShellDensity ParseDensity(
+        string? value) =>
+        string.Equals(
+            value,
+            "compact",
+            StringComparison.OrdinalIgnoreCase)
+                ? ShellDensity.Compact
+                : ShellDensity.Comfortable;
 }

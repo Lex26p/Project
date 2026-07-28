@@ -55,6 +55,40 @@ public sealed class ShellPresentationStateTests
 
     [Fact]
     public void
+        RestoreAcceptsKnownTokensAndFallsBackSafely()
+    {
+        var state =
+            new ShellPresentationState();
+        var changed = 0;
+        state.Changed += () => changed++;
+
+        state.Restore(
+            "dark",
+            "compact");
+
+        Assert.Equal(
+            ShellTheme.Dark,
+            state.Theme);
+        Assert.Equal(
+            ShellDensity.Compact,
+            state.Density);
+        Assert.Equal(1, changed);
+
+        state.Restore(
+            "unknown",
+            "unknown");
+
+        Assert.Equal(
+            ShellTheme.Light,
+            state.Theme);
+        Assert.Equal(
+            ShellDensity.Comfortable,
+            state.Density);
+        Assert.Equal(2, changed);
+    }
+
+    [Fact]
+    public void
         ReapplyingSamePreferenceDoesNotRaiseChange()
     {
         var state =
@@ -65,6 +99,9 @@ public sealed class ShellPresentationStateTests
         state.SetTheme(ShellTheme.Light);
         state.SetDensity(
             ShellDensity.Comfortable);
+        state.Restore(
+            "light",
+            "comfortable");
 
         Assert.Equal(0, changed);
     }

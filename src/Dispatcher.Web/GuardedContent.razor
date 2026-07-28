@@ -1,4 +1,5 @@
 @inject WorkspaceApiClient Api
+@inject IdentitySessionState Session
 @inject NavigationManager Navigation
 
 @if (transportOffline)
@@ -53,8 +54,16 @@ else
         transportOffline = false;
         try
         {
-            var access = await Api.CheckAccessAsync(Route);
-            state.CompleteNavigation(generation, access);
+            var access =
+                await Api.CheckAccessAsync(Route);
+            if (state.CompleteNavigation(
+                    generation,
+                    access) &&
+                access ==
+                    RouteAccess.SessionExpired)
+            {
+                Session.Invalidate();
+            }
         }
         catch (HttpRequestException)
         {
@@ -62,6 +71,15 @@ else
         }
     }
 
-    private void OpenLogin() =>
-        Navigation.NavigateTo("/login");
+    private void OpenLogin()
+    {
+        var relative =
+            Navigation.ToBaseRelativePath(
+                Navigation.Uri);
+        var returnUrl =
+            ReturnUrlPolicy.Normalize(
+                $"/{relative}");
+        Navigation.NavigateTo(
+            $"/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
+    }
 }

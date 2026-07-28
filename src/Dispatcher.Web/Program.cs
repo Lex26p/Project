@@ -2,7 +2,8 @@ using Dispatcher.Web;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 
-var builder = WebAssemblyHostBuilder.CreateDefault(args);
+var builder =
+    WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 builder.Services.AddScoped(_ => new HttpClient
@@ -12,6 +13,7 @@ builder.Services.AddScoped(_ => new HttpClient
 });
 builder.Services.AddScoped<IdentitySessionState>();
 builder.Services.AddScoped<ShellPresentationState>();
+builder.Services.AddScoped<ShellRouteContextState>();
 builder.Services.AddTransient<IdentityApiClient>();
 builder.Services.AddTransient<OperationsApiClient>();
 builder.Services.AddTransient<ControlApiClient>();
