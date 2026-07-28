@@ -5,7 +5,8 @@ namespace Dispatcher.Modbus;
 
 public enum ModbusRuntimeProfile
 {
-    NonProductionReadOnly = 1,
+    ProductionReadOnly = 1,
+    NonProductionReadOnly = ProductionReadOnly,
 }
 
 public enum ModbusRegisterTable
@@ -41,7 +42,10 @@ public sealed record ModbusPointConfiguration(
     ModbusValueType ValueType,
     ModbusByteOrder ByteOrder,
     ModbusWordOrder WordOrder,
-    Unit Unit);
+    Unit Unit)
+{
+    public decimal Scale { get; init; } = 1m;
+}
 
 public sealed record ModbusRetryPolicy
 {
@@ -84,9 +88,9 @@ public sealed record ModbusTcpSourceConfiguration(
     public Result Validate(ModbusConfigurationLimits limits)
     {
         ArgumentNullException.ThrowIfNull(limits);
-        if (Profile != ModbusRuntimeProfile.NonProductionReadOnly)
+        if (Profile != ModbusRuntimeProfile.ProductionReadOnly)
         {
-            return Failure("modbus.profile", "Only the non-production read-only Modbus profile is available.");
+            return Failure("modbus.profile", "Only the production read-only Modbus profile is available.");
         }
 
         if (string.IsNullOrWhiteSpace(Host) || Host.Length > 253)
@@ -132,6 +136,11 @@ public sealed record ModbusTcpSourceConfiguration(
                 point.WordOrder is not ModbusWordOrder.HighWordFirst and not ModbusWordOrder.LowWordFirst)
             {
                 return Failure("modbus.endian", "Modbus byte/word order is unsupported.");
+            }
+
+            if (point.Scale == 0m)
+            {
+                return Failure("modbus.scale", "Modbus point scale must be non-zero.");
             }
 
             var registerCount = RegisterCount(point.ValueType);

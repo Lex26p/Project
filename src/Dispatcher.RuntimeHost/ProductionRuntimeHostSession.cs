@@ -4,6 +4,8 @@ using Dispatcher.Core;
 using Dispatcher.Events;
 using Dispatcher.Facilities;
 using Dispatcher.History;
+using Dispatcher.Modbus;
+using Dispatcher.ProtocolCommissioning;
 using Dispatcher.Protocols;
 using Dispatcher.Semantics;
 using Dispatcher.Simulator;
@@ -20,6 +22,8 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private readonly RuntimeConfigurationReconciler? configurationReconciler;
     private readonly RuntimeHostOptions options;
     private readonly IMonotonicClock monotonicClock;
+    private readonly IWallClock wallClock;
+    private readonly IModbusTcpConnectionFactory modbusConnectionFactory;
     private bool started;
     private bool stopped;
 
@@ -30,7 +34,9 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         SimulatorSourceBootstrap bootstrap,
         RuntimeConfigurationReconciler? configurationReconciler,
         RuntimeHostOptions options,
-        IMonotonicClock monotonicClock)
+        IMonotonicClock monotonicClock,
+        IWallClock wallClock,
+        IModbusTcpConnectionFactory modbusConnectionFactory)
     {
         this.dataSource = dataSource;
         this.core = core;
@@ -39,16 +45,25 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         this.configurationReconciler = configurationReconciler;
         this.options = options;
         this.monotonicClock = monotonicClock;
+        this.wallClock = wallClock;
+        this.modbusConnectionFactory = modbusConnectionFactory;
     }
 
     public static ProductionRuntimeHostSession Create(
         RuntimeHostOptions options,
         IWallClock wallClock,
-        IMonotonicClock monotonicClock)
+        IMonotonicClock monotonicClock,
+        IModbusTcpConnectionFactory? modbusConnectionFactory = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(wallClock);
         ArgumentNullException.ThrowIfNull(monotonicClock);
+        if (options.ProtocolMaxObservations < options.ModbusLimits.MaxPoints)
+        {
+            throw new InvalidOperationException(
+                "Runtime protocol observation capacity must cover the configured Modbus point capacity.");
+        }
+
         var downstream = options.Downstream ??
             throw new InvalidOperationException(
                 "Production RuntimeHost requires explicit downstream processing settings.");
@@ -113,8 +128,6 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         var protocols = new ProtocolRuntimeSupervisor(
             options.WorkloadIdentity,
             options.MaxProtocolSources);
-        _ = new EnvironmentProtocolSecretResolver(
-            options.WorkloadIdentity);
         var process = new RuntimeProcess(core, protocols);
         var simulatorStore = new SimulatorRuntimeStore(
             dataSource,
@@ -139,7 +152,13 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 alarmStore,
                 store.AllocateSourceSessionGenerationAsync,
                 definitionBinding,
-                wallClock);
+                wallClock,
+                protocolLimits: new ProtocolCommissioningLimits(
+                    options.ModbusLimits,
+                    new(256, 128, 512)),
+                maxProtocolSources: Math.Min(
+                    options.MaxProtocolSources,
+                    options.SchedulerMaxBindings - 1));
         return new ProductionRuntimeHostSession(
             dataSource,
             core,
@@ -147,7 +166,9 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             bootstrap,
             configurationReconciler,
             options,
-            monotonicClock);
+            monotonicClock,
+            wallClock,
+            modbusConnectionFactory ?? new TcpModbusConnectionFactory());
     }
 
     public async Task<Result> StartAsync(
@@ -231,11 +252,12 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private async Task<Result<RuntimeHostSessionCycleResult>> RunConfigurationReconciliationAsync(
         CancellationToken cancellationToken)
     {
-        SimulatorPollingSource? activeSource = null;
+        ActivatedRuntimeConfiguration? activeConfiguration = null;
+        SimulatorPollingSource? legacySource = null;
         var restored = await configurationReconciler!.RestoreAsync(cancellationToken).ConfigureAwait(false);
         if (restored.IsSuccess)
         {
-            activeSource = restored.Value.Source;
+            activeConfiguration = restored.Value;
         }
         else if (restored.Error?.Code.Value == "configuration.workload_activation_not_found")
         {
@@ -246,7 +268,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 return Result.Failure<RuntimeHostSessionCycleResult>(legacy.Error!);
             }
 
-            activeSource = legacy.IsSuccess &&
+            legacySource = legacy.IsSuccess &&
                 legacy.Value.Status == SimulatorSourceReconciliationStatus.Ready
                     ? legacy.Value.Source
                     : null;
@@ -256,27 +278,46 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             return Result.Failure<RuntimeHostSessionCycleResult>(restored.Error!);
         }
 
-        CancellationTokenSource? workerCancellation = null;
-        Task<Result>? workerTask = null;
+        ActiveRuntimeWorkers? workers = null;
         try
         {
-            if (activeSource is not null)
+            if (activeConfiguration is not null)
             {
-                (workerCancellation, workerTask) = StartWorker(activeSource, cancellationToken);
+                var started = StartWorkers(activeConfiguration, cancellationToken);
+                if (started.IsFailure)
+                {
+                    return Result.Failure<RuntimeHostSessionCycleResult>(started.Error!);
+                }
+
+                workers = started.Value;
+            }
+            else if (legacySource is not null)
+            {
+                var started = StartWorkers(
+                    legacySource,
+                    null,
+                    [],
+                    cancellationToken);
+                if (started.IsFailure)
+                {
+                    return Result.Failure<RuntimeHostSessionCycleResult>(started.Error!);
+                }
+
+                workers = started.Value;
             }
 
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (workerTask is not null)
+                if (workers is not null)
                 {
                     var interval = Task.Delay(
                         options.ConfigurationReconciliationInterval,
                         cancellationToken);
-                    var completed = await Task.WhenAny(workerTask, interval).ConfigureAwait(false);
-                    if (completed == workerTask)
+                    var completed = await Task.WhenAny(workers.Completion, interval).ConfigureAwait(false);
+                    if (completed == workers.Completion)
                     {
-                        var worker = await workerTask.ConfigureAwait(false);
+                        var worker = await workers.Completion.ConfigureAwait(false);
                         return worker.IsSuccess
                             ? Result.Success(new RuntimeHostSessionCycleResult(
                                 RuntimeHostSessionCycleStatus.WorkerStopped))
@@ -293,7 +334,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
 
                 if (reconciliation.Value.Status != RuntimeConfigurationReconciliationStatus.Prepared)
                 {
-                    if (workerTask is null)
+                    if (workers is null)
                     {
                         return Result.Success(new RuntimeHostSessionCycleResult(
                             RuntimeHostSessionCycleStatus.NoActiveManifest));
@@ -302,13 +343,11 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                     continue;
                 }
 
-                if (workerCancellation is not null && workerTask is not null)
+                if (workers is not null)
                 {
-                    workerCancellation.Cancel();
-                    var drained = await workerTask.ConfigureAwait(false);
-                    workerCancellation.Dispose();
-                    workerCancellation = null;
-                    workerTask = null;
+                    var drained = await workers.StopAsync().ConfigureAwait(false);
+                    await workers.DisposeAsync().ConfigureAwait(false);
+                    workers = null;
                     if (drained.IsFailure)
                     {
                         return Result.Failure<RuntimeHostSessionCycleResult>(drained.Error!);
@@ -323,8 +362,13 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                     return Result.Failure<RuntimeHostSessionCycleResult>(activated.Error!);
                 }
 
-                activeSource = activated.Value.Source;
-                (workerCancellation, workerTask) = StartWorker(activeSource, cancellationToken);
+                var started = StartWorkers(activated.Value, cancellationToken);
+                if (started.IsFailure)
+                {
+                    return Result.Failure<RuntimeHostSessionCycleResult>(started.Error!);
+                }
+
+                workers = started.Value;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -334,17 +378,92 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         }
         finally
         {
-            if (workerCancellation is not null)
+            if (workers is not null)
             {
-                workerCancellation.Cancel();
-                if (workerTask is not null)
-                {
-                    _ = await workerTask.ConfigureAwait(false);
-                }
-
-                workerCancellation.Dispose();
+                _ = await workers.StopAsync().ConfigureAwait(false);
+                await workers.DisposeAsync().ConfigureAwait(false);
             }
         }
+    }
+
+    private Result<ActiveRuntimeWorkers> StartWorkers(
+        ActivatedRuntimeConfiguration configuration,
+        CancellationToken cancellationToken) =>
+        StartWorkers(
+            configuration.Source,
+            configuration.ProtocolPlan,
+            configuration.ModbusBindings,
+            cancellationToken);
+
+    private Result<ActiveRuntimeWorkers> StartWorkers(
+        SimulatorPollingSource simulator,
+        ProtocolActivationPlan? protocolPlan,
+        IReadOnlyList<SourceBinding> modbusBindings,
+        CancellationToken cancellationToken)
+    {
+        var modbus = ModbusRuntimeSourceFactory.Create(
+            protocolPlan,
+            modbusBindings,
+            options.ModbusLimits,
+            options.WorkloadIdentity,
+            options.CreateProtocolIoLimits(),
+            modbusConnectionFactory,
+            wallClock);
+        if (modbus.IsFailure)
+        {
+            return Result.Failure<ActiveRuntimeWorkers>(modbus.Error!);
+        }
+
+        var registered = process.ReplaceProtocolSources(modbus.Value.Controllers);
+        if (registered.IsFailure)
+        {
+            modbus.Value.Dispose();
+            return Result.Failure<ActiveRuntimeWorkers>(registered.Error!);
+        }
+
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var scheduler = new BoundedPollScheduler(
+            options.ScopeId,
+            options.CreatePollScheduleLimits(),
+            monotonicClock);
+        var maxProcessBatch =
+            options.IngressCapacity == int.MaxValue
+                ? int.MaxValue
+                : options.IngressCapacity + 1;
+        var simulatorWorker = new SimulatorPollingWorker(
+            simulator,
+            scheduler,
+            options.PollInterval,
+            maxProcessBatch,
+            process.ActivateSimulatorBinding,
+            process.EnqueueAsync,
+            process.ProcessNextAsync);
+        var tasks = new List<Task<Result>>
+        {
+            simulatorWorker.RunAsync(linked.Token),
+        };
+        if (modbus.Value.Sources.Count > 0)
+        {
+            var protocolWorker = new ProtocolPollingWorker(
+                modbus.Value.Sources,
+                scheduler,
+                options.PollInterval,
+                maxProcessBatch,
+                process);
+            tasks.Add(protocolWorker.RunAsync(linked.Token));
+        }
+
+        return Result.Success(new ActiveRuntimeWorkers(
+            linked,
+            CompleteWorkersAsync(tasks),
+            modbus.Value));
+    }
+
+    private static async Task<Result> CompleteWorkersAsync(
+        IReadOnlyList<Task<Result>> tasks)
+    {
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results.FirstOrDefault(result => result.IsFailure) ?? Result.Success();
     }
 
     private (CancellationTokenSource Cancellation, Task<Result> Task) StartWorker(
@@ -423,4 +542,40 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             new OperationError(
                 ErrorCode.From(code),
                 message));
+
+    private sealed class ActiveRuntimeWorkers : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource cancellation;
+        private readonly ModbusRuntimeSourceSet modbus;
+        private int disposed;
+
+        public ActiveRuntimeWorkers(
+            CancellationTokenSource cancellation,
+            Task<Result> completion,
+            ModbusRuntimeSourceSet modbus)
+        {
+            this.cancellation = cancellation;
+            Completion = completion;
+            this.modbus = modbus;
+        }
+
+        public Task<Result> Completion { get; }
+
+        public async Task<Result> StopAsync()
+        {
+            cancellation.Cancel();
+            return await Completion.ConfigureAwait(false);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+            {
+                modbus.Dispose();
+                cancellation.Dispose();
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
 }

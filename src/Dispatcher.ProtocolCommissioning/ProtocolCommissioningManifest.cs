@@ -123,7 +123,7 @@ public static class ProtocolCommissioningManifest
     {
         var retry = source.GetProperty("retry");
         return new ModbusTcpSourceConfiguration(
-            ModbusRuntimeProfile.NonProductionReadOnly,
+            ModbusRuntimeProfile.ProductionReadOnly,
             SourceId.From(source.GetProperty("sourceId").GetGuid()),
             source.GetProperty("host").GetString()!,
             source.GetProperty("port").GetInt32(),
@@ -155,7 +155,12 @@ public static class ProtocolCommissioningManifest
                     : point.GetProperty("wordOrder").GetString() == "low_first"
                         ? ModbusWordOrder.LowWordFirst
                         : throw new FormatException("Unsupported Modbus word order."),
-                Unit.FromSymbol(point.GetProperty("unit").GetString()!))).ToArray(),
+                Unit.FromSymbol(point.GetProperty("unit").GetString()!))
+            {
+                Scale = point.TryGetProperty("scale", out var scale)
+                    ? scale.GetDecimal()
+                    : 1m,
+            }).ToArray(),
             new ModbusRetryPolicy(
                 retry.GetProperty("maxAttempts").GetInt32(),
                 TimeSpan.FromMilliseconds(retry.GetProperty("delayMs").GetInt32())));

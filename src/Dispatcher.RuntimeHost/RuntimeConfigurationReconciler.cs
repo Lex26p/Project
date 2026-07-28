@@ -2,6 +2,7 @@ using Dispatcher.Alarm;
 using Dispatcher.Configuration;
 using Dispatcher.Core;
 using Dispatcher.Facilities;
+using Dispatcher.ProtocolCommissioning;
 using Dispatcher.Semantics;
 using Dispatcher.Simulator;
 
@@ -26,7 +27,9 @@ public sealed record ActivatedRuntimeConfiguration(
     ConfigurationRevisionId RevisionId,
     long RuntimeGeneration,
     RevisionNumber AlarmDefinitionEpoch,
-    SimulatorPollingSource Source);
+    SimulatorPollingSource Source,
+    ProtocolActivationPlan? ProtocolPlan,
+    IReadOnlyList<SourceBinding> ModbusBindings);
 
 public enum RuntimeConfigurationActivationPoint
 {
@@ -61,6 +64,8 @@ public sealed class RuntimeConfigurationReconciler
     private readonly RuntimeDefinitionBindingState definitionBinding;
     private readonly IWallClock wallClock;
     private readonly RuntimeConfigurationActivationHook? hook;
+    private readonly ProtocolCommissioningLimits protocolLimits;
+    private readonly int maxProtocolSources;
 
     public RuntimeConfigurationReconciler(
         FacilityScopeId scopeId,
@@ -72,7 +77,9 @@ public sealed class RuntimeConfigurationReconciler
         SourceSessionGenerationAllocator allocateSessionGeneration,
         RuntimeDefinitionBindingState definitionBinding,
         IWallClock wallClock,
-        RuntimeConfigurationActivationHook? hook = null)
+        RuntimeConfigurationActivationHook? hook = null,
+        ProtocolCommissioningLimits? protocolLimits = null,
+        int maxProtocolSources = int.MaxValue)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workloadIdentity);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(leaseDuration, TimeSpan.Zero);
@@ -88,6 +95,10 @@ public sealed class RuntimeConfigurationReconciler
             definitionBinding ?? throw new ArgumentNullException(nameof(definitionBinding));
         this.wallClock = wallClock ?? throw new ArgumentNullException(nameof(wallClock));
         this.hook = hook;
+        this.protocolLimits =
+            protocolLimits ?? RuntimeConfigurationActivationPlanFactory.DefaultProtocolLimits;
+        ArgumentOutOfRangeException.ThrowIfNegative(maxProtocolSources);
+        this.maxProtocolSources = maxProtocolSources;
     }
 
     public async Task<Result<RuntimeConfigurationReconciliation>> PrepareNextAsync(
@@ -114,7 +125,10 @@ public sealed class RuntimeConfigurationReconciler
                 cancellationToken).ConfigureAwait(false);
         }
 
-        var plan = RuntimeConfigurationActivationPlanFactory.Create(claimed.Value);
+        var plan = RuntimeConfigurationActivationPlanFactory.Create(
+            claimed.Value,
+            protocolLimits,
+            maxProtocolSources);
         if (plan.IsFailure)
         {
             return await RejectAsync(claimed.Value, plan.Error!, cancellationToken).ConfigureAwait(false);
@@ -257,11 +271,16 @@ public sealed class RuntimeConfigurationReconciler
             RuntimeScopeId.From(scopeId.Value),
             active.Value.Configuration.SourceId,
             cancellationToken).ConfigureAwait(false);
+        var modbusBindings = await CreateModbusBindingsAsync(
+            prepared.Plan.ProtocolExtension,
+            cancellationToken).ConfigureAwait(false);
         return Result.Success(new ActivatedRuntimeConfiguration(
             acknowledged.Value.Revision.RevisionId,
             active.Value.Generation,
             acknowledged.Value.AlarmDefinitionEpoch,
-            new SimulatorPollingSource(active.Value, sessionGeneration, wallClock)));
+            new SimulatorPollingSource(active.Value, sessionGeneration, wallClock),
+            prepared.Plan.ProtocolExtension,
+            modbusBindings));
     }
 
     public async Task<Result<ActivatedRuntimeConfiguration>> RestoreAsync(
@@ -292,11 +311,90 @@ public sealed class RuntimeConfigurationReconciler
             RuntimeScopeId.From(scopeId.Value),
             active.Value.Configuration.SourceId,
             cancellationToken).ConfigureAwait(false);
+        var restoredPlan = CreateProtocolPlan(acknowledged.Value.Revision);
+        if (restoredPlan.IsFailure)
+        {
+            return Result.Failure<ActivatedRuntimeConfiguration>(restoredPlan.Error!);
+        }
+
+        var modbusBindings = await CreateModbusBindingsAsync(
+            restoredPlan.Value.Plan,
+            cancellationToken).ConfigureAwait(false);
         return Result.Success(new ActivatedRuntimeConfiguration(
             acknowledged.Value.Revision.RevisionId,
             active.Value.Generation,
             acknowledged.Value.AlarmDefinitionEpoch,
-            new SimulatorPollingSource(active.Value, sessionGeneration, wallClock)));
+            new SimulatorPollingSource(active.Value, sessionGeneration, wallClock),
+            restoredPlan.Value.Plan,
+            modbusBindings));
+    }
+
+    private Result<RestoredProtocolPlan> CreateProtocolPlan(
+        ConfigurationRevisionSnapshot revision)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(revision.ManifestJson);
+            if (!document.RootElement.TryGetProperty("protocolSources", out var sources) ||
+                sources.ValueKind != System.Text.Json.JsonValueKind.Array ||
+                sources.GetArrayLength() == 0)
+            {
+                return Result.Success(new RestoredProtocolPlan(null));
+            }
+
+            var plan = ProtocolCommissioningManifest.CreatePlan(
+                revision,
+                protocolLimits);
+            if (plan.IsFailure)
+            {
+                return Result.Failure<RestoredProtocolPlan>(plan.Error!);
+            }
+
+            if (plan.Value.ModbusSources.Count + plan.Value.SnmpSources.Count >
+                maxProtocolSources)
+            {
+                return Result.Failure<RestoredProtocolPlan>(
+                    new OperationError(
+                        ErrorCode.From("protocol.source_capacity"),
+                        "Protocol source count exceeds the RuntimeHost capacity."));
+            }
+
+            return Result.Success(new RestoredProtocolPlan(plan.Value));
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Result.Failure<RestoredProtocolPlan>(
+                new OperationError(
+                    ErrorCode.From("runtime.configuration_manifest_invalid"),
+                    "The whole-scope runtime manifest structure is invalid."));
+        }
+    }
+
+    private async Task<IReadOnlyList<SourceBinding>> CreateModbusBindingsAsync(
+        ProtocolActivationPlan? plan,
+        CancellationToken cancellationToken)
+    {
+        if (plan is null || plan.ModbusSources.Count == 0)
+        {
+            return [];
+        }
+
+        var bindings = new SourceBinding[plan.ModbusSources.Count];
+        for (var index = 0; index < plan.ModbusSources.Count; index++)
+        {
+            var source = plan.ModbusSources[index];
+            var session = await allocateSessionGeneration(
+                plan.ScopeId,
+                source.SourceId,
+                cancellationToken).ConfigureAwait(false);
+            bindings[index] = new SourceBinding(
+                plan.ScopeId,
+                source.SourceId,
+                plan.BindingGeneration,
+                session);
+        }
+
+        return bindings;
     }
 
     private async Task<Result<RuntimeConfigurationReconciliation>> RejectAsync(
@@ -327,4 +425,6 @@ public sealed class RuntimeConfigurationReconciler
     private static Result<ActivatedRuntimeConfiguration> Failure(string code, string message) =>
         Result.Failure<ActivatedRuntimeConfiguration>(
             new OperationError(ErrorCode.From(code), message));
+
+    private sealed record RestoredProtocolPlan(ProtocolActivationPlan? Plan);
 }

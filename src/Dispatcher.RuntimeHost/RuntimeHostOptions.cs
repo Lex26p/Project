@@ -1,5 +1,6 @@
 using System.Globalization;
 using Dispatcher.Core;
+using Dispatcher.Modbus;
 using Dispatcher.Protocols;
 using Dispatcher.Semantics;
 
@@ -113,8 +114,23 @@ public sealed record RuntimeHostOptions(
 
     public TimeSpan ConfigurationReconciliationInterval { get; init; } = TimeSpan.FromSeconds(1);
 
+    public ModbusConfigurationLimits ModbusLimits { get; init; } = new(256, 512);
+
+    public int ProtocolMaxResponseBytes { get; init; } = 65_536;
+
+    public int ProtocolMaxObservations { get; init; } = 256;
+
+    public int ProtocolMaxConcurrentOperations { get; init; } = 1;
+
     public PollScheduleLimits CreatePollScheduleLimits() =>
         new(PollTimeout, SchedulerMaxBindings, SchedulerMaxInFlight);
+
+    public ProtocolIoLimits CreateProtocolIoLimits() =>
+        new(
+            PollTimeout,
+            ProtocolMaxResponseBytes,
+            ProtocolMaxObservations,
+            ProtocolMaxConcurrentOperations);
 
     public static RuntimeHostOptions FromEnvironment() =>
         FromSettings(Environment.GetEnvironmentVariable);
@@ -245,6 +261,27 @@ public sealed record RuntimeHostOptions(
             ConfigurationReconciliationInterval = PositiveMilliseconds(
                 read,
                 "DISPATCHER_RUNTIME_CONFIGURATION_RECONCILIATION_MS"),
+            ModbusLimits = new ModbusConfigurationLimits(
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_MODBUS_MAX_POINTS",
+                    256),
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_MODBUS_MAX_REGISTERS_PER_POLL",
+                    512)),
+            ProtocolMaxResponseBytes = OptionalPositiveInt(
+                read,
+                "DISPATCHER_RUNTIME_PROTOCOL_MAX_RESPONSE_BYTES",
+                65_536),
+            ProtocolMaxObservations = OptionalPositiveInt(
+                read,
+                "DISPATCHER_RUNTIME_PROTOCOL_MAX_OBSERVATIONS",
+                256),
+            ProtocolMaxConcurrentOperations = OptionalPositiveInt(
+                read,
+                "DISPATCHER_RUNTIME_PROTOCOL_MAX_CONCURRENT_OPERATIONS",
+                1),
         };
     }
 
@@ -268,6 +305,28 @@ public sealed record RuntimeHostOptions(
             ? value
             : throw new InvalidOperationException(
                 $"Runtime setting {name} must be a positive integer.");
+
+    private static int OptionalPositiveInt(
+        Func<string, string?> read,
+        string name,
+        int defaultValue)
+    {
+        var raw = read(name);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return defaultValue;
+        }
+
+        return int.TryParse(
+            raw,
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out var value) &&
+            value > 0
+                ? value
+                : throw new InvalidOperationException(
+                    $"Runtime setting {name} must be a positive integer.");
+    }
 
     private static ulong PositiveUlong(
         Func<string, string?> read,

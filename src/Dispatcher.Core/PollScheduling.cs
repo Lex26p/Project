@@ -200,6 +200,26 @@ public sealed class BoundedPollScheduler
         }
     }
 
+    public PollCompletionStatus Abandon(PollAttemptToken attempt)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        lock (sync)
+        {
+            if (!bindings.TryGetValue(attempt.Binding.SourceId, out var state) ||
+                state.Binding != attempt.Binding ||
+                !inFlight.TryGetValue(attempt.Binding.SourceId, out var current) ||
+                current != attempt)
+            {
+                return PollCompletionStatus.Stale;
+            }
+
+            inFlight.Remove(attempt.Binding.SourceId);
+            return clock.GetElapsedTime(attempt.StartedAt, clock.GetTimestamp()) >= limits.Timeout
+                ? PollCompletionStatus.TimedOut
+                : PollCompletionStatus.Completed;
+        }
+    }
+
     public PollSchedulerSnapshot GetSnapshot()
     {
         lock (sync)

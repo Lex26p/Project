@@ -20,6 +20,10 @@ public sealed class RuntimeProcess
     public Result RegisterProtocolSource(SourceId sourceId, ProtocolSourceController controller) =>
         protocols.Register(sourceId, controller);
 
+    public Result ReplaceProtocolSources(
+        IReadOnlyDictionary<SourceId, ProtocolSourceController> sources) =>
+        protocols.ReplaceSources(sources);
+
     public Result ActivateBinding(SourceBinding binding)
     {
         var protocolActivated = protocols.ActivateBinding(binding);
@@ -48,6 +52,11 @@ public sealed class RuntimeProcess
 
         return await core.EnqueueAsync(acquired.Value, cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<Result<RuntimeCut>> AcquireCutAsync(
+        ProtocolSourceRequest request,
+        CancellationToken cancellationToken = default) =>
+        protocols.AcquireAsync(request, cancellationToken);
 
     public Task<Result<ProtocolDiagnosticResult>> DiagnoseAsync(
         ProtocolDiagnosticRequest request,

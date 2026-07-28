@@ -28,6 +28,12 @@ public sealed class RuntimeConfigurationReconciliationTests
         Guid.Parse("e3000000-0000-0000-0000-000000000001");
     private static readonly Guid AlarmValue =
         Guid.Parse("e4000000-0000-0000-0000-000000000001");
+    private static readonly Guid ModbusSourceValue =
+        Guid.Parse("e2000000-0000-0000-0000-000000000012");
+    private static readonly Guid ModbusPointValue =
+        Guid.Parse("e3000000-0000-0000-0000-000000000012");
+    private static readonly Guid ModbusAlarmValue =
+        Guid.Parse("e4000000-0000-0000-0000-000000000012");
     private static readonly DateTimeOffset Start =
         new(2026, 7, 28, 8, 0, 0, TimeSpan.Zero);
     private readonly PostgreSqlClusterFixture cluster;
@@ -108,6 +114,93 @@ public sealed class RuntimeConfigurationReconciliationTests
         var stoppedWorker = await running.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(stoppedWorker.IsSuccess, stoppedWorker.Error?.Code.Value);
         Assert.Equal(RuntimeHostSessionCycleStatus.WorkerStopped, stoppedWorker.Value.Status);
+        Assert.True((await session.StopAsync(CancellationToken.None)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task ProductionModbusPublishesCurrentHistoryAlarmEventAndRecoversQuality()
+    {
+        var failNext = 0;
+        var rawValue = 21;
+        var failureSeen = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var peer = new FakeModbusTcpPeer(
+            async (request, _, cancellationToken) =>
+            {
+                if (Interlocked.Exchange(ref failNext, 0) == 1)
+                {
+                    failureSeen.TrySetResult();
+                    return null;
+                }
+
+                if (failureSeen.Task.IsCompleted && !resume.Task.IsCompleted)
+                {
+                    await resume.Task.WaitAsync(cancellationToken);
+                }
+
+                var value = checked((ushort)Volatile.Read(ref rawValue));
+                return FakeModbusTcpPeer.Response(
+                    request.Span,
+                    checked((byte)(value >> 8)),
+                    checked((byte)value));
+            });
+        await using var context = await Context.CreateAsync(cluster);
+        var revision = await context.PublishRawAsync(
+            Context.CreateModbusManifest(peer.Port));
+        var options = context.CreateRuntimeOptions(revision.RevisionId) with
+        {
+            SchedulerMaxBindings = 2,
+            ProtocolMaxObservations = 4,
+            ModbusLimits = new(4, 8),
+        };
+        await using var session = ProductionRuntimeHostSession.Create(
+            options,
+            context.Clock,
+            context.Clock);
+        Assert.True((await session.StartAsync(CancellationToken.None)).IsSuccess);
+        using var cancellation = new CancellationTokenSource();
+        var running = session.RunSimulatorCycleAsync(cancellation.Token);
+
+        var good = await context.WaitForPointAsync(
+            ModbusPointValue,
+            item =>
+                item.Value.Value == 42 &&
+                item.Quality == DataQuality.Good &&
+                item.Freshness == Freshness.Fresh,
+            TimeSpan.FromSeconds(10));
+        Assert.Equal(SourceBindingGeneration.From(1), good.BindingGeneration);
+
+        Interlocked.Exchange(ref failNext, 1);
+        await failureSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var unavailable = await context.WaitForPointAsync(
+            ModbusPointValue,
+            item =>
+                item.Quality == DataQuality.Bad &&
+                item.Freshness == Freshness.Stale,
+            TimeSpan.FromSeconds(10));
+        Assert.Equal(42L, unavailable.Value.Value);
+
+        Volatile.Write(ref rawValue, 43);
+        resume.TrySetResult();
+        var recovered = await context.WaitForPointAsync(
+            ModbusPointValue,
+            item =>
+                item.Value.Value == 86 &&
+                item.Quality == DataQuality.Good &&
+                item.Freshness == Freshness.Fresh,
+            TimeSpan.FromSeconds(10));
+        Assert.True(recovered.SourcePosition.Value > unavailable.SourcePosition.Value);
+        await context.WaitForModbusPipelineAsync(
+            ModbusPointValue,
+            TimeSpan.FromSeconds(10));
+        Assert.NotEmpty(peer.FunctionCodes);
+        Assert.All(peer.FunctionCodes, code => Assert.Equal((byte)3, code));
+
+        cancellation.Cancel();
+        var stoppedWorker = await running.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(stoppedWorker.IsSuccess, stoppedWorker.Error?.Code.Value);
         Assert.True((await session.StopAsync(CancellationToken.None)).IsSuccess);
     }
 
@@ -439,6 +532,75 @@ public sealed class RuntimeConfigurationReconciliationTests
             }
         }
 
+        public async Task<CurrentEntry> WaitForPointAsync(
+            Guid pointId,
+            Func<CurrentEntry, bool> predicate,
+            TimeSpan timeout)
+        {
+            var store = new CoreRuntimeStore(
+                DataSource,
+                PostgreSqlClusterFixture.OwnerARole,
+                Clock);
+            using var cancellation = new CancellationTokenSource(timeout);
+            while (true)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                var recovery = await store.LoadRecoveryAsync(
+                    RuntimeScopeId.From(ScopeValue),
+                    cancellation.Token);
+                var point = recovery.Checkpoint?.Current.FirstOrDefault(
+                    item => item.PointId.Value == pointId);
+                if (point is not null && predicate(point))
+                {
+                    return point;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellation.Token);
+            }
+        }
+
+        public async Task WaitForModbusPipelineAsync(
+            Guid pointId,
+            TimeSpan timeout)
+        {
+            using var cancellation = new CancellationTokenSource(timeout);
+            while (true)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                var history = await CountPointRowsAsync(
+                    $"{HistoryMigrations.Schema}.sample",
+                    pointId,
+                    cancellation.Token);
+                var alarms = await CountPointRowsAsync(
+                    $"{AlarmMigrations.Schema}.occurrence",
+                    pointId,
+                    cancellation.Token);
+                var events = await CountPointRowsAsync(
+                    $"{EventMigrations.Schema}.journal_event",
+                    pointId,
+                    cancellation.Token);
+                if (history >= 3 && alarms >= 1 && events >= 1)
+                {
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellation.Token);
+            }
+        }
+
+        private async Task<long> CountPointRowsAsync(
+            string table,
+            Guid pointId,
+            CancellationToken cancellationToken)
+        {
+            await using var command = DataSource.CreateCommand(
+                $"SELECT count(*) FROM {table} WHERE point_id = @point_id;");
+            command.Parameters.AddWithValue("point_id", pointId);
+            return Convert.ToInt64(
+                await command.ExecuteScalarAsync(cancellationToken),
+                CultureInfo.InvariantCulture);
+        }
+
         public async Task ReplaceReleaseFingerprintAsync(
             ConfigurationRevisionId revisionId,
             string fingerprint)
@@ -483,6 +645,72 @@ public sealed class RuntimeConfigurationReconciliationTests
             await DataSource.DisposeAsync();
             await Database.DisposeAsync();
         }
+
+        public static string CreateModbusManifest(int port) =>
+            JsonSerializer.Serialize(new
+            {
+                simulator = new
+                {
+                    sourceId = SourceValue,
+                    seed = 17UL,
+                    points = new[]
+                    {
+                        new
+                        {
+                            pointId = PointValue,
+                            baseline = 1L,
+                            amplitude = 0L,
+                            unit = "kW",
+                        },
+                    },
+                },
+                protocolSources = new[]
+                {
+                    new
+                    {
+                        kind = "modbus_tcp_read_only",
+                        sourceId = ModbusSourceValue,
+                        host = "127.0.0.1",
+                        port,
+                        unitId = 7,
+                        retry = new
+                        {
+                            maxAttempts = 1,
+                            delayMs = 0,
+                        },
+                        points = new[]
+                        {
+                            new
+                            {
+                                pointId = ModbusPointValue,
+                                table = "holding",
+                                address = 10,
+                                type = "unsigned16",
+                                byteOrder = "big",
+                                wordOrder = "high_first",
+                                scale = 2m,
+                                unit = "kW",
+                            },
+                        },
+                    },
+                },
+                alarmDefinitions = new[]
+                {
+                    new
+                    {
+                        definitionId = ModbusAlarmValue,
+                        pointId = ModbusPointValue,
+                        name = "Modbus high value",
+                        direction = "high",
+                        threshold = 40L,
+                        hysteresis = 0L,
+                        raiseDelayMs = 0L,
+                        clearDelayMs = 0L,
+                        enabled = true,
+                        priority = "high",
+                    },
+                },
+            });
 
         private static string CreateManifest(long baseline) =>
             JsonSerializer.Serialize(new

@@ -66,6 +66,53 @@ public sealed class ProtocolRuntimeSupervisor
         }
     }
 
+    public Result ReplaceSources(
+        IReadOnlyDictionary<SourceId, ProtocolSourceController> replacements)
+    {
+        ArgumentNullException.ThrowIfNull(replacements);
+        lock (sync)
+        {
+            if (state is ProtocolSupervisorState.Draining or ProtocolSupervisorState.Stopped)
+            {
+                return Failure(
+                    "protocol.lifecycle_state",
+                    "Protocol sources cannot be replaced during shutdown.");
+            }
+
+            if (inFlight != 0)
+            {
+                return Failure(
+                    "protocol.reconfiguration_busy",
+                    "Protocol sources cannot be replaced while operations are in flight.");
+            }
+
+            if (replacements.Count > maxSources)
+            {
+                return Failure(
+                    "protocol.source_capacity",
+                    "The bounded protocol source capacity is exhausted.");
+            }
+
+            if (replacements.Any(pair =>
+                    pair.Value is null ||
+                    pair.Value.WorkloadIdentity != workloadIdentity))
+            {
+                return Failure(
+                    "protocol.workload_identity",
+                    "Protocol source workload identity does not match its runtime host.");
+            }
+
+            sources.Clear();
+            activeBindings.Clear();
+            foreach (var replacement in replacements)
+            {
+                sources.Add(replacement.Key, replacement.Value);
+            }
+
+            return Result.Success();
+        }
+    }
+
     public Result Start()
     {
         lock (sync)

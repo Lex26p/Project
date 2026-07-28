@@ -92,6 +92,82 @@ public sealed class ModbusTcpReadOnlyTests
     }
 
     [Fact]
+    public async Task AcquisitionAppliesConfiguredScaleAfterByteAndWordOrder()
+    {
+        var point = Point(PointA, ModbusValueType.Unsigned32, 20) with
+        {
+            ByteOrder = ModbusByteOrder.LittleEndian,
+            WordOrder = ModbusWordOrder.LowWordFirst,
+            Scale = 2m,
+        };
+        using var source = CreateSource(
+            Configuration([point]),
+            new QueueConnectionFactory(
+                new QueueConnection(Response(1, 7, 3, 0x78, 0x56, 0x34, 0x12))));
+
+        var acquired = await source.AcquireAsync(
+            new ProtocolSourceRequest(Binding(1), 1, null));
+
+        Assert.True(acquired.IsSuccess);
+        Assert.Equal(0x2468acf0L, Assert.Single(acquired.Value.Observations).Value.Value);
+    }
+
+    [Fact]
+    public async Task MalformedResponseAndDisconnectProduceBadStaleObservation()
+    {
+        using var source = CreateSource(
+            Configuration([Point(PointA, ModbusValueType.Unsigned16, 10)]),
+            new QueueConnectionFactory(new QueueConnection([1, 2, 3])));
+        var binding = Binding(1);
+
+        var malformed = await source.AcquireAsync(
+            new ProtocolSourceRequest(binding, 1, null));
+        var unavailable = source.CreateUnavailableCut(binding, 2);
+
+        Assert.True(malformed.IsSuccess);
+        Assert.Equal(DataQuality.Bad, Assert.Single(malformed.Value.Observations).Quality);
+        Assert.Equal(Freshness.Stale, Assert.Single(malformed.Value.Observations).Freshness);
+        Assert.True(unavailable.IsSuccess);
+        Assert.Equal(DataQuality.Bad, Assert.Single(unavailable.Value.Observations).Quality);
+        Assert.Equal(Freshness.Stale, Assert.Single(unavailable.Value.Observations).Freshness);
+    }
+
+    [Fact]
+    public async Task TimeoutIsBoundedAndReturnsSafeReasonCode()
+    {
+        using var source = ModbusTcpSource.Create(
+            Configuration([Point(PointA, ModbusValueType.Unsigned16, 10)]),
+            ConfigurationLimits,
+            Workload,
+            new ProtocolIoLimits(TimeSpan.FromMilliseconds(20), 4096, 16, 1),
+            new QueueConnectionFactory(new BlockingConnection()),
+            new FixedClock()).Value;
+
+        var result = await source.AcquireAsync(
+            new ProtocolSourceRequest(Binding(1), 1, null));
+
+        Assert.Equal("protocol.io_timeout", result.Error?.Code.Value);
+    }
+
+    [Fact]
+    public void ConfigurationRejectsPointAndRegisterCapacity()
+    {
+        var points = Enumerable.Range(0, 3)
+            .Select(index => Point(
+                PointId.From(Guid.Parse($"b3000000-0000-0000-0000-{index + 10:D12}")),
+                ModbusValueType.Unsigned32,
+                index * 2))
+            .ToArray();
+
+        Assert.Equal(
+            "modbus.point_capacity",
+            Configuration(points).Validate(new ModbusConfigurationLimits(2, 16)).Error?.Code.Value);
+        Assert.Equal(
+            "modbus.register_capacity",
+            Configuration(points).Validate(new ModbusConfigurationLimits(3, 5)).Error?.Code.Value);
+    }
+
+    [Fact]
     public async Task ConnectionAndSampleDiagnosticsDoNotAdvanceSourceOrBlockValidApply()
     {
         var point = Point(PointA, ModbusValueType.Unsigned32, 20) with

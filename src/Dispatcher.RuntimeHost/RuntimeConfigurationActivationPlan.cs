@@ -16,12 +16,14 @@ public sealed record RuntimeConfigurationActivationPlan(
 
 public static class RuntimeConfigurationActivationPlanFactory
 {
-    private static readonly ProtocolCommissioningLimits ProtocolLimits = new(
+    public static ProtocolCommissioningLimits DefaultProtocolLimits { get; } = new(
         new(256, 512),
         new(256, 128, 512));
 
     public static Result<RuntimeConfigurationActivationPlan> Create(
-        ConfigurationWorkloadClaim claim)
+        ConfigurationWorkloadClaim claim,
+        ProtocolCommissioningLimits? protocolLimits = null,
+        int maxProtocolSources = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(claim);
         try
@@ -56,10 +58,18 @@ public static class RuntimeConfigurationActivationPlanFactory
             {
                 var protocol = ProtocolCommissioningManifest.CreatePlan(
                     revision with { DistributedAt = revision.PublishedAt },
-                    ProtocolLimits);
+                    protocolLimits ?? DefaultProtocolLimits);
                 if (protocol.IsFailure)
                 {
                     return Result.Failure<RuntimeConfigurationActivationPlan>(protocol.Error!);
+                }
+
+                if (protocol.Value.ModbusSources.Count + protocol.Value.SnmpSources.Count >
+                    maxProtocolSources)
+                {
+                    return Failure(
+                        "protocol.source_capacity",
+                        "Protocol source count exceeds the RuntimeHost capacity.");
                 }
 
                 protocolExtension = protocol.Value;

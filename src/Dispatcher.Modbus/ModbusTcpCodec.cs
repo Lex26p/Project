@@ -180,6 +180,35 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
         return Result.Success(new ProtocolDiagnosticBatch(samples, decoded.Value.Any(item => !item.Success)));
     }
 
+    public IReadOnlyList<SourceObservation> CreateUnavailable(SourceBinding binding)
+    {
+        if (binding.SourceId != configuration.SourceId)
+        {
+            throw new ArgumentException(
+                "Modbus configuration belongs to another source binding.",
+                nameof(binding));
+        }
+
+        lock (sync)
+        {
+            var timestamp = SourceTimestamp.FromUtc(clock.GetUtcNow());
+            return configuration.Points.Select(point =>
+            {
+                sourcePosition = checked(sourcePosition + 1);
+                return new SourceObservation(
+                    binding.ScopeId,
+                    binding.SourceId,
+                    point.PointId,
+                    new OwnerPosition<SourceObservation>(sourcePosition),
+                    TypedValue.From(lastValues.GetValueOrDefault(point.PointId)),
+                    point.Unit,
+                    DataQuality.Bad,
+                    Freshness.Stale,
+                    timestamp);
+            }).ToArray();
+        }
+    }
+
     private Result<IReadOnlyList<DecodedItem>> Decode(ReadOnlyMemory<byte> response)
     {
         var batch = ModbusBatchCodec.Decode(response, configuration.Points.Count);
@@ -237,7 +266,7 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
             (normalized[1], normalized[3]) = (normalized[3], normalized[1]);
         }
 
-        long value = point.ValueType switch
+        long rawValue = point.ValueType switch
         {
             ModbusValueType.Signed16 => BinaryPrimitives.ReadInt16BigEndian(normalized),
             ModbusValueType.Unsigned16 => BinaryPrimitives.ReadUInt16BigEndian(normalized),
@@ -245,7 +274,23 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
             ModbusValueType.Unsigned32 => BinaryPrimitives.ReadUInt32BigEndian(normalized),
             _ => throw new ArgumentOutOfRangeException(nameof(point)),
         };
-        return new DecodedItem(true, value, "modbus.ok");
+
+        try
+        {
+            var scaled = rawValue * point.Scale;
+            if (scaled != decimal.Truncate(scaled) ||
+                scaled < long.MinValue ||
+                scaled > long.MaxValue)
+            {
+                return DecodedItem.Failed("modbus.scale_result");
+            }
+
+            return new DecodedItem(true, decimal.ToInt64(scaled), "modbus.ok");
+        }
+        catch (OverflowException)
+        {
+            return DecodedItem.Failed("modbus.scale_result");
+        }
     }
 
     private static Result<TValue> Failure<TValue>(string code, string message) =>

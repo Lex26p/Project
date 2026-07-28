@@ -166,7 +166,15 @@ public sealed class ModbusTcpTransport : IReadOnlyProtocolTransport
 
 public sealed class ModbusTcpSource : IDisposable
 {
-    private ModbusTcpSource(ProtocolSourceController controller) => Controller = controller;
+    private readonly ModbusObservationParser parser;
+
+    private ModbusTcpSource(
+        ProtocolSourceController controller,
+        ModbusObservationParser parser)
+    {
+        Controller = controller;
+        this.parser = parser;
+    }
 
     public ProtocolSourceController Controller { get; }
 
@@ -186,19 +194,29 @@ public sealed class ModbusTcpSource : IDisposable
         }
 
         var parser = new ModbusObservationParser(configuration, clock);
-        return Result.Success(new ModbusTcpSource(new ProtocolSourceController(
-            workloadIdentity,
-            new ModbusTcpTransport(configuration, connectionFactory),
-            parser,
-            new NoModbusSecretResolver(),
-            ioLimits,
-            parser)));
+        return Result.Success(new ModbusTcpSource(
+            new ProtocolSourceController(
+                workloadIdentity,
+                new ModbusTcpTransport(configuration, connectionFactory),
+                parser,
+                new NoModbusSecretResolver(),
+                ioLimits,
+                parser),
+            parser));
     }
 
     public Task<Result<RuntimeCut>> AcquireAsync(
         ProtocolSourceRequest request,
         CancellationToken cancellationToken = default) =>
         Controller.AcquireAsync(request, cancellationToken);
+
+    public Result<RuntimeCut> CreateUnavailableCut(
+        SourceBinding binding,
+        ulong scheduleSequence) =>
+        RuntimeCut.Normalize(
+            binding,
+            scheduleSequence,
+            parser.CreateUnavailable(binding));
 
     public Task<Result<ProtocolDiagnosticResult>> ConnectionTestAsync(
         SourceBinding binding,
