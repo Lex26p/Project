@@ -301,6 +301,17 @@ public sealed partial class ConfigurationStore
             return Failure<ConfigurationRevisionSnapshot>("configuration.draft_not_found", "Draft revision was not found.");
         }
 
+        if (await HasPendingActivationAsync(
+                connection,
+                transaction,
+                scopeId,
+                cancellationToken).ConfigureAwait(false))
+        {
+            return Failure<ConfigurationRevisionSnapshot>(
+                "configuration.activation_in_progress",
+                "A prepared workload activation must finish before another revision is published.");
+        }
+
         if (revision.Version != request.ExpectedVersion)
         {
             return Failure<ConfigurationRevisionSnapshot>("configuration.version_conflict", "Draft version changed concurrently.");
@@ -456,7 +467,7 @@ public sealed partial class ConfigurationStore
         return Result.Success(revision);
     }
 
-    public async Task<Result<DistributionJobSnapshot>> ClaimDistributionAsync(
+    internal async Task<Result<DistributionJobSnapshot>> ClaimDistributionAsync(
         AuthorizedAccess authorization,
         FacilityScopeId scopeId,
         string workerId,
@@ -518,7 +529,7 @@ public sealed partial class ConfigurationStore
         return Result.Success(job);
     }
 
-    public async Task<Result<ConfigurationRevisionSnapshot>> CompleteDistributionAsync(
+    internal async Task<Result<ConfigurationRevisionSnapshot>> CompleteDistributionAsync(
         AuthorizedAccess authorization,
         FacilityScopeId scopeId,
         DistributionJobId jobId,
@@ -582,7 +593,7 @@ public sealed partial class ConfigurationStore
         return Result.Success(revision with { DistributedAt = now, Version = nextVersion });
     }
 
-    public async Task<Result<ConfigurationRevisionSnapshot>> AcknowledgeActivationAsync(
+    internal async Task<Result<ConfigurationRevisionSnapshot>> AcknowledgeActivationAsync(
         AuthorizedAccess authorization,
         FacilityScopeId scopeId,
         ConfigurationRevisionId revisionId,
@@ -731,6 +742,24 @@ public sealed partial class ConfigurationStore
             transaction);
         command.Parameters.AddWithValue("scope_id", scopeId.Value);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> HasPendingActivationAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        FacilityScopeId scopeId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT pending_activation_revision_id IS NOT NULL
+            FROM {ConfigurationMigrations.Schema}.scope_state
+            WHERE scope_id = @scope_id;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("scope_id", scopeId.Value);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 
     private static async Task UpdateDraftStateAsync(

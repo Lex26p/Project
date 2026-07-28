@@ -107,6 +107,12 @@ public sealed record RuntimeHostOptions(
 {
     public RuntimeDownstreamOptions? Downstream { get; init; }
 
+    public string? ConfigurationDatabaseRole { get; init; }
+
+    public TimeSpan DeploymentLeaseDuration { get; init; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan ConfigurationReconciliationInterval { get; init; } = TimeSpan.FromSeconds(1);
+
     public PollScheduleLimits CreatePollScheduleLimits() =>
         new(PollTimeout, SchedulerMaxBindings, SchedulerMaxInFlight);
 
@@ -230,6 +236,15 @@ public sealed record RuntimeHostOptions(
             reconciliationMaxBackoff)
         {
             Downstream = downstream,
+            ConfigurationDatabaseRole = Required(
+                read,
+                "DISPATCHER_RUNTIME_CONFIGURATION_DATABASE_ROLE"),
+            DeploymentLeaseDuration = PositiveMilliseconds(
+                read,
+                "DISPATCHER_RUNTIME_DEPLOYMENT_LEASE_MS"),
+            ConfigurationReconciliationInterval = PositiveMilliseconds(
+                read,
+                "DISPATCHER_RUNTIME_CONFIGURATION_RECONCILIATION_MS"),
         };
     }
 

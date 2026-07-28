@@ -1,6 +1,8 @@
 using Dispatcher.Alarm;
+using Dispatcher.Configuration;
 using Dispatcher.Core;
 using Dispatcher.Events;
+using Dispatcher.Facilities;
 using Dispatcher.History;
 using Dispatcher.Protocols;
 using Dispatcher.Semantics;
@@ -15,6 +17,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private readonly CoreRuntimeHost core;
     private readonly RuntimeProcess process;
     private readonly SimulatorSourceBootstrap bootstrap;
+    private readonly RuntimeConfigurationReconciler? configurationReconciler;
     private readonly RuntimeHostOptions options;
     private readonly IMonotonicClock monotonicClock;
     private bool started;
@@ -25,6 +28,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         CoreRuntimeHost core,
         RuntimeProcess process,
         SimulatorSourceBootstrap bootstrap,
+        RuntimeConfigurationReconciler? configurationReconciler,
         RuntimeHostOptions options,
         IMonotonicClock monotonicClock)
     {
@@ -32,6 +36,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         this.core = core;
         this.process = process;
         this.bootstrap = bootstrap;
+        this.configurationReconciler = configurationReconciler;
         this.options = options;
         this.monotonicClock = monotonicClock;
     }
@@ -73,6 +78,9 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 downstream.EventMaxPageSize,
                 downstream.EventRetainedProjectionChanges,
                 downstream.EventMaxFeedChanges));
+        var definitionBinding = new RuntimeDefinitionBindingState(
+            downstream.ConfigurationRevisionId,
+            downstream.AlarmDefinitionEpoch);
         var coordinator = new RuntimeDeliveryCoordinator(
             store,
             new RuntimeHistoryDeliveryProcessor(
@@ -85,8 +93,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 alarmStore,
                 eventStore,
                 store),
-            downstream.ConfigurationRevisionId,
-            downstream.AlarmDefinitionEpoch,
+            definitionBinding,
             downstream.RetryPolicy,
             IsTransientDownstreamFailure);
         var core = new CoreRuntimeHost(
@@ -118,11 +125,27 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             simulatorStore.ReadActiveAsync,
             store.AllocateSourceSessionGenerationAsync,
             wallClock);
+        var configurationReconciler = options.ConfigurationDatabaseRole is null
+            ? null
+            : new RuntimeConfigurationReconciler(
+                FacilityScopeId.From(options.ScopeId.Value),
+                options.WorkloadIdentity.Value,
+                options.DeploymentLeaseDuration,
+                new ConfigurationWorkloadDeploymentStore(
+                    dataSource,
+                    options.ConfigurationDatabaseRole,
+                    wallClock),
+                simulatorStore,
+                alarmStore,
+                store.AllocateSourceSessionGenerationAsync,
+                definitionBinding,
+                wallClock);
         return new ProductionRuntimeHostSession(
             dataSource,
             core,
             process,
             bootstrap,
+            configurationReconciler,
             options,
             monotonicClock);
     }
@@ -156,6 +179,11 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             return Failure<RuntimeHostSessionCycleResult>(
                 "runtime.session_state",
                 "Production runtime session is not running.");
+        }
+
+        if (configurationReconciler is not null)
+        {
+            return await RunConfigurationReconciliationAsync(cancellationToken).ConfigureAwait(false);
         }
 
         var reconciled = await bootstrap.ReconcileAsync(
@@ -198,6 +226,149 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                     RuntimeHostSessionCycleStatus.WorkerStopped))
             : Result.Failure<RuntimeHostSessionCycleResult>(
                 result.Error!);
+    }
+
+    private async Task<Result<RuntimeHostSessionCycleResult>> RunConfigurationReconciliationAsync(
+        CancellationToken cancellationToken)
+    {
+        SimulatorPollingSource? activeSource = null;
+        var restored = await configurationReconciler!.RestoreAsync(cancellationToken).ConfigureAwait(false);
+        if (restored.IsSuccess)
+        {
+            activeSource = restored.Value.Source;
+        }
+        else if (restored.Error?.Code.Value == "configuration.workload_activation_not_found")
+        {
+            var legacy = await bootstrap.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+            if (legacy.IsFailure &&
+                legacy.Error?.Code.Value != "simulator.active_not_found")
+            {
+                return Result.Failure<RuntimeHostSessionCycleResult>(legacy.Error!);
+            }
+
+            activeSource = legacy.IsSuccess &&
+                legacy.Value.Status == SimulatorSourceReconciliationStatus.Ready
+                    ? legacy.Value.Source
+                    : null;
+        }
+        else
+        {
+            return Result.Failure<RuntimeHostSessionCycleResult>(restored.Error!);
+        }
+
+        CancellationTokenSource? workerCancellation = null;
+        Task<Result>? workerTask = null;
+        try
+        {
+            if (activeSource is not null)
+            {
+                (workerCancellation, workerTask) = StartWorker(activeSource, cancellationToken);
+            }
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (workerTask is not null)
+                {
+                    var interval = Task.Delay(
+                        options.ConfigurationReconciliationInterval,
+                        cancellationToken);
+                    var completed = await Task.WhenAny(workerTask, interval).ConfigureAwait(false);
+                    if (completed == workerTask)
+                    {
+                        var worker = await workerTask.ConfigureAwait(false);
+                        return worker.IsSuccess
+                            ? Result.Success(new RuntimeHostSessionCycleResult(
+                                RuntimeHostSessionCycleStatus.WorkerStopped))
+                            : Result.Failure<RuntimeHostSessionCycleResult>(worker.Error!);
+                    }
+                }
+
+                var reconciliation = await configurationReconciler.PrepareNextAsync(
+                    cancellationToken).ConfigureAwait(false);
+                if (reconciliation.IsFailure)
+                {
+                    return Result.Failure<RuntimeHostSessionCycleResult>(reconciliation.Error!);
+                }
+
+                if (reconciliation.Value.Status != RuntimeConfigurationReconciliationStatus.Prepared)
+                {
+                    if (workerTask is null)
+                    {
+                        return Result.Success(new RuntimeHostSessionCycleResult(
+                            RuntimeHostSessionCycleStatus.NoActiveManifest));
+                    }
+
+                    continue;
+                }
+
+                if (workerCancellation is not null && workerTask is not null)
+                {
+                    workerCancellation.Cancel();
+                    var drained = await workerTask.ConfigureAwait(false);
+                    workerCancellation.Dispose();
+                    workerCancellation = null;
+                    workerTask = null;
+                    if (drained.IsFailure)
+                    {
+                        return Result.Failure<RuntimeHostSessionCycleResult>(drained.Error!);
+                    }
+                }
+
+                var activated = await configurationReconciler.CommitAsync(
+                    reconciliation.Value.Prepared!,
+                    cancellationToken).ConfigureAwait(false);
+                if (activated.IsFailure)
+                {
+                    return Result.Failure<RuntimeHostSessionCycleResult>(activated.Error!);
+                }
+
+                activeSource = activated.Value.Source;
+                (workerCancellation, workerTask) = StartWorker(activeSource, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Result.Success(new RuntimeHostSessionCycleResult(
+                RuntimeHostSessionCycleStatus.WorkerStopped));
+        }
+        finally
+        {
+            if (workerCancellation is not null)
+            {
+                workerCancellation.Cancel();
+                if (workerTask is not null)
+                {
+                    _ = await workerTask.ConfigureAwait(false);
+                }
+
+                workerCancellation.Dispose();
+            }
+        }
+    }
+
+    private (CancellationTokenSource Cancellation, Task<Result> Task) StartWorker(
+        SimulatorPollingSource source,
+        CancellationToken cancellationToken)
+    {
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var scheduler = new BoundedPollScheduler(
+            options.ScopeId,
+            options.CreatePollScheduleLimits(),
+            monotonicClock);
+        var maxProcessBatch =
+            options.IngressCapacity == int.MaxValue
+                ? int.MaxValue
+                : options.IngressCapacity + 1;
+        var worker = new SimulatorPollingWorker(
+            source,
+            scheduler,
+            options.PollInterval,
+            maxProcessBatch,
+            process.ActivateSimulatorBinding,
+            process.EnqueueAsync,
+            process.ProcessNextAsync);
+        return (linked, worker.RunAsync(linked.Token));
     }
 
     public async Task<Result> StopAsync(

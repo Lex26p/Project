@@ -49,8 +49,7 @@ public sealed class RuntimeDeliveryCoordinator
     private readonly RuntimeHistoryDeliveryProcessor history;
     private readonly RuntimeAlarmDeliveryProcessor alarm;
     private readonly RuntimeEventDeliveryProcessor events;
-    private readonly Guid configurationRevisionId;
-    private readonly RevisionNumber alarmDefinitionEpoch;
+    private readonly RuntimeDefinitionBindingState definitionBinding;
     private readonly RuntimeDownstreamRetryPolicy retryPolicy;
     private readonly RuntimeDownstreamTransientFailureClassifier
         isTransientFailure;
@@ -66,29 +65,40 @@ public sealed class RuntimeDeliveryCoordinator
         RuntimeDownstreamRetryPolicy retryPolicy,
         RuntimeDownstreamTransientFailureClassifier isTransientFailure,
         RuntimeDownstreamRetryDelay? delay = null)
+        : this(
+            coreStore,
+            history,
+            alarm,
+            events,
+            new RuntimeDefinitionBindingState(configurationRevisionId, alarmDefinitionEpoch),
+            retryPolicy,
+            isTransientFailure,
+            delay)
+    {
+    }
+
+    public RuntimeDeliveryCoordinator(
+        CoreRuntimeStore coreStore,
+        RuntimeHistoryDeliveryProcessor history,
+        RuntimeAlarmDeliveryProcessor alarm,
+        RuntimeEventDeliveryProcessor events,
+        RuntimeDefinitionBindingState definitionBinding,
+        RuntimeDownstreamRetryPolicy retryPolicy,
+        RuntimeDownstreamTransientFailureClassifier isTransientFailure,
+        RuntimeDownstreamRetryDelay? delay = null)
     {
         ArgumentNullException.ThrowIfNull(coreStore);
         ArgumentNullException.ThrowIfNull(history);
         ArgumentNullException.ThrowIfNull(alarm);
         ArgumentNullException.ThrowIfNull(events);
-        ArgumentOutOfRangeException.ThrowIfEqual(
-            configurationRevisionId,
-            Guid.Empty);
-
-        if (!alarmDefinitionEpoch.IsDefined)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(alarmDefinitionEpoch));
-        }
-
+        ArgumentNullException.ThrowIfNull(definitionBinding);
         ArgumentNullException.ThrowIfNull(retryPolicy);
         ArgumentNullException.ThrowIfNull(isTransientFailure);
         this.coreStore = coreStore;
         this.history = history;
         this.alarm = alarm;
         this.events = events;
-        this.configurationRevisionId = configurationRevisionId;
-        this.alarmDefinitionEpoch = alarmDefinitionEpoch;
+        this.definitionBinding = definitionBinding;
         this.retryPolicy = retryPolicy;
         this.isTransientFailure = isTransientFailure;
         this.delay = delay ?? Task.Delay;
@@ -103,11 +113,12 @@ public sealed class RuntimeDeliveryCoordinator
     {
         ArgumentNullException.ThrowIfNull(delivery);
 
+        var definitions = definitionBinding.Read();
         var bound = await coreStore.EnsureDeliveryDefinitionEpochsAsync(
             delivery.ScopeId,
             delivery.ObligationPosition,
-            configurationRevisionId,
-            alarmDefinitionEpoch,
+            definitions.ConfigurationRevisionId,
+            definitions.AlarmDefinitionEpoch,
             cancellationToken).ConfigureAwait(false);
         if (bound.IsFailure)
         {

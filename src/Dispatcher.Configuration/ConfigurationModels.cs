@@ -104,6 +104,38 @@ public sealed record DistributionJobSnapshot(
     int Attempts,
     DateTimeOffset? CompletedAt);
 
+public sealed record ConfigurationWorkloadClaim(
+    DistributionJobId JobId,
+    Guid LeaseToken,
+    string ClaimedBy,
+    DateTimeOffset LeaseUntil,
+    int Attempts,
+    ConfigurationRevisionSnapshot Revision,
+    string ReleaseFingerprint,
+    DateTimeOffset? PreparedAt,
+    DateTimeOffset? SwitchedAt,
+    long? RuntimeGeneration,
+    RevisionNumber? AlarmDefinitionEpoch);
+
+public sealed record ConfigurationWorkloadActivation(
+    ConfigurationRevisionSnapshot Revision,
+    long RuntimeGeneration,
+    RevisionNumber AlarmDefinitionEpoch,
+    DateTimeOffset ActivatedAt);
+
+public sealed record ConfigurationWorkloadOutcome(
+    DistributionJobId JobId,
+    FacilityScopeId ScopeId,
+    ConfigurationRevisionId RevisionId,
+    int Attempts,
+    DateTimeOffset? PreparedAt,
+    DateTimeOffset? SwitchedAt,
+    DateTimeOffset? CompletedAt,
+    string? OutcomeCode,
+    string? OutcomeMessage,
+    long? RuntimeGeneration,
+    RevisionNumber? AlarmDefinitionEpoch);
+
 public static class ConfigurationPermissions
 {
     public static PermissionCode Read(FacilityScopeId scopeId) => Permission(scopeId, "read");
@@ -113,10 +145,6 @@ public static class ConfigurationPermissions
     public static PermissionCode Validate(FacilityScopeId scopeId) => Permission(scopeId, "validate");
 
     public static PermissionCode Publish(FacilityScopeId scopeId) => Permission(scopeId, "publish");
-
-    public static PermissionCode Distribute(FacilityScopeId scopeId) => Permission(scopeId, "distribute");
-
-    public static PermissionCode Activate(FacilityScopeId scopeId) => Permission(scopeId, "activate");
 
     private static PermissionCode Permission(FacilityScopeId scopeId, string action) =>
         PermissionCode.From($"configuration.scope.s{scopeId.Value:N}.{action}");
@@ -204,4 +232,7 @@ public static class ConfigurationManifestFingerprint
 {
     public static (string Json, string Fingerprint) Normalize(string manifestJson) =>
         ConfigurationFingerprint.NormalizeManifest(manifestJson);
+
+    public static string CombineRelease(string manifestFingerprint, string dependencyFingerprint) =>
+        ConfigurationFingerprint.Combine(manifestFingerprint, dependencyFingerprint);
 }

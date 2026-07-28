@@ -78,44 +78,37 @@ public sealed class ConfigurationRevisionTests
         Assert.Null(published.Value.DistributedAt);
         Assert.Null(published.Value.ActivatedAt);
         Assert.Equal(
-            "configuration.activation_not_ready",
-            (await context.Service.AcknowledgeActivationAsync(
-                context.Session,
-                context.ScopeId,
-                published.Value.RevisionId,
-                published.Value.Version)).Error?.Code.Value);
+            "configuration.workload_activation_not_found",
+            (await context.Deployments.ReadActivatedAsync(context.ScopeId)).Error?.Code.Value);
 
         var desired = await context.Service.ReadDesiredReleaseAsync(context.Session, context.ScopeId);
         Assert.Equal(published.Value.RevisionId, desired.Value.RevisionId);
         Assert.Null(desired.Value.DistributedAt);
 
-        var job = await context.Service.ClaimDistributionAsync(
-            context.Session,
+        var job = await context.Deployments.ClaimNextAsync(
             context.ScopeId,
             "worker-a",
             TimeSpan.FromMinutes(1));
-        var distributed = await context.Service.CompleteDistributionAsync(
-            context.Session,
-            context.ScopeId,
-            job.Value.JobId,
-            "worker-a");
-        Assert.NotNull(distributed.Value.DistributedAt);
-        Assert.Null(distributed.Value.ActivatedAt);
-
-        var activated = await context.Service.AcknowledgeActivationAsync(
-            context.Session,
-            context.ScopeId,
-            distributed.Value.RevisionId,
-            distributed.Value.Version);
-        Assert.NotNull(activated.Value.ActivatedAt);
+        var distributed = await context.Deployments.MarkPreparedAsync(job.Value);
+        Assert.NotNull(distributed.Value.Revision.DistributedAt);
+        Assert.Null(distributed.Value.Revision.ActivatedAt);
+        Assert.Equal(
+            "configuration.workload_not_switched",
+            (await context.Deployments.AcknowledgeAsync(distributed.Value)).Error?.Code.Value);
+        var switched = await context.Deployments.RecordSwitchAsync(
+            distributed.Value,
+            1,
+            RevisionNumber.Initial);
+        var activated = await context.Deployments.AcknowledgeAsync(switched.Value);
+        Assert.NotNull(activated.Value.Revision.ActivatedAt);
 
         var restored = context.CreateService();
         var state = await restored.ReadScopeAsync(context.Session, context.ScopeId);
-        Assert.Equal(activated.Value.RevisionId, state.Value.PublishedRevisionId);
-        Assert.Equal(activated.Value.RevisionId, state.Value.DistributedRevisionId);
-        Assert.Equal(activated.Value.RevisionId, state.Value.ActivatedRevisionId);
-        Assert.Equal(activated.Value.Version, Assert.Single(state.Value.Revisions).Version);
-        Assert.Equal(8L, await context.CountAuditAsync());
+        Assert.Equal(activated.Value.Revision.RevisionId, state.Value.PublishedRevisionId);
+        Assert.Equal(activated.Value.Revision.RevisionId, state.Value.DistributedRevisionId);
+        Assert.Equal(activated.Value.Revision.RevisionId, state.Value.ActivatedRevisionId);
+        Assert.Equal(activated.Value.Revision.Version, Assert.Single(state.Value.Revisions).Version);
+        Assert.Equal(5L, await context.CountAuditAsync());
     }
 
     [Fact]
@@ -139,61 +132,52 @@ public sealed class ConfigurationRevisionTests
             context.ScopeId,
             draft.RevisionId,
             draft.Version)).Value;
-        var published = (await context.Service.PublishAsync(
+        _ = (await context.Service.PublishAsync(
             context.Session,
             context.ScopeId,
             new PublishConfigurationRequest(validated.RevisionId, validated.Version, dependencies))).Value;
 
-        var firstClaim = await context.Service.ClaimDistributionAsync(
-            context.Session,
+        var firstClaim = await context.Deployments.ClaimNextAsync(
             context.ScopeId,
             "worker-a",
             TimeSpan.FromSeconds(30));
         context.Clock.Advance(TimeSpan.FromSeconds(31));
         var restarted = context.CreateService();
-        var recoveredClaim = await restarted.ClaimDistributionAsync(
-            context.Session,
+        var restartedDeployments = context.CreateDeployments();
+        var recoveredClaim = await restartedDeployments.ClaimNextAsync(
             context.ScopeId,
             "worker-b",
             TimeSpan.FromSeconds(30));
         Assert.Equal(firstClaim.Value.JobId, recoveredClaim.Value.JobId);
         Assert.Equal(2, recoveredClaim.Value.Attempts);
         Assert.Equal(
-            "configuration.job_lease_invalid",
-            (await restarted.CompleteDistributionAsync(
-                context.Session,
-                context.ScopeId,
-                firstClaim.Value.JobId,
-                "worker-a")).Error?.Code.Value);
-        var distributed = (await restarted.CompleteDistributionAsync(
-            context.Session,
-            context.ScopeId,
-            recoveredClaim.Value.JobId,
-            "worker-b")).Value;
-        var activated = (await restarted.AcknowledgeActivationAsync(
-            context.Session,
-            context.ScopeId,
-            distributed.RevisionId,
-            distributed.Version)).Value;
+            "configuration.workload_lease_invalid",
+            (await restartedDeployments.MarkPreparedAsync(firstClaim.Value)).Error?.Code.Value);
+        var distributed = (await restartedDeployments.MarkPreparedAsync(recoveredClaim.Value)).Value;
+        var switched = (await restartedDeployments.RecordSwitchAsync(
+            distributed,
+            1,
+            RevisionNumber.Initial)).Value;
+        var activated = (await restartedDeployments.AcknowledgeAsync(switched)).Value;
 
         var beforeRollback = (await restarted.ReadScopeAsync(context.Session, context.ScopeId)).Value;
         var rollback = await restarted.RollbackAsync(
             context.Session,
             context.ScopeId,
-            activated.RevisionId,
+            activated.Revision.RevisionId,
             beforeRollback.Version);
-        Assert.NotEqual(activated.RevisionId, rollback.Value.RevisionId);
-        Assert.Equal(activated.RevisionId, rollback.Value.SourceRevisionId);
+        Assert.NotEqual(activated.Revision.RevisionId, rollback.Value.RevisionId);
+        Assert.Equal(activated.Revision.RevisionId, rollback.Value.SourceRevisionId);
         Assert.Equal(RevisionNumber.From(2), rollback.Value.RevisionNumber);
         Assert.Null(rollback.Value.ValidatedAt);
         Assert.Null(rollback.Value.PublishedAt);
 
         var afterRollback = (await restarted.ReadScopeAsync(context.Session, context.ScopeId)).Value;
         Assert.Equal(rollback.Value.RevisionId, afterRollback.DraftRevisionId);
-        Assert.Equal(activated.RevisionId, afterRollback.PublishedRevisionId);
-        Assert.Equal(activated.RevisionId, afterRollback.ActivatedRevisionId);
+        Assert.Equal(activated.Revision.RevisionId, afterRollback.PublishedRevisionId);
+        Assert.Equal(activated.Revision.RevisionId, afterRollback.ActivatedRevisionId);
         Assert.Equal(
-            activated.RevisionId,
+            activated.Revision.RevisionId,
             (await restarted.ReadDesiredReleaseAsync(context.Session, context.ScopeId)).Value.RevisionId);
     }
 
@@ -225,6 +209,7 @@ public sealed class ConfigurationRevisionTests
             ScopeId = scopeId;
             Session = session;
             Service = CreateService();
+            Deployments = CreateDeployments();
         }
 
         public TestDatabase Database { get; }
@@ -233,6 +218,7 @@ public sealed class ConfigurationRevisionTests
         public FacilityScopeId ScopeId { get; }
         public SessionSnapshot Session { get; }
         public ConfigurationService Service { get; }
+        public ConfigurationWorkloadDeploymentStore Deployments { get; }
 
         public static async Task<ConfigurationTestContext> CreateAsync(PostgreSqlClusterFixture cluster)
         {
@@ -249,8 +235,6 @@ public sealed class ConfigurationRevisionTests
                 ConfigurationPermissions.Save(scopeId),
                 ConfigurationPermissions.Validate(scopeId),
                 ConfigurationPermissions.Publish(scopeId),
-                ConfigurationPermissions.Distribute(scopeId),
-                ConfigurationPermissions.Activate(scopeId),
             };
             var session = new SessionSnapshot(
                 SessionId.New(),
@@ -264,6 +248,11 @@ public sealed class ConfigurationRevisionTests
 
         public ConfigurationService CreateService() => new(
             new ConfigurationStore(DataSource, PostgreSqlClusterFixture.OwnerARole, Clock),
+            Clock);
+
+        public ConfigurationWorkloadDeploymentStore CreateDeployments() => new(
+            DataSource,
+            PostgreSqlClusterFixture.OwnerARole,
             Clock);
 
         public async Task<long> CountAuditAsync()

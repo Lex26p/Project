@@ -505,6 +505,7 @@
         "type": "Project",
         "dependencies": {
           "Dispatcher.Alarm": "[1.0.0, )",
+          "Dispatcher.Configuration": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
           "Dispatcher.Events": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",

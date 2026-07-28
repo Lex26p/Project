@@ -21,9 +21,9 @@
 | C08 | Complete | Web shell, visual system и browser baseline реализованы и приняты |
 | C09 | Complete | Event Dispatcher, Alarm actions и read-only History workspace реализованы и приняты |
 | C10 | Complete | Dashboard, mimic и kiosk runtime/editor реализованы и приняты |
-| C11 | Ready | Межпроцессный Simulator E2E C07 выполнен |
-| C12 | Planned | После configuration reconciliation |
-| C13 | Planned | После configuration reconciliation |
+| C11 | Complete | Workload configuration reconciliation и безопасная activation реализованы и приняты |
+| C12 | Ready | Configuration reconciliation C11 выполнена |
+| C13 | Ready | Configuration reconciliation C11 выполнена |
 | C14 | Planned | После обоих protocol adapters |
 | C15 | Planned | Требует доступа пользователя к устройствам |
 | C16 | Ready | Event Dispatcher C09 выполнен |

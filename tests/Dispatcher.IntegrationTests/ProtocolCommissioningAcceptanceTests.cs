@@ -91,22 +91,22 @@ public sealed class ProtocolCommissioningAcceptanceTests
             session,
             FacilityScope,
             new PublishConfigurationRequest(validated.RevisionId, validated.Version, []))).Value;
-        var job = (await configuration.ClaimDistributionAsync(
-            session,
+        var deployments = new ConfigurationWorkloadDeploymentStore(
+            dataSource,
+            PostgreSqlClusterFixture.OwnerARole,
+            clock);
+        var job = (await deployments.ClaimNextAsync(
             FacilityScope,
             "protocol-commissioning",
             TimeSpan.FromMinutes(1))).Value;
-        var distributed = (await configuration.CompleteDistributionAsync(
-            session,
-            FacilityScope,
-            job.JobId,
-            "protocol-commissioning")).Value;
+        var prepared = (await deployments.MarkPreparedAsync(job)).Value;
+        var distributed = prepared.Revision;
         var plan = ProtocolCommissioningManifest.CreatePlan(distributed, CommissioningLimits).Value;
-        var activated = await configuration.AcknowledgeActivationAsync(
-            session,
-            FacilityScope,
-            distributed.RevisionId,
-            distributed.Version);
+        var switched = (await deployments.RecordSwitchAsync(
+            prepared,
+            1,
+            RevisionNumber.Initial)).Value;
+        var activated = await deployments.AcknowledgeAsync(switched);
         Assert.True(activated.IsSuccess);
 
         var bindingBySource = plan.CreateBindings(SourceSessionGeneration.From(1))
@@ -255,8 +255,6 @@ public sealed class ProtocolCommissioningAcceptanceTests
             ConfigurationPermissions.Save(FacilityScope),
             ConfigurationPermissions.Validate(FacilityScope),
             ConfigurationPermissions.Publish(FacilityScope),
-            ConfigurationPermissions.Distribute(FacilityScope),
-            ConfigurationPermissions.Activate(FacilityScope),
             RuntimePermissions.ReadCurrent,
             RuntimePermissions.ReadPoint(ModbusPointId),
             RuntimePermissions.ReadPoint(SnmpPointId),

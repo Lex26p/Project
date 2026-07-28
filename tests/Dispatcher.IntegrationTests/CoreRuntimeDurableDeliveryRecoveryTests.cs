@@ -70,6 +70,8 @@ public sealed class CoreRuntimeDurableDeliveryRecoveryTests
             await Assert.ThrowsAsync<InvalidOperationException>(
                 () => crashing.Host.ProcessNextDeliveryAsync());
             Assert.Equal(RuntimeHostState.Faulted, crashing.Host.GetReadiness().State);
+            Assert.True((await crashing.Host.DrainAsync()).IsSuccess);
+            Assert.Equal(RuntimeHostState.Stopped, crashing.Host.GetReadiness().State);
         }
 
         Assert.Equal(1L, (await context.ReadPublishedStateAsync()).PendingDeliveries);

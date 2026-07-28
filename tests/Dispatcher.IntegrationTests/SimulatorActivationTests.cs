@@ -1,11 +1,12 @@
 using System.Text.Json;
+using Dispatcher.Alarm;
 using Dispatcher.Configuration;
 using Dispatcher.Core;
 using Dispatcher.Facilities;
 using Dispatcher.Persistence;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
-using Dispatcher.Server;
+using Dispatcher.RuntimeHost;
 using Dispatcher.Simulator;
 using Npgsql;
 using Xunit;
@@ -117,15 +118,15 @@ public sealed class SimulatorActivationTests
             31,
             [(Guid.Parse("84000000-0000-0000-0000-000000000001"), 40L)]);
         var dependencies = new[] { new ConfigurationDependency("equipment", "graph-11") };
-        var revision1 = await context.PublishAndDistributeAsync(manifest, dependencies, null);
-        var activator = context.CreateActivator();
-
-        var active1 = await activator.ActivateDesiredAsync(context.Session, context.ScopeId, "worker-a");
-        Assert.Equal(revision1.RevisionId, active1.Value.Receipt.RevisionId);
-        Assert.Equal(1, active1.Value.Generation);
-        var duplicate = await activator.ActivateDesiredAsync(context.Session, context.ScopeId, "worker-b");
-        Assert.Equal(revision1.RevisionId, duplicate.Value.Receipt.RevisionId);
-        Assert.Equal(1, duplicate.Value.Generation);
+        var revision1 = await context.PublishAsync(manifest, dependencies, null);
+        var activator = context.CreateReconciler();
+        var prepared1 = await activator.PrepareNextAsync();
+        var active1 = await activator.CommitAsync(prepared1.Value.Prepared!);
+        Assert.Equal(revision1.RevisionId, active1.Value.RevisionId);
+        Assert.Equal(1, active1.Value.RuntimeGeneration);
+        var duplicate = await activator.RestoreAsync();
+        Assert.Equal(revision1.RevisionId, duplicate.Value.RevisionId);
+        Assert.Equal(1, duplicate.Value.RuntimeGeneration);
 
         var beforeRollback = (await context.Configuration.ReadScopeAsync(context.Session, context.ScopeId)).Value;
         var rollback = (await context.Configuration.RollbackAsync(
@@ -137,14 +138,12 @@ public sealed class SimulatorActivationTests
         Assert.Equal(revision1.RevisionId, rollback.SourceRevisionId);
         Assert.Equal(RevisionNumber.From(2), rollback.RevisionNumber);
 
-        var revision2 = await context.PublishAndDistributeAsync(manifest, dependencies, rollback);
-        var active2 = await context.CreateActivator().ActivateDesiredAsync(
-            context.Session,
-            context.ScopeId,
-            "worker-c");
-        Assert.Equal(revision2.RevisionId, active2.Value.Receipt.RevisionId);
-        Assert.Equal(revision1.RevisionId, active2.Value.Receipt.SourceRevisionId);
-        Assert.Equal(2, active2.Value.Generation);
+        var revision2 = await context.PublishAsync(manifest, dependencies, rollback);
+        var next = context.CreateReconciler();
+        var prepared2 = await next.PrepareNextAsync();
+        var active2 = await next.CommitAsync(prepared2.Value.Prepared!);
+        Assert.Equal(revision2.RevisionId, active2.Value.RevisionId);
+        Assert.Equal(2, active2.Value.RuntimeGeneration);
 
         var restarted = await context.CreateStore().ReadActiveAsync(context.ScopeId);
         Assert.Equal(revision2.RevisionId, restarted.Value.Receipt.RevisionId);
@@ -222,6 +221,9 @@ public sealed class SimulatorActivationTests
             await PostgresMigrationRunner.ApplyAsync(
                 dataSource,
                 SimulatorRuntimeMigrations.CreatePlan(PostgreSqlClusterFixture.OwnerBRole));
+            await PostgresMigrationRunner.ApplyAsync(
+                dataSource,
+                AlarmMigrations.CreatePlan(PostgreSqlClusterFixture.OwnerBRole));
             var clock = new ConfigurationRevisionTests.MutableClock(Start);
             var scopeId = FacilityScopeId.From(Guid.Parse("80000000-0000-0000-0000-000000000001"));
             var session = new SessionSnapshot(
@@ -236,8 +238,6 @@ public sealed class SimulatorActivationTests
                     ConfigurationPermissions.Save(scopeId),
                     ConfigurationPermissions.Validate(scopeId),
                     ConfigurationPermissions.Publish(scopeId),
-                    ConfigurationPermissions.Distribute(scopeId),
-                    ConfigurationPermissions.Activate(scopeId),
                 ]));
             return new SimulatorTestContext(database, dataSource, clock, scopeId, session);
         }
@@ -252,9 +252,26 @@ public sealed class SimulatorActivationTests
             Clock,
             hook);
 
-        public SimulatorReleaseActivator CreateActivator() => new(CreateConfiguration(), CreateStore());
+        public RuntimeConfigurationReconciler CreateReconciler() => new(
+            ScopeId,
+            "simulator-activation-test",
+            TimeSpan.FromMinutes(1),
+            new ConfigurationWorkloadDeploymentStore(
+                DataSource,
+                PostgreSqlClusterFixture.OwnerARole,
+                Clock),
+            CreateStore(),
+            new AlarmStore(
+                DataSource,
+                PostgreSqlClusterFixture.OwnerBRole,
+                Clock),
+            (_, _, _) => Task.FromResult(SourceSessionGeneration.From(1)),
+            new RuntimeDefinitionBindingState(
+                Guid.Parse("85000000-0000-0000-0000-000000000001"),
+                RevisionNumber.Initial),
+            Clock);
 
-        public async Task<ConfigurationRevisionSnapshot> PublishAndDistributeAsync(
+        public async Task<ConfigurationRevisionSnapshot> PublishAsync(
             string manifest,
             IReadOnlyCollection<ConfigurationDependency> dependencies,
             ConfigurationRevisionSnapshot? existingDraft)
@@ -268,20 +285,10 @@ public sealed class SimulatorActivationTests
                 ScopeId,
                 draft.RevisionId,
                 draft.Version)).Value;
-            var published = (await Configuration.PublishAsync(
+            return (await Configuration.PublishAsync(
                 Session,
                 ScopeId,
                 new PublishConfigurationRequest(validated.RevisionId, validated.Version, dependencies))).Value;
-            var job = (await Configuration.ClaimDistributionAsync(
-                Session,
-                ScopeId,
-                "distribution-worker",
-                TimeSpan.FromMinutes(1))).Value;
-            return (await Configuration.CompleteDistributionAsync(
-                Session,
-                ScopeId,
-                job.JobId,
-                "distribution-worker")).Value;
         }
 
         public async Task<long> CountAuditAsync(string action)

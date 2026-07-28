@@ -123,5 +123,48 @@ public static class ConfigurationMigrations
                 );
                 CREATE INDEX obligation_audit_scope_idx ON {Schema}.obligation_audit (scope_id, changed_at);
                 """),
+            new MigrationStep(
+                3,
+                "workload deployment prepare switch acknowledge",
+                $"""
+                ALTER TABLE {Schema}.distribution_job
+                    ADD COLUMN lease_token uuid NULL,
+                    ADD COLUMN prepared_at timestamp with time zone NULL,
+                    ADD COLUMN switched_at timestamp with time zone NULL,
+                    ADD COLUMN acknowledged_at timestamp with time zone NULL,
+                    ADD COLUMN runtime_generation bigint NULL CHECK (runtime_generation > 0),
+                    ADD COLUMN alarm_definition_epoch bigint NULL CHECK (alarm_definition_epoch > 0),
+                    ADD COLUMN outcome_code text NULL,
+                    ADD COLUMN outcome_message text NULL,
+                    ADD CONSTRAINT distribution_outcome_pair CHECK (
+                        (outcome_code IS NULL) = (outcome_message IS NULL)),
+                    ADD CONSTRAINT distribution_switch_generation CHECK (
+                        switched_at IS NULL OR
+                        (runtime_generation IS NOT NULL AND alarm_definition_epoch IS NOT NULL)),
+                    ADD CONSTRAINT distribution_acknowledged_completed CHECK (
+                        acknowledged_at IS NULL OR completed_at IS NOT NULL);
+                ALTER TABLE {Schema}.scope_state
+                    ADD COLUMN pending_activation_revision_id uuid NULL,
+                    ADD CONSTRAINT scope_pending_activation_fk
+                        FOREIGN KEY (pending_activation_revision_id)
+                        REFERENCES {Schema}.revision(revision_id);
+                CREATE TABLE {Schema}.workload_deployment_event (
+                    event_id uuid PRIMARY KEY,
+                    job_id uuid NOT NULL REFERENCES {Schema}.distribution_job(job_id),
+                    scope_id uuid NOT NULL,
+                    revision_id uuid NOT NULL,
+                    worker_id text NOT NULL,
+                    action text NOT NULL,
+                    outcome_code text NULL,
+                    outcome_message text NULL,
+                    runtime_generation bigint NULL,
+                    alarm_definition_epoch bigint NULL,
+                    changed_at timestamp with time zone NOT NULL,
+                    CONSTRAINT workload_event_outcome_pair CHECK (
+                        (outcome_code IS NULL) = (outcome_message IS NULL))
+                );
+                CREATE INDEX workload_deployment_event_scope_idx
+                    ON {Schema}.workload_deployment_event (scope_id, changed_at);
+                """),
         ]);
 }

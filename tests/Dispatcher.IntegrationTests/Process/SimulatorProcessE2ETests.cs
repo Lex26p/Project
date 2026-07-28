@@ -28,7 +28,8 @@ namespace Dispatcher.IntegrationTests.ProcessTests;
 public sealed class SimulatorProcessE2ETests
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan ConditionTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan PublishTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan ConditionTimeout = TimeSpan.FromSeconds(40);
     private readonly PostgreSqlClusterFixture cluster;
     private readonly ITestOutputHelper output;
 
@@ -67,6 +68,23 @@ public sealed class SimulatorProcessE2ETests
             }.ConnectionString;
             var runtimeEnvironment = RuntimeEnvironment(runtimeConnection, fixture);
 
+            var crashedRuntime = StartRuntime(
+                runtimeEnvironment,
+                [database.ConnectionString, runtimeConnection],
+                processes,
+                processIds,
+                "RuntimeHost-stage-crash");
+            output.WriteLine("C07 phase: crash between History and Alarm.");
+            await crashedRuntime.WaitForOutputAsync("state=Reconciling", StartupTimeout);
+            await WaitUntilAsync(
+                "Workload configuration activation",
+                () => IsConfigurationActivatedAsync(
+                    dataSource,
+                    fixture.ScopeId,
+                    fixture.ConfigurationRevisionId),
+                ConditionTimeout,
+                crashedRuntime);
+
             await using var alarmLockConnection = new NpgsqlConnection(database.ConnectionString);
             await alarmLockConnection.OpenAsync();
             await using var alarmLock = await alarmLockConnection.BeginTransactionAsync();
@@ -80,14 +98,6 @@ public sealed class SimulatorProcessE2ETests
                 await lockCommand.ExecuteNonQueryAsync();
             }
 
-            var crashedRuntime = StartRuntime(
-                runtimeEnvironment,
-                [database.ConnectionString, runtimeConnection],
-                processes,
-                processIds,
-                "RuntimeHost-stage-crash");
-            output.WriteLine("C07 phase: crash between History and Alarm.");
-            await crashedRuntime.WaitForOutputAsync("state=Reconciling", StartupTimeout);
             await WaitUntilAsync(
                 "History completed while Alarm remained pending",
                 () => HasPartialDeliveryAsync(dataSource, fixture.ScopeId),
@@ -360,7 +370,7 @@ public sealed class SimulatorProcessE2ETests
             []);
         processes.Add(publish);
         processIds.Add(publish.Id);
-        await publish.WaitForSuccessfulExitAsync(StartupTimeout);
+        await publish.WaitForSuccessfulExitAsync(PublishTimeout);
         return directory;
     }
 
@@ -411,8 +421,6 @@ public sealed class SimulatorProcessE2ETests
             new(ConfigurationPermissions.Save(facilityScope), identityScope),
             new(ConfigurationPermissions.Validate(facilityScope), identityScope),
             new(ConfigurationPermissions.Publish(facilityScope), identityScope),
-            new(ConfigurationPermissions.Distribute(facilityScope), identityScope),
-            new(ConfigurationPermissions.Activate(facilityScope), identityScope),
         };
         var roleId = IdentityRoleId.New();
         var accountId = IdentityAccountId.New();
@@ -457,6 +465,22 @@ public sealed class SimulatorProcessE2ETests
                     },
                 },
             },
+            alarmDefinitions = new[]
+            {
+                new
+                {
+                    definitionId = Guid.Parse("c6f10000-0000-0000-0000-000000000001"),
+                    pointId,
+                    name = "High process value",
+                    direction = "high",
+                    threshold = 100L,
+                    hysteresis = 0L,
+                    raiseDelayMs = 0L,
+                    clearDelayMs = 0L,
+                    enabled = true,
+                    priority = "high",
+                },
+            },
         });
         var configuration = new ConfigurationService(
             new ConfigurationStore(
@@ -473,53 +497,15 @@ public sealed class SimulatorProcessE2ETests
             facilityScope,
             draft.RevisionId,
             draft.Version)).Value;
-        _ = (await configuration.PublishAsync(
+        var published = (await configuration.PublishAsync(
             operatorSession,
             facilityScope,
             new(validated.RevisionId, validated.Version, []))).Value;
-        var distribution = (await configuration.ClaimDistributionAsync(
-            operatorSession,
-            facilityScope,
-            "process-distributor",
-            TimeSpan.FromMinutes(1))).Value;
-        var distributed = (await configuration.CompleteDistributionAsync(
-            operatorSession,
-            facilityScope,
-            distribution.JobId,
-            "process-distributor")).Value;
-        var simulator = new SimulatorRuntimeStore(
-            dataSource,
-            SimulatorRuntimeMigrations.Owner,
-            clock);
-        var activated = await new SimulatorReleaseActivator(configuration, simulator)
-            .ActivateDesiredAsync(
-                operatorSession,
-                facilityScope,
-                "process-activator");
-        Assert.True(activated.IsSuccess);
-        Assert.Equal(distributed.RevisionId, activated.Value.Receipt.RevisionId);
-
-        var alarms = new AlarmStore(dataSource, AlarmMigrations.Owner, clock);
-        Assert.True((await alarms.ActivateDefinitionSetAsync(new(
-            RuntimeScopeId.From(scopeId),
-            RevisionNumber.Initial,
-            [
-                new AlarmDefinition(
-                    AlarmDefinitionId.New(),
-                    point,
-                    "High process value",
-                    AlarmThresholdDirection.High,
-                    threshold: 100,
-                    hysteresis: 0,
-                    raiseDelay: TimeSpan.Zero,
-                    clearDelay: TimeSpan.Zero,
-                    priority: AlarmPriority.High),
-            ]))).IsSuccess);
 
         return new ProductionFixture(
             scopeId,
             pointId,
-            distributed.RevisionId.Value,
+            published.RevisionId.Value,
             operatorUserName,
             operatorPassword);
     }
@@ -535,6 +521,9 @@ public sealed class SimulatorProcessE2ETests
             ["DISPATCHER_RUNTIME_CONNECTION_STRING"] = connectionString,
             ["DISPATCHER_RUNTIME_DATABASE_ROLE"] = CoreRuntimeMigrations.Owner,
             ["DISPATCHER_RUNTIME_SIMULATOR_DATABASE_ROLE"] = SimulatorRuntimeMigrations.Owner,
+            ["DISPATCHER_RUNTIME_CONFIGURATION_DATABASE_ROLE"] = ConfigurationMigrations.Owner,
+            ["DISPATCHER_RUNTIME_DEPLOYMENT_LEASE_MS"] = "5000",
+            ["DISPATCHER_RUNTIME_CONFIGURATION_RECONCILIATION_MS"] = "250",
             ["DISPATCHER_RUNTIME_MAX_CURRENT_POINTS"] = "8",
             ["DISPATCHER_RUNTIME_RETAINED_CURRENT_CHANGES"] = "3",
             ["DISPATCHER_RUNTIME_INGRESS_CAPACITY"] = "4",
@@ -704,6 +693,24 @@ public sealed class SimulatorProcessE2ETests
         return (bool)(await command.ExecuteScalarAsync() ?? false);
     }
 
+    private static async Task<bool> IsConfigurationActivatedAsync(
+        NpgsqlDataSource dataSource,
+        Guid scopeId,
+        Guid revisionId)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT activated_revision_id = @revision_id
+            FROM {ConfigurationMigrations.Schema}.scope_state
+            WHERE scope_id = @scope_id;
+            """,
+            connection);
+        command.Parameters.AddWithValue("scope_id", scopeId);
+        command.Parameters.AddWithValue("revision_id", revisionId);
+        return await command.ExecuteScalarAsync() is true;
+    }
+
     private static async Task<PipelineSnapshot> ReadPipelineAsync(
         NpgsqlDataSource dataSource,
         Guid scopeId)
@@ -780,9 +787,20 @@ public sealed class SimulatorProcessE2ETests
                         string.Join(Environment.NewLine, processes.Select(item => item.Diagnostics())));
                 }
             }
-            if (await condition())
+            try
             {
-                return;
+                if (await condition())
+                {
+                    return;
+                }
+            }
+            catch (NpgsqlException) when (!bounded.IsCancellationRequested)
+            {
+                // The scenario deliberately faults PostgreSQL connectivity.
+            }
+            catch (TimeoutException) when (!bounded.IsCancellationRequested)
+            {
+                // Retry inside the overall bounded condition timeout.
             }
             try
             {

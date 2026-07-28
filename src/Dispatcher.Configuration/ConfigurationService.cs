@@ -85,54 +85,6 @@ public sealed class ConfigurationService
                 expectedScopeVersion,
                 cancellationToken));
 
-    public Task<Result<DistributionJobSnapshot>> ClaimDistributionAsync(
-        SessionSnapshot? session,
-        FacilityScopeId scopeId,
-        string workerId,
-        TimeSpan leaseDuration,
-        CancellationToken cancellationToken = default) =>
-        AuthorizeAndExecuteAsync(
-            session,
-            ConfigurationPermissions.Distribute(scopeId),
-            authorization => store.ClaimDistributionAsync(
-                authorization,
-                scopeId,
-                workerId,
-                leaseDuration,
-                cancellationToken));
-
-    public Task<Result<ConfigurationRevisionSnapshot>> CompleteDistributionAsync(
-        SessionSnapshot? session,
-        FacilityScopeId scopeId,
-        DistributionJobId jobId,
-        string workerId,
-        CancellationToken cancellationToken = default) =>
-        AuthorizeAndExecuteAsync(
-            session,
-            ConfigurationPermissions.Distribute(scopeId),
-            authorization => store.CompleteDistributionAsync(
-                authorization,
-                scopeId,
-                jobId,
-                workerId,
-                cancellationToken));
-
-    public Task<Result<ConfigurationRevisionSnapshot>> AcknowledgeActivationAsync(
-        SessionSnapshot? session,
-        FacilityScopeId scopeId,
-        ConfigurationRevisionId revisionId,
-        long expectedVersion,
-        CancellationToken cancellationToken = default) =>
-        AuthorizeAndExecuteAsync(
-            session,
-            ConfigurationPermissions.Activate(scopeId),
-            authorization => store.AcknowledgeActivationAsync(
-                authorization,
-                scopeId,
-                revisionId,
-                expectedVersion,
-                cancellationToken));
-
     private async Task<Result<TValue>> AuthorizeAndReadAsync<TValue>(
         SessionSnapshot? session,
         PermissionCode permission,

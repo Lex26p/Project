@@ -421,6 +421,20 @@ public sealed class CoreRuntimeHost : IDisposable
         await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (state == RuntimeHostState.Stopped)
+            {
+                return Result.Success();
+            }
+
+            if (state == RuntimeHostState.Faulted)
+            {
+                admissionOpen = false;
+                queue.Clear();
+                pendingGap = null;
+                state = RuntimeHostState.Stopped;
+                return Result.Success();
+            }
+
             if (state != RuntimeHostState.Running)
             {
                 return Failure(

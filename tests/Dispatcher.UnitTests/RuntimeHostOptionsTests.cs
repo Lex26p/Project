@@ -31,6 +31,15 @@ public sealed class RuntimeHostOptionsTests
         Assert.Equal(
             "simulator_runtime",
             options.SimulatorDatabaseRole);
+        Assert.Equal(
+            "configuration_release",
+            options.ConfigurationDatabaseRole);
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            options.DeploymentLeaseDuration);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(500),
+            options.ConfigurationReconciliationInterval);
         Assert.Equal("history", downstream.HistoryDatabaseRole);
         Assert.Equal("alarm", downstream.AlarmDatabaseRole);
         Assert.Equal(
@@ -97,6 +106,12 @@ public sealed class RuntimeHostOptionsTests
                 "core_runtime",
             ["DISPATCHER_RUNTIME_SIMULATOR_DATABASE_ROLE"] =
                 "simulator_runtime",
+            ["DISPATCHER_RUNTIME_CONFIGURATION_DATABASE_ROLE"] =
+                "configuration_release",
+            ["DISPATCHER_RUNTIME_DEPLOYMENT_LEASE_MS"] =
+                "30000",
+            ["DISPATCHER_RUNTIME_CONFIGURATION_RECONCILIATION_MS"] =
+                "500",
             ["DISPATCHER_RUNTIME_MAX_CURRENT_POINTS"] =
                 "128",
             ["DISPATCHER_RUNTIME_RETAINED_CURRENT_CHANGES"] =
