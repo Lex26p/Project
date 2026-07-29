@@ -111,6 +111,14 @@ public sealed record RuntimeHostOptions(
 
     public string? ConfigurationDatabaseRole { get; init; }
 
+    public string? EquipmentDatabaseRole { get; init; }
+
+    public byte[]? StagingSecretKey { get; init; }
+
+    public TimeSpan DiagnosticLeaseDuration { get; init; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan DiagnosticPollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
+
     public TimeSpan DeploymentLeaseDuration { get; init; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan ConfigurationReconciliationInterval { get; init; } = TimeSpan.FromSeconds(1);
@@ -260,6 +268,20 @@ public sealed record RuntimeHostOptions(
             ConfigurationDatabaseRole = Required(
                 read,
                 "DISPATCHER_RUNTIME_CONFIGURATION_DATABASE_ROLE"),
+            EquipmentDatabaseRole = Optional(
+                read,
+                "DISPATCHER_RUNTIME_EQUIPMENT_DATABASE_ROLE"),
+            StagingSecretKey = OptionalBase64Key(
+                read,
+                "DISPATCHER_RUNTIME_STAGING_SECRET_KEY"),
+            DiagnosticLeaseDuration = OptionalPositiveMilliseconds(
+                read,
+                "DISPATCHER_RUNTIME_DIAGNOSTIC_LEASE_MS",
+                TimeSpan.FromSeconds(30)),
+            DiagnosticPollInterval = OptionalPositiveMilliseconds(
+                read,
+                "DISPATCHER_RUNTIME_DIAGNOSTIC_POLL_MS",
+                TimeSpan.FromMilliseconds(250)),
             DeploymentLeaseDuration = PositiveMilliseconds(
                 read,
                 "DISPATCHER_RUNTIME_DEPLOYMENT_LEASE_MS"),
@@ -319,6 +341,36 @@ public sealed record RuntimeHostOptions(
             ? value
             : throw new InvalidOperationException(
                 $"Required runtime setting {name} is absent.");
+
+    private static string? Optional(
+        Func<string, string?> read,
+        string name) =>
+        read(name) is { Length: > 0 } value ? value : null;
+
+    private static byte[]? OptionalBase64Key(
+        Func<string, string?> read,
+        string name)
+    {
+        var raw = Optional(read, name);
+        if (raw is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var key = Convert.FromBase64String(raw);
+            return key.Length == 32
+                ? key
+                : throw new InvalidOperationException(
+                    $"Runtime setting {name} must contain a base64-encoded 32-byte key.");
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException(
+                $"Runtime setting {name} must contain a base64-encoded 32-byte key.");
+        }
+    }
 
     private static int PositiveInt(
         Func<string, string?> read,
@@ -388,6 +440,32 @@ public sealed record RuntimeHostOptions(
 
         return TimeSpan.FromTicks(
             checked(value * TimeSpan.TicksPerMillisecond));
+    }
+
+    private static TimeSpan OptionalPositiveMilliseconds(
+        Func<string, string?> read,
+        string name,
+        TimeSpan defaultValue)
+    {
+        var raw = Optional(read, name);
+        if (raw is null)
+        {
+            return defaultValue;
+        }
+
+        if (!long.TryParse(
+                raw,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var value) ||
+            value <= 0 ||
+            value > TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerMillisecond)
+        {
+            throw new InvalidOperationException(
+                $"Runtime setting {name} must be a positive millisecond duration.");
+        }
+
+        return TimeSpan.FromTicks(checked(value * TimeSpan.TicksPerMillisecond));
     }
 }
 

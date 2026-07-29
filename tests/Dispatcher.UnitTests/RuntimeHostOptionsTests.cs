@@ -35,6 +35,16 @@ public sealed class RuntimeHostOptionsTests
             "configuration_release",
             options.ConfigurationDatabaseRole);
         Assert.Equal(
+            "equipment_runtime",
+            options.EquipmentDatabaseRole);
+        Assert.Equal(32, options.StagingSecretKey?.Length);
+        Assert.Equal(
+            TimeSpan.FromSeconds(15),
+            options.DiagnosticLeaseDuration);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(200),
+            options.DiagnosticPollInterval);
+        Assert.Equal(
             TimeSpan.FromSeconds(30),
             options.DeploymentLeaseDuration);
         Assert.Equal(
@@ -113,6 +123,14 @@ public sealed class RuntimeHostOptionsTests
                 "simulator_runtime",
             ["DISPATCHER_RUNTIME_CONFIGURATION_DATABASE_ROLE"] =
                 "configuration_release",
+            ["DISPATCHER_RUNTIME_EQUIPMENT_DATABASE_ROLE"] =
+                "equipment_runtime",
+            ["DISPATCHER_RUNTIME_STAGING_SECRET_KEY"] =
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            ["DISPATCHER_RUNTIME_DIAGNOSTIC_LEASE_MS"] =
+                "15000",
+            ["DISPATCHER_RUNTIME_DIAGNOSTIC_POLL_MS"] =
+                "200",
             ["DISPATCHER_RUNTIME_DEPLOYMENT_LEASE_MS"] =
                 "30000",
             ["DISPATCHER_RUNTIME_CONFIGURATION_RECONCILIATION_MS"] =

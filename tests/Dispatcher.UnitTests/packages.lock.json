@@ -507,6 +507,7 @@
           "Dispatcher.Alarm": "[1.0.0, )",
           "Dispatcher.Configuration": "[1.0.0, )",
           "Dispatcher.Core": "[1.0.0, )",
+          "Dispatcher.Equipment": "[1.0.0, )",
           "Dispatcher.Events": "[1.0.0, )",
           "Dispatcher.Facilities": "[1.0.0, )",
           "Dispatcher.History": "[1.0.0, )",

@@ -131,7 +131,31 @@ public sealed class StagingSecretProtector
         var ciphertext = new byte[plaintext.Length];
         using var aes = new AesGcm(key, tag.Length);
         aes.Encrypt(nonce, plaintext, ciphertext, tag);
+        CryptographicOperations.ZeroMemory(plaintext);
         return [.. nonce, .. tag, .. ciphertext];
+    }
+
+    public char[] Unprotect(ReadOnlySpan<byte> protectedValue)
+    {
+        if (protectedValue.Length < 29)
+        {
+            throw new CryptographicException("The protected secret is invalid.");
+        }
+
+        var nonce = protectedValue[..12];
+        var tag = protectedValue.Slice(12, 16);
+        var ciphertext = protectedValue[28..];
+        var plaintext = new byte[ciphertext.Length];
+        try
+        {
+            using var aes = new AesGcm(key, tag.Length);
+            aes.Decrypt(nonce, ciphertext, tag, plaintext);
+            return Encoding.UTF8.GetChars(plaintext);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+        }
     }
 }
 

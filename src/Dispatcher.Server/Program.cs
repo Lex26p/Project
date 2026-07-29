@@ -55,12 +55,26 @@ if (smtpEnabled)
 }
 var facilityRole = builder.Configuration["Dispatcher:Facility:DatabaseRole"];
 var equipmentRole = builder.Configuration["Dispatcher:Equipment:DatabaseRole"];
+var configurationRole = builder.Configuration["Dispatcher:Configuration:DatabaseRole"];
+var stagingSecretKeyText = builder.Configuration["Dispatcher:Equipment:StagingSecretKey"];
+_ = TryReadStagingKey(stagingSecretKeyText, out var stagingSecretKey);
 var registryEnabled = !string.IsNullOrWhiteSpace(workspaceConnection) &&
                       !string.IsNullOrWhiteSpace(facilityRole) &&
                       !string.IsNullOrWhiteSpace(equipmentRole);
 if (registryEnabled)
 {
     builder.Services.AddRegistryServer(workspaceConnection!, facilityRole!, equipmentRole!);
+}
+var commissioningEnabled = registryEnabled &&
+                           !string.IsNullOrWhiteSpace(configurationRole) &&
+                           stagingSecretKey is not null;
+if (commissioningEnabled)
+{
+    builder.Services.AddEquipmentCommissioningServer(
+        workspaceConnection!,
+        equipmentRole!,
+        configurationRole!,
+        stagingSecretKey!);
 }
 var historyRole = builder.Configuration["Dispatcher:History:DatabaseRole"];
 var historyMaxPageSize = builder.Configuration.GetValue<int?>("Dispatcher:History:MaxPageSize");
@@ -270,6 +284,10 @@ if (registryEnabled)
 {
     app.MapRegistryServer();
 }
+if (commissioningEnabled)
+{
+    app.MapEquipmentCommissioningServer();
+}
 if (historyEnabled)
 {
     app.MapHistoryServer();
@@ -292,6 +310,31 @@ if (terminalsEnabled)
     app.MapTerminalRuntimeServer();
 }
 app.MapFallbackToFile("index.html");
+
+static bool TryReadStagingKey(string? value, out byte[]? key)
+{
+    key = null;
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    try
+    {
+        var decoded = Convert.FromBase64String(value);
+        if (decoded.Length != 32)
+        {
+            return false;
+        }
+
+        key = decoded;
+        return true;
+    }
+    catch (FormatException)
+    {
+        return false;
+    }
+}
 using var shutdown = new CancellationTokenSource();
 if (string.Equals(
         Environment.GetEnvironmentVariable("DISPATCHER_PROCESS_CONTROL_STDIN"),

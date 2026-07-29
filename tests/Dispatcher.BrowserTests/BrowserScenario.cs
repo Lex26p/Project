@@ -94,6 +94,9 @@ public sealed class BrowserScenario :
     private static readonly Guid SecondRevisionId =
         Guid.Parse(
             "81000000-0000-0000-0000-000000000026");
+    private static readonly Guid CommissioningLocationId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000027");
     private const string AccessToken =
         "browser-access-token";
     private const string RefreshToken =
@@ -103,6 +106,7 @@ public sealed class BrowserScenario :
     private bool sessionExpired;
     private bool c09Enabled;
     private bool c10Enabled;
+    private bool c14Enabled;
     private bool eventGap;
     private bool additionalOccurrence;
     private ulong occurrenceCursor = 1;
@@ -128,6 +132,15 @@ public sealed class BrowserScenario :
     private ulong kioskProfileVersion = 1;
     private long editorVersion;
     private long hubConnectionSequence;
+    private readonly List<C14Draft> c14Drafts = [];
+    private Guid? c14DiagnosticRowId;
+    private Guid c14DiagnosticJobId;
+    private int c14DiagnosticStatus = 3;
+    private string? c14DiagnosticOutcomeCode = "diagnostic.succeeded";
+    private string? c14DiagnosticOutcomeMessage = "Diagnostic completed.";
+    private long c14ConfigurationVersion;
+    private bool c14ConfigurationValidated;
+    private bool c14ConfigurationPublished;
 
     private BrowserScenario(
         IBrowserContext context,
@@ -163,6 +176,12 @@ public sealed class BrowserScenario :
 
     public static Guid RuntimeMimicBindingId =>
         MimicBindingId;
+
+    public static Guid CommissioningScopeId =>
+        ScopeId;
+
+    public static Guid CommissioningDefaultLocationId =>
+        CommissioningLocationId;
 
     public Guid PublishedDashboardRevisionId =>
         dashboardRevision == 1
@@ -228,6 +247,21 @@ public sealed class BrowserScenario :
     public void EnableC10()
     {
         c10Enabled = true;
+    }
+
+    public void EnableC14()
+    {
+        c14Enabled = true;
+    }
+
+    public void SetC14DiagnosticOutcome(
+        int status,
+        string? outcomeCode,
+        string? outcomeMessage)
+    {
+        c14DiagnosticStatus = status;
+        c14DiagnosticOutcomeCode = outcomeCode;
+        c14DiagnosticOutcomeMessage = outcomeMessage;
     }
 
     public void UpdateDashboardCurrent(long value)
@@ -651,6 +685,22 @@ public sealed class BrowserScenario :
             return;
         }
 
+        if (c14Enabled &&
+            (path.StartsWith(
+                 "/api/equipment-staging",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/equipment-configuration",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/registry/",
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleC14Async(route, request, uri)
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (c09Enabled &&
             (path.StartsWith(
                  "/api/events/",
@@ -710,6 +760,395 @@ public sealed class BrowserScenario :
                 404)
             .ConfigureAwait(false);
     }
+
+    private async Task HandleC14Async(
+        IRoute route,
+        IRequest request,
+        Uri uri)
+    {
+        var path = uri.AbsolutePath;
+        if (string.Equals(
+                path,
+                "/api/registry/scopes",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await AuthorizedJsonAsync(
+                    route,
+                    new[]
+                    {
+                        new
+                        {
+                            scopeId = ScopeId,
+                            label = "C14 scope",
+                            locationCount = 1,
+                            equipmentCount = 0,
+                        },
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(
+                path,
+                "/api/registry/equipment",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await AuthorizedJsonAsync(
+                    route,
+                    new
+                    {
+                        scopeId = ScopeId,
+                        total = 0,
+                        items = Array.Empty<object>(),
+                    })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.StartsWith(
+                "/api/equipment-configuration",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                await AuthorizedJsonAsync(route, new
+                    {
+                        scopeId = new { value = ScopeId },
+                        draftRevisionId = new { value = RevisionId },
+                        publishedRevisionId = c14ConfigurationPublished
+                            ? new { value = RevisionId }
+                            : null,
+                        distributedRevisionId = c14ConfigurationPublished
+                            ? new { value = RevisionId }
+                            : null,
+                        activatedRevisionId = c14ConfigurationPublished
+                            ? new { value = RevisionId }
+                            : null,
+                        version = Math.Max(1, c14ConfigurationVersion),
+                        revisions = new[] { C14ConfigurationPayload() },
+                    })
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (path.EndsWith("/validate", StringComparison.OrdinalIgnoreCase))
+            {
+                c14ConfigurationValidated = true;
+                c14ConfigurationVersion++;
+            }
+            else if (path.EndsWith("/publish", StringComparison.OrdinalIgnoreCase))
+            {
+                c14ConfigurationPublished = true;
+                c14ConfigurationVersion++;
+            }
+            else if (path.EndsWith("/save-staging", StringComparison.OrdinalIgnoreCase))
+            {
+                c14ConfigurationVersion = Math.Max(1, c14ConfigurationVersion + 1);
+                c14ConfigurationValidated = false;
+                c14ConfigurationPublished = false;
+            }
+
+            await AuthorizedJsonAsync(route, C14ConfigurationPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/equipment-staging", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            await AuthorizedJsonAsync(route, c14Drafts.Select(C14DraftPayload).ToArray())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/diagnostics/latest", StringComparison.OrdinalIgnoreCase))
+        {
+            var rowId = Guid.Parse(path.Split('/')[3]);
+            if (c14DiagnosticRowId != rowId)
+            {
+                await AuthorizedStatusAsync(route, 204).ConfigureAwait(false);
+                return;
+            }
+
+            await AuthorizedJsonAsync(route, C14DiagnosticPayload(rowId))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.Contains("/diagnostics/", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            await AuthorizedJsonAsync(
+                    route,
+                    C14DiagnosticPayload(c14DiagnosticRowId ?? Guid.Empty))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/diagnostics", StringComparison.OrdinalIgnoreCase))
+        {
+            c14DiagnosticRowId = Guid.Parse(path.Split('/')[3]);
+            c14DiagnosticJobId = Guid.CreateVersion7();
+            await AuthorizedJsonAsync(route, C14DiagnosticPayload(c14DiagnosticRowId.Value))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/authorize-update", StringComparison.OrdinalIgnoreCase))
+        {
+            var rowId = Guid.Parse(path.Split('/')[3]);
+            var draft = c14Drafts.Single(item => item.RowId == rowId);
+            draft.UpdateAuthorized = true;
+            draft.Version++;
+            await AuthorizedJsonAsync(route, C14DraftPayload(draft))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/copy", StringComparison.OrdinalIgnoreCase))
+        {
+            var rowId = Guid.Parse(path.Split('/')[3]);
+            var source = c14Drafts.Single(item => item.RowId == rowId);
+            var copy = source.Copy();
+            c14Drafts.Add(copy);
+            await AuthorizedJsonAsync(route, new[] { C14DraftPayload(copy) })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/templates", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            await AuthorizedJsonAsync(route, C14TemplatePayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/equipment-staging/templates", StringComparison.OrdinalIgnoreCase))
+        {
+            await AuthorizedJsonAsync(route, new[] { C14TemplatePayload() })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.Contains("/templates/", StringComparison.OrdinalIgnoreCase) &&
+            path.EndsWith("/apply", StringComparison.OrdinalIgnoreCase))
+        {
+            var body = JsonDocument.Parse(request.PostData ?? "{}").RootElement;
+            var rowId = body.TryGetProperty("rowId", out var row) &&
+                        row.ValueKind != JsonValueKind.Null
+                ? row.GetGuid()
+                : Guid.CreateVersion7();
+            var draft = c14Drafts.FirstOrDefault(item => item.RowId == rowId) ??
+                        C14Draft.New(rowId, "modbus_tcp");
+            draft.Port = 502;
+            if (!c14Drafts.Contains(draft))
+            {
+                c14Drafts.Add(draft);
+            }
+
+            await AuthorizedJsonAsync(route, C14DraftPayload(draft))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/equipment-staging/apply", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var draft in c14Drafts)
+            {
+                draft.Applied = draft.Errors.Count == 0 &&
+                                (draft.Action != 2 || draft.UpdateAuthorized);
+            }
+
+            await AuthorizedJsonAsync(
+                    route,
+                    c14Drafts.Select(item => new
+                    {
+                        rowId = item.RowId,
+                        action = item.Action,
+                        succeeded = item.Applied,
+                        errors = item.Applied ? Array.Empty<object>() : item.Errors.ToArray(),
+                    }).ToArray())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/equipment-staging/csv", StringComparison.OrdinalIgnoreCase))
+        {
+            var imported = C14Draft.New(Guid.CreateVersion7(), "modbus_tcp");
+            imported.Code = "CSV-PLC";
+            imported.Name = "CSV PLC";
+            imported.Host = "127.0.0.1";
+            c14Drafts.Add(imported);
+            await AuthorizedJsonAsync(route, new
+                {
+                    rows = new[] { C14DraftPayload(imported) },
+                    errors = new[]
+                    {
+                        new
+                        {
+                            rowId = Guid.Empty,
+                            equipmentId = new { value = Guid.Empty },
+                            state = (int?)null,
+                            errors = new[]
+                            {
+                                new { field = "port", code = "staging.range", message = "Port is invalid." },
+                            },
+                        },
+                    },
+                })
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+        {
+            var rowId = Guid.Parse(path.Split('/')[3]);
+            using var document = JsonDocument.Parse(request.PostData ?? "{}");
+            var root = document.RootElement;
+            var draft = c14Drafts.FirstOrDefault(item => item.RowId == rowId) ??
+                        C14Draft.New(rowId, root.GetProperty("protocol").GetString() ?? "modbus_tcp");
+            draft.Code = root.GetProperty("code").GetString() ?? string.Empty;
+            draft.Name = root.GetProperty("name").GetString() ?? string.Empty;
+            draft.Host = root.GetProperty("host").GetString() ?? string.Empty;
+            draft.Port = root.GetProperty("port").GetInt32();
+            draft.LocationId = root.GetProperty("locationId").GetGuid();
+            draft.Protocol = root.GetProperty("protocol").GetString() ?? "modbus_tcp";
+            draft.Action = root.GetProperty("action").GetString() switch
+            {
+                "Update" => 2,
+                "Skip" => 3,
+                _ => 1,
+            };
+            draft.HasSecret = draft.HasSecret ||
+                              root.TryGetProperty("secret", out var secret) &&
+                              secret.ValueKind == JsonValueKind.String &&
+                              !string.IsNullOrEmpty(secret.GetString());
+            draft.Version++;
+            draft.Errors.Clear();
+            if (string.IsNullOrWhiteSpace(draft.Code))
+            {
+                draft.Errors.Add(new { field = "code", code = "staging.required", message = "Equipment code is required." });
+            }
+
+            if (string.IsNullOrWhiteSpace(draft.Host))
+            {
+                draft.Errors.Add(new { field = "host", code = "staging.required", message = "Host is required." });
+            }
+
+            if (!c14Drafts.Contains(draft))
+            {
+                c14Drafts.Add(draft);
+            }
+
+            await AuthorizedJsonAsync(route, C14DraftPayload(draft))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await StatusAsync(route, 404).ConfigureAwait(false);
+    }
+
+    private object C14DraftPayload(C14Draft draft) => new
+    {
+        rowId = draft.RowId,
+        equipmentId = new { value = draft.EquipmentId },
+        scopeId = new { value = ScopeId },
+        locationId = new { value = draft.LocationId },
+        draft.Code,
+        draft.Name,
+        protocol = draft.Protocol == "modbus_tcp" ? 1 : 2,
+        draft.Host,
+        draft.Port,
+        modbusUnitId = draft.Protocol == "modbus_tcp" ? 1 : (int?)null,
+        modbusTable = draft.Protocol == "modbus_tcp" ? "holding" : null,
+        modbusAddress = draft.Protocol == "modbus_tcp" ? 0 : (int?)null,
+        modbusValueType = draft.Protocol == "modbus_tcp" ? "signed16" : null,
+        modbusByteOrder = draft.Protocol == "modbus_tcp" ? "big" : null,
+        modbusWordOrder = draft.Protocol == "modbus_tcp" ? "high_first" : null,
+        modbusScale = draft.Protocol == "modbus_tcp" ? 1m : (decimal?)null,
+        snmpVersion = draft.Protocol == "snmp_v2c" ? "v2c" : null,
+        snmpOid = draft.Protocol == "snmp_v2c" ? "1.3.6.1.2.1.1.3.0" : null,
+        snmpValueType = draft.Protocol == "snmp_v2c" ? "timeticks" : null,
+        unit = "-",
+        draft.HasSecret,
+        action = draft.Action,
+        draft.UpdateAuthorized,
+        existingDeviceMatch = draft.Action == 2,
+        fingerprint = $"C14-{draft.Version}",
+        draft.Version,
+        appliedAt = draft.Applied ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+        errors = draft.Errors.ToArray(),
+    };
+
+    private object C14DiagnosticPayload(Guid rowId) => new
+    {
+        jobId = c14DiagnosticJobId,
+        rowId,
+        scopeId = new { value = ScopeId },
+        mode = 2,
+        status = c14DiagnosticStatus,
+        fingerprint = "C14-DIAGNOSTIC",
+        isStale = c14Drafts.FirstOrDefault(item => item.RowId == rowId)?.Version > 1,
+        attempts = 1,
+        createdAt = DateTimeOffset.UtcNow,
+        startedAt = DateTimeOffset.UtcNow,
+        completedAt = c14DiagnosticStatus > 2 ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+        outcomeCode = c14DiagnosticOutcomeCode,
+        outcomeMessage = c14DiagnosticOutcomeMessage,
+        samples = c14DiagnosticStatus == 3
+            ? new object[]
+            {
+                new
+                {
+                    name = "1.3.6.1.2.1.1.3.0",
+                    value = (long?)42,
+                    unit = "s",
+                    quality = "Good",
+                    observedAt = DateTimeOffset.UtcNow,
+                    errorCode = (string?)null,
+                },
+            }
+            : Array.Empty<object>(),
+    };
+
+    private static object C14TemplatePayload() => new
+    {
+        templateId = Guid.Parse("81000000-0000-0000-0000-000000000028"),
+        scopeId = new { value = ScopeId },
+        name = "Browser template",
+        protocol = 1,
+        port = 502,
+        modbusTable = "holding",
+        modbusAddress = 0,
+        modbusValueType = "signed16",
+        modbusByteOrder = "big",
+        modbusWordOrder = "high_first",
+        modbusScale = 1m,
+        snmpVersion = (string?)null,
+        snmpOid = (string?)null,
+        snmpValueType = (string?)null,
+        unit = "-",
+        version = 1,
+    };
+
+    private object C14ConfigurationPayload() => new
+    {
+        revisionId = new { value = RevisionId },
+        scopeId = new { value = ScopeId },
+        revisionNumber = 1UL,
+        sourceRevisionId = (object?)null,
+        manifestJson = "{}",
+        manifestFingerprint = "C14",
+        dependencies = Array.Empty<object>(),
+        dependencyFingerprint = "C14",
+        version = Math.Max(1, c14ConfigurationVersion),
+        savedAt = DateTimeOffset.UtcNow,
+        validatedAt = c14ConfigurationValidated ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+        publishedAt = c14ConfigurationPublished ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+        distributedAt = c14ConfigurationPublished ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+        activatedAt = c14ConfigurationPublished ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+    };
 
     private async Task HandleC10Async(
         IRoute route,
@@ -1503,6 +1942,24 @@ public sealed class BrowserScenario :
                 $"runtime.point.p{EventPointId:N}.read");
         }
 
+        if (c14Enabled)
+        {
+            permissions.Add(
+                $"equipment.scope.s{ScopeId:N}.read");
+            permissions.Add(
+                $"equipment.scope.s{ScopeId:N}.write");
+            permissions.Add(
+                $"equipment.scope.s{ScopeId:N}.administer");
+            permissions.Add(
+                $"configuration.scope.s{ScopeId:N}.read");
+            permissions.Add(
+                $"configuration.scope.s{ScopeId:N}.save");
+            permissions.Add(
+                $"configuration.scope.s{ScopeId:N}.validate");
+            permissions.Add(
+                $"configuration.scope.s{ScopeId:N}.publish");
+        }
+
         return new
         {
             accountId = AccountId,
@@ -1560,6 +2017,15 @@ public sealed class BrowserScenario :
                 {
                     label = "Dashboards",
                     route = "/dashboards",
+                });
+        }
+        if (c14Enabled)
+        {
+            items.Add(
+                new
+                {
+                    label = "Equipment",
+                    route = "/equipment",
                 });
         }
 
@@ -2050,6 +2516,46 @@ public sealed class BrowserScenario :
             synchronizedAt =
                 DateTimeOffset.UtcNow,
         };
+
+    private sealed class C14Draft
+    {
+        public Guid RowId { get; init; }
+        public Guid EquipmentId { get; init; }
+        public Guid LocationId { get; set; } = CommissioningLocationId;
+        public string Code { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Protocol { get; set; } = "modbus_tcp";
+        public string Host { get; set; } = string.Empty;
+        public int Port { get; set; } = 502;
+        public bool HasSecret { get; set; }
+        public int Action { get; set; } = 1;
+        public bool UpdateAuthorized { get; set; }
+        public bool Applied { get; set; }
+        public long Version { get; set; } = 1;
+        public List<object> Errors { get; } = [];
+
+        public static C14Draft New(Guid rowId, string protocol) => new()
+        {
+            RowId = rowId,
+            EquipmentId = Guid.CreateVersion7(),
+            Protocol = protocol,
+            Port = protocol == "snmp_v2c" ? 161 : 502,
+        };
+
+        public C14Draft Copy() => new()
+        {
+            RowId = Guid.CreateVersion7(),
+            EquipmentId = Guid.CreateVersion7(),
+            LocationId = LocationId,
+            Code = $"{Code}-1",
+            Name = Name,
+            Protocol = Protocol,
+            Host = Host,
+            Port = Port,
+            HasSecret = false,
+            Action = 1,
+        };
+    }
 
     private static string? ReadQueryParameter(
         string query,

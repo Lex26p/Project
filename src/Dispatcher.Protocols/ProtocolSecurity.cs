@@ -56,6 +56,16 @@ public sealed class ProtocolSecretLease : IDisposable
         return new ProtocolSecretLease(rawSecret.ToCharArray());
     }
 
+    public static ProtocolSecretLease Create(ReadOnlySpan<char> rawSecret)
+    {
+        if (rawSecret.IsEmpty)
+        {
+            throw new ArgumentException("Secret cannot be empty.", nameof(rawSecret));
+        }
+
+        return new ProtocolSecretLease(rawSecret.ToArray());
+    }
+
     public ValueTask<TResult> UseAsync<TResult>(
         Func<ReadOnlyMemory<char>, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken = default)

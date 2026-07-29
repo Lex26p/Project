@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Dispatcher.Equipment;
 using Dispatcher.Facilities;
+using Dispatcher.Platform;
+using Dispatcher.Semantics;
 using Xunit;
 
 namespace Dispatcher.UnitTests;
@@ -84,6 +86,69 @@ public sealed class EquipmentStagingToolsTests
         Assert.Equal("staging.csv_header", Assert.Single(deleteHeader.Errors).Errors[0].Code);
     }
 
+    [Fact]
+    public void CommissioningDraftValidationKeepsProtocolFieldsSeparate()
+    {
+        var scopeId = FacilityScopeId.From(Guid.Parse("81000000-0000-0000-0000-000000000020"));
+        var locationId = LocationId.From(Guid.Parse("82000000-0000-0000-0000-000000000020"));
+        var modbus = EquipmentStagingDraftInput.New(
+            scopeId, locationId, EquipmentProtocol.ModbusTcp) with
+        {
+            Code = "PLC-C14",
+            Name = "PLC",
+            Host = "127.0.0.1",
+        };
+        Assert.Empty(EquipmentCommissioningTools.ValidateDraft(modbus, hasSecret: false));
+
+        var snmp = EquipmentStagingDraftInput.New(
+            scopeId, locationId, EquipmentProtocol.Snmp) with
+        {
+            Code = "SW-C14",
+            Name = "Switch",
+            Host = "127.0.0.1",
+            SnmpVersion = "v3",
+            SnmpOid = string.Empty,
+            SnmpValueType = "octet_string",
+            Secret = null,
+        };
+        var errors = EquipmentCommissioningTools.ValidateDraft(snmp, hasSecret: false);
+        Assert.Contains(errors, error => error.Field == "snmp_version");
+        Assert.Contains(errors, error => error.Field == "snmp_oid");
+        Assert.Contains(errors, error => error.Field == "snmp_value_type");
+        Assert.Contains(errors, error => error.Field == "secret");
+    }
+
+    [Fact]
+    public void ExistingDeviceUpdateRequiresExplicitAdministerPermission()
+    {
+        var now = new DateTimeOffset(2026, 7, 29, 10, 0, 0, TimeSpan.Zero);
+        var scopeId = FacilityScopeId.From(
+            Guid.Parse("81000000-0000-0000-0000-000000000030"));
+        var permission = EquipmentCommissioningPermissions.AuthorizeUpdate(scopeId);
+        var writeOnly = new SessionSnapshot(
+            SessionId.New(),
+            SubjectId.New(),
+            PrincipalKind.User,
+            now.AddMinutes(-1),
+            now.AddMinutes(30),
+            new EffectivePermissions([EquipmentPermissions.Write(scopeId)]));
+        var administrator = new SessionSnapshot(
+            SessionId.New(),
+            SubjectId.New(),
+            PrincipalKind.User,
+            now.AddMinutes(-1),
+            now.AddMinutes(30),
+            new EffectivePermissions(
+                [EquipmentPermissions.Write(scopeId), permission]));
+        var clock = new FixedClock(now);
+
+        Assert.Equal(
+            "permission.denied",
+            SessionAuthorization.AuthorizeAccess(writeOnly, permission, clock).Error?.Code.Value);
+        Assert.True(
+            SessionAuthorization.AuthorizeAccess(administrator, permission, clock).IsSuccess);
+    }
+
     private static StagingRowInput Row(EquipmentProtocolForm form) => new(
         Guid.Parse("83000000-0000-0000-0000-000000000010"),
         EquipmentId.From(Guid.Parse("84000000-0000-0000-0000-000000000010")),
@@ -92,4 +157,9 @@ public sealed class EquipmentStagingToolsTests
         "EQ-1",
         "Equipment",
         form);
+
+    private sealed class FixedClock(DateTimeOffset now) : IWallClock
+    {
+        public DateTimeOffset GetUtcNow() => now;
+    }
 }

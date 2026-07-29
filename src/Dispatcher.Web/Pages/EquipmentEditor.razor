@@ -1,0 +1,519 @@
+@page "/equipment/add"
+@inject EquipmentCommissioningApiClient Api
+
+<PageTitle>Device editor</PageTitle>
+
+<GuardedContent Route="@($"/equipment/add?scope={ScopeId:D}")">
+    <header class="workspace-title">
+        <div>
+            <h1>Device editor</h1>
+            <p>Prepare Modbus TCP and SNMP v2c devices before publishing a whole-scope revision.</p>
+        </div>
+        <a href="@($"/equipment?scope={ScopeId:D}")">Back to equipment</a>
+    </header>
+
+    @if (!string.IsNullOrEmpty(message))
+    {
+        <p role="status" data-testid="staging-message">@message</p>
+    }
+
+    <section aria-label="Staging controls">
+        <label>Scope ID <input @bind="ScopeId" @bind:event="oninput" /></label>
+        <label>Default location ID <input @bind="defaultLocationId" @bind:event="oninput" /></label>
+        <button type="button" @onclick="AddModbusDraft">Add Modbus TCP</button>
+        <button type="button" @onclick="AddSnmpDraft">Add SNMP v2c</button>
+        <label>
+            Upload CSV
+            <InputFile OnChange="ImportCsvAsync" accept=".csv,text/csv" />
+        </label>
+        <button type="button" @onclick="LoadAsync">Refresh</button>
+    </section>
+
+    <div class="editor-layout">
+        <section aria-label="Staging rows">
+            <h2>Staging (@rows.Count)</h2>
+            @if (rows.Count == 0)
+            {
+                <p>No staging rows.</p>
+            }
+            else
+            {
+                <table>
+                    <thead>
+                        <tr><th>Code</th><th>Protocol</th><th>Action</th><th>Result</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in rows)
+                        {
+                            <tr>
+                                <td><button type="button" @onclick="() => SelectAsync(row)">@row.Code</button></td>
+                                <td>@ProtocolName(row.Protocol)</td>
+                                <td>@((StagingActionPayload)row.Action)</td>
+                                <td>@(row.Errors.Count == 0 ? row.AppliedAt is null ? "Draft" : "Applied" : $"{row.Errors.Count} error(s)")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <button type="button" @onclick="ApplyAllAsync">Apply valid rows</button>
+            }
+        </section>
+
+        <section aria-label="Selected staging row">
+            @if (edit is null)
+            {
+                <h2>Select a row</h2>
+            }
+            else
+            {
+                <h2>@(edit.Protocol == "modbus_tcp" ? "Modbus TCP" : "SNMP v2c") device</h2>
+                <div class="form-grid">
+                    <label>Equipment ID <input @bind="edit.EquipmentId" @bind:event="oninput" /></label>
+                    <label>Location ID <input @bind="edit.LocationId" @bind:event="oninput" /></label>
+                    <label>Code <input @bind="edit.Code" @bind:event="oninput" data-testid="device-code" /></label>
+                    <label>Name <input @bind="edit.Name" @bind:event="oninput" /></label>
+                    <label>Host <input @bind="edit.Host" @bind:event="oninput" data-testid="device-host" /></label>
+                    <label>Port <input type="number" @bind="edit.Port" @bind:event="oninput" /></label>
+                    <label>Unit <input @bind="edit.Unit" @bind:event="oninput" /></label>
+                    <label>
+                        Apply action
+                        <select @bind="edit.Action">
+                            <option value="Create">Create</option>
+                            <option value="Update">Update</option>
+                            <option value="Skip">Skip</option>
+                        </select>
+                    </label>
+                    @if (edit.Protocol == "modbus_tcp")
+                    {
+                        <label>Unit ID <input type="number" @bind="edit.ModbusUnitId" /></label>
+                        <label>Table
+                            <select @bind="edit.ModbusTable"><option value="holding">Holding</option><option value="input">Input</option></select>
+                        </label>
+                        <label>Address <input type="number" @bind="edit.ModbusAddress" /></label>
+                        <label>Value type
+                            <select @bind="edit.ModbusValueType">
+                                <option value="signed16">Signed 16</option><option value="unsigned16">Unsigned 16</option>
+                                <option value="signed32">Signed 32</option><option value="unsigned32">Unsigned 32</option>
+                            </select>
+                        </label>
+                        <label>Byte order
+                            <select @bind="edit.ModbusByteOrder"><option value="big">Big endian</option><option value="little">Little endian</option></select>
+                        </label>
+                        <label>Word order
+                            <select @bind="edit.ModbusWordOrder"><option value="high_first">High first</option><option value="low_first">Low first</option></select>
+                        </label>
+                        <label>Scale <input type="number" step="any" @bind="edit.ModbusScale" /></label>
+                    }
+                    else
+                    {
+                        <label>SNMP version <input value="v2c" disabled /></label>
+                        <label>OID <input @bind="edit.SnmpOid" data-testid="snmp-oid" /></label>
+                        <label>Value type
+                            <select @bind="edit.SnmpValueType">
+                                <option value="signed32">Signed 32</option><option value="counter32">Counter 32</option>
+                                <option value="gauge32">Gauge 32</option><option value="timeticks">Time ticks</option>
+                                <option value="counter64">Counter 64</option>
+                            </select>
+                        </label>
+                        <label>Community
+                            <input type="password" @bind="edit.Secret" placeholder="unchanged when empty" data-testid="snmp-community" />
+                        </label>
+                        @if (edit.Secret == "public")
+                        {
+                            <p>Default community “public” is allowed but should be replaced when the device permits it.</p>
+                        }
+                    }
+                </div>
+
+                @if (selected?.Errors.Count > 0)
+                {
+                    <ul role="alert">
+                        @foreach (var error in selected.Errors)
+                        {
+                            <li><strong>@error.Field:</strong> @error.Message</li>
+                        }
+                    </ul>
+                }
+
+                <div>
+                    <button type="button" @onclick="SaveAsync" data-testid="save-device">Save draft</button>
+                    @if (edit.Action == "Update" && selected is { UpdateAuthorized: false })
+                    {
+                        <button type="button" @onclick="AuthorizeUpdateAsync">Authorize update</button>
+                    }
+                    <button type="button" @onclick="StartConnectionTestAsync">Check connection</button>
+                    <button type="button" @onclick="StartSamplePollAsync">Run sample poll</button>
+                </div>
+
+                <fieldset>
+                    <legend>Copy</legend>
+                    <label>Quantity <input type="number" min="1" max="100" @bind="copyQuantity" @bind:event="oninput" /></label>
+                    <label><input type="checkbox" @bind="incrementUnitId" /> Increment Modbus Unit ID</label>
+                    <button type="button" @onclick="CopyAsync">Copy</button>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Templates</legend>
+                    <label>Name <input @bind="templateName" @bind:event="oninput" /></label>
+                    <button type="button" @onclick="SaveTemplateAsync">Save as template</button>
+                    <select @bind="selectedTemplateId">
+                        <option value="@Guid.Empty">Select template</option>
+                        @foreach (var template in templates)
+                        {
+                            <option value="@template.TemplateId">@template.Name</option>
+                        }
+                    </select>
+                    <button type="button" @onclick="ApplyTemplateAsync">Apply template</button>
+                </fieldset>
+            }
+        </section>
+    </div>
+
+    @if (diagnostic is not null)
+    {
+        <section aria-label="Diagnostic result" data-testid="diagnostic-result">
+            <h2>Diagnostic</h2>
+            <dl>
+                <dt>Status</dt><dd>@DiagnosticStatus(diagnostic.Status)</dd>
+                <dt>Attempts</dt><dd>@diagnostic.Attempts</dd>
+                <dt>Fingerprint</dt><dd>@(diagnostic.IsStale ? "Stale result" : "Current row")</dd>
+                <dt>Result</dt><dd>@diagnostic.OutcomeCode — @diagnostic.OutcomeMessage</dd>
+            </dl>
+            @foreach (var sample in diagnostic.Samples)
+            {
+                <p>@sample.Name: @sample.Value @sample.Unit; @sample.Quality; @sample.ErrorCode</p>
+            }
+        </section>
+    }
+
+    <section aria-label="Configuration publication">
+        <h2>Configuration revision</h2>
+        <p>The base whole-scope manifest supplies Simulator and alarm definitions. Applied staging rows replace its protocol source list on the Server.</p>
+        <textarea @bind="baseManifestJson" rows="10" cols="100" data-testid="base-manifest"></textarea>
+        <div>
+            <button type="button" @onclick="SaveConfigurationAsync">Save revision</button>
+            <button type="button" @onclick="ValidateConfigurationAsync" disabled="@(configurationRevision is null)">Validate</button>
+            <button type="button" @onclick="PublishConfigurationAsync" disabled="@(configurationRevision?.ValidatedAt is null)">Publish</button>
+            <button type="button" @onclick="ReadConfigurationAsync">Refresh activation</button>
+        </div>
+        @if (configurationRevision is not null)
+        {
+            <p data-testid="configuration-status">
+                Revision @configurationRevision.RevisionNumber:
+                saved @configurationRevision.SavedAt.ToString("u");
+                validated @(configurationRevision.ValidatedAt?.ToString("u") ?? "no");
+                published @(configurationRevision.PublishedAt?.ToString("u") ?? "no");
+                distributed @(configurationRevision.DistributedAt?.ToString("u") ?? "no");
+                activated @(configurationRevision.ActivatedAt?.ToString("u") ?? "no").
+            </p>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    private readonly List<EquipmentStagingDraftPayload> rows = [];
+    private readonly List<EquipmentStagingTemplatePayload> templates = [];
+    private EquipmentStagingDraftPayload? selected;
+    private EquipmentStagingDraftEdit? edit;
+    private EquipmentDiagnosticJobPayload? diagnostic;
+    private EquipmentConfigurationRevisionPayload? configurationRevision;
+    private Guid defaultLocationId;
+    private int copyQuantity = 1;
+    private bool incrementUnitId = true;
+    private string templateName = string.Empty;
+    private Guid selectedTemplateId;
+    private string message = string.Empty;
+    private string baseManifestJson = string.Empty;
+
+    [SupplyParameterFromQuery(Name = "scope")]
+    public Guid ScopeId { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        baseManifestJson = CreateBaseManifest();
+        if (ScopeId != Guid.Empty)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private void AddDraft(string protocol)
+    {
+        edit = EquipmentStagingDraftEdit.New(ScopeId, defaultLocationId, protocol);
+        selected = null;
+        diagnostic = null;
+        message = "New draft is ready for editing.";
+    }
+
+    private void AddModbusDraft() => AddDraft("modbus_tcp");
+
+    private void AddSnmpDraft() => AddDraft("snmp_v2c");
+
+    private Task StartConnectionTestAsync() => StartDiagnosticAsync("ConnectionTest");
+
+    private Task StartSamplePollAsync() => StartDiagnosticAsync("SamplePoll");
+
+    private async Task SelectAsync(EquipmentStagingDraftPayload row)
+    {
+        selected = row;
+        edit = EquipmentStagingDraftEdit.From(row);
+        diagnostic = await Api.ReadLatestDiagnosticAsync(ScopeId, row.RowId);
+        message = string.Empty;
+    }
+
+    private async Task LoadAsync()
+    {
+        if (ScopeId == Guid.Empty)
+        {
+            message = "Scope ID is required.";
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            rows.Clear();
+            rows.AddRange(await Api.ReadDraftsAsync(ScopeId));
+            templates.Clear();
+            templates.AddRange(await Api.ReadTemplatesAsync(ScopeId) ?? []);
+            message = "Staging refreshed.";
+        });
+    }
+
+    private async Task SaveAsync()
+    {
+        if (edit is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            var saved = await Api.SaveDraftAsync(edit.RowId, edit);
+            Replace(saved);
+            await SelectAsync(saved);
+            message = saved.Errors.Count == 0 ? "Draft saved." : "Draft saved with validation errors.";
+        });
+    }
+
+    private async Task ImportCsvAsync(InputFileChangeEventArgs args)
+    {
+        await RunAsync(async () =>
+        {
+            await using var stream = args.File.OpenReadStream(1_000_000);
+            using var reader = new StreamReader(stream);
+            var imported = await Api.ImportCsvAsync(await reader.ReadToEndAsync());
+            foreach (var row in imported.Rows)
+            {
+                Replace(row);
+            }
+
+            message = $"CSV: {imported.Rows.Count} row(s) staged, {imported.Errors.Count} row error(s).";
+        });
+    }
+
+    private async Task CopyAsync()
+    {
+        if (selected is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            rows.AddRange(await Api.CopyAsync(
+                ScopeId, selected.RowId, copyQuantity, incrementUnitId));
+            message = "Copies created. Hosts and secrets were not changed/copied.";
+        });
+    }
+
+    private async Task AuthorizeUpdateAsync()
+    {
+        if (selected is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            var updated = await Api.AuthorizeUpdateAsync(
+                ScopeId, selected.RowId, selected.Version);
+            Replace(updated);
+            await SelectAsync(updated);
+            message = "Update explicitly authorized.";
+        });
+    }
+
+    private async Task ApplyAllAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var result = await Api.ApplyAsync(ScopeId, rows.Select(row => row.RowId).ToArray());
+            message = $"Apply: {result.Count(item => item.Succeeded)} succeeded, {result.Count(item => !item.Succeeded)} failed/skipped.";
+            await LoadAsync();
+        });
+    }
+
+    private async Task StartDiagnosticAsync(string mode)
+    {
+        if (selected is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            diagnostic = await Api.StartDiagnosticAsync(ScopeId, selected.RowId, mode);
+            for (var attempt = 0; attempt < 40 && diagnostic.Status is 1 or 2; attempt++)
+            {
+                await Task.Delay(250);
+                diagnostic = await Api.ReadDiagnosticAsync(ScopeId, diagnostic.JobId) ?? diagnostic;
+            }
+
+            message = diagnostic.Status is 1 or 2
+                ? "Diagnostic is still pending and can be refreshed later."
+                : "Diagnostic completed.";
+        });
+    }
+
+    private async Task SaveTemplateAsync()
+    {
+        if (selected is null || string.IsNullOrWhiteSpace(templateName))
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            _ = await Api.SaveTemplateAsync(ScopeId, selected.RowId, templateName);
+            templates.Clear();
+            templates.AddRange(await Api.ReadTemplatesAsync(ScopeId) ?? []);
+            message = "Template saved without identity, host, Unit ID or secret.";
+        });
+    }
+
+    private async Task ApplyTemplateAsync()
+    {
+        if (selectedTemplateId == Guid.Empty)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            var updated = await Api.ApplyTemplateAsync(
+                ScopeId, defaultLocationId, selectedTemplateId, selected?.RowId);
+            Replace(updated);
+            await SelectAsync(updated);
+            message = "Template applied to the staging draft.";
+        });
+    }
+
+    private async Task SaveConfigurationAsync()
+    {
+        await RunAsync(async () =>
+        {
+            configurationRevision = await Api.SaveConfigurationAsync(
+                ScopeId, baseManifestJson, configurationRevision?.Version);
+            message = "Configuration revision saved.";
+        });
+    }
+
+    private async Task ValidateConfigurationAsync()
+    {
+        if (configurationRevision is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            configurationRevision = await Api.ValidateConfigurationAsync(
+                ScopeId,
+                configurationRevision.RevisionId.Value,
+                configurationRevision.Version);
+            message = "Configuration revision validated.";
+        });
+    }
+
+    private async Task PublishConfigurationAsync()
+    {
+        if (configurationRevision is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            configurationRevision = await Api.PublishConfigurationAsync(
+                ScopeId,
+                configurationRevision.RevisionId.Value,
+                configurationRevision.Version);
+            message = "Configuration revision published; RuntimeHost activation is pending.";
+        });
+    }
+
+    private async Task ReadConfigurationAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var scope = await Api.ReadConfigurationAsync(ScopeId);
+            configurationRevision = scope?.Revisions
+                .OrderByDescending(item => item.RevisionNumber)
+                .FirstOrDefault();
+            message = "Configuration activation state refreshed.";
+        });
+    }
+
+    private async Task RunAsync(Func<Task> operation)
+    {
+        try
+        {
+            await operation();
+        }
+        catch (EquipmentStagingApiException exception)
+        {
+            message = $"{exception.Code}: {exception.Message}";
+        }
+    }
+
+    private void Replace(EquipmentStagingDraftPayload row)
+    {
+        var index = rows.FindIndex(item => item.RowId == row.RowId);
+        if (index < 0)
+        {
+            rows.Add(row);
+        }
+        else
+        {
+            rows[index] = row;
+        }
+    }
+
+    private string CreateBaseManifest()
+    {
+        var sourceId = Guid.CreateVersion7();
+        var pointId = Guid.CreateVersion7();
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            simulator = new
+            {
+                sourceId,
+                seed = 17UL,
+                points = new[] { new { pointId, baseline = 0L, amplitude = 0L, unit = "-" } },
+            },
+            alarmDefinitions = Array.Empty<object>(),
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string ProtocolName(int protocol) => protocol == 1 ? "Modbus TCP" : "SNMP v2c";
+
+    private static string DiagnosticStatus(int status) => status switch
+    {
+        1 => "Pending",
+        2 => "Running",
+        3 => "Succeeded",
+        4 => "Failed",
+        5 => "Timed out",
+        6 => "Cancelled",
+        _ => "Unknown",
+    };
+}

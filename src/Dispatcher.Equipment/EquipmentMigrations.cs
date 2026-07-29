@@ -84,5 +84,95 @@ public static class EquipmentMigrations
                 );
                 CREATE INDEX staging_audit_scope_idx ON {Schema}.staging_audit (scope_id, changed_at);
                 """),
+            new MigrationStep(
+                3,
+                "engineering drafts templates secrets and diagnostic jobs",
+                $"""
+                CREATE TABLE {Schema}.protocol_secret (
+                    secret_id uuid PRIMARY KEY,
+                    scope_id uuid NOT NULL,
+                    protected_value bytea NOT NULL,
+                    created_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX protocol_secret_scope_idx
+                    ON {Schema}.protocol_secret (scope_id, secret_id);
+
+                CREATE TABLE {Schema}.staging_draft (
+                    row_id uuid PRIMARY KEY,
+                    scope_id uuid NOT NULL,
+                    equipment_id uuid NOT NULL,
+                    location_id uuid NOT NULL,
+                    code text NOT NULL,
+                    name text NOT NULL,
+                    protocol text NOT NULL,
+                    form_data jsonb NOT NULL,
+                    secret_reference text NULL,
+                    apply_action smallint NOT NULL CHECK (apply_action BETWEEN 1 AND 3),
+                    update_authorized boolean NOT NULL DEFAULT false,
+                    fingerprint character(64) NOT NULL,
+                    version bigint NOT NULL CHECK (version > 0),
+                    applied_at timestamp with time zone NULL,
+                    created_at timestamp with time zone NOT NULL,
+                    updated_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX staging_draft_scope_idx
+                    ON {Schema}.staging_draft (scope_id, updated_at, row_id);
+
+                CREATE TABLE {Schema}.staging_template (
+                    template_id uuid PRIMARY KEY,
+                    scope_id uuid NOT NULL,
+                    name text NOT NULL,
+                    protocol text NOT NULL,
+                    form_data jsonb NOT NULL,
+                    version bigint NOT NULL CHECK (version > 0),
+                    created_at timestamp with time zone NOT NULL,
+                    updated_at timestamp with time zone NOT NULL,
+                    CONSTRAINT staging_template_scope_name_key UNIQUE (scope_id, name)
+                );
+
+                CREATE TABLE {Schema}.diagnostic_job (
+                    job_id uuid PRIMARY KEY,
+                    row_id uuid NOT NULL,
+                    scope_id uuid NOT NULL,
+                    mode smallint NOT NULL CHECK (mode BETWEEN 1 AND 2),
+                    status smallint NOT NULL CHECK (status BETWEEN 1 AND 6),
+                    fingerprint character(64) NOT NULL,
+                    manifest jsonb NOT NULL,
+                    secret_reference text NULL,
+                    available_at timestamp with time zone NOT NULL,
+                    claimed_by text NULL,
+                    lease_token uuid NULL,
+                    lease_until timestamp with time zone NULL,
+                    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    started_at timestamp with time zone NULL,
+                    completed_at timestamp with time zone NULL,
+                    outcome_code text NULL,
+                    outcome_message text NULL,
+                    result jsonb NULL,
+                    created_at timestamp with time zone NOT NULL,
+                    CONSTRAINT diagnostic_outcome_pair CHECK (
+                        (outcome_code IS NULL) = (outcome_message IS NULL))
+                );
+                CREATE INDEX diagnostic_job_claim_idx
+                    ON {Schema}.diagnostic_job (available_at, job_id)
+                    WHERE completed_at IS NULL;
+                CREATE INDEX diagnostic_job_scope_idx
+                    ON {Schema}.diagnostic_job (scope_id, created_at, job_id);
+
+                CREATE TABLE {Schema}.commissioning_audit (
+                    audit_id uuid PRIMARY KEY,
+                    scope_id uuid NOT NULL,
+                    row_id uuid NULL,
+                    job_id uuid NULL,
+                    session_id uuid NOT NULL,
+                    subject_id uuid NOT NULL,
+                    permission text NOT NULL,
+                    action text NOT NULL,
+                    resulting_version bigint NULL,
+                    changed_at timestamp with time zone NOT NULL
+                );
+                CREATE INDEX commissioning_audit_scope_idx
+                    ON {Schema}.commissioning_audit (scope_id, changed_at);
+                """),
         ]);
 }

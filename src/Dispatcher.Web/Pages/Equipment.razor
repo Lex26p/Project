@@ -6,6 +6,7 @@
 
 <GuardedContent Route="/equipment">
     <h1>Equipment</h1>
+    <p><a href="@($"/equipment/add?scope={selectedScope:D}")">Add or commission devices</a></p>
     @if (scopes is null)
     {
         <p>Loading equipment…</p>

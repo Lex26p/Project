@@ -25,6 +25,7 @@ builder.Services.AddTransient<HistoryApiClient>();
 builder.Services.AddTransient<EventApiClient>();
 builder.Services.AddTransient<DashboardApiClient>();
 builder.Services.AddTransient<EditorApiClient>();
+builder.Services.AddTransient<EquipmentCommissioningApiClient>();
 builder.Services.AddTransient<KioskApiClient>();
 
 await builder.Build().RunAsync();

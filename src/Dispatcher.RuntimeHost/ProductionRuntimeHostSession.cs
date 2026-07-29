@@ -2,6 +2,7 @@ using Dispatcher.Alarm;
 using Dispatcher.Configuration;
 using Dispatcher.Core;
 using Dispatcher.Events;
+using Dispatcher.Equipment;
 using Dispatcher.Facilities;
 using Dispatcher.History;
 using Dispatcher.Modbus;
@@ -27,6 +28,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private readonly IModbusTcpConnectionFactory modbusConnectionFactory;
     private readonly ISnmpDatagramClientFactory snmpClientFactory;
     private readonly IProtocolSecretResolver protocolSecretResolver;
+    private readonly EquipmentDiagnosticWorker? diagnosticWorker;
     private bool started;
     private bool stopped;
 
@@ -41,7 +43,8 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         IWallClock wallClock,
         IModbusTcpConnectionFactory modbusConnectionFactory,
         ISnmpDatagramClientFactory snmpClientFactory,
-        IProtocolSecretResolver protocolSecretResolver)
+        IProtocolSecretResolver protocolSecretResolver,
+        EquipmentDiagnosticWorker? diagnosticWorker)
     {
         this.dataSource = dataSource;
         this.core = core;
@@ -54,6 +57,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         this.modbusConnectionFactory = modbusConnectionFactory;
         this.snmpClientFactory = snmpClientFactory;
         this.protocolSecretResolver = protocolSecretResolver;
+        this.diagnosticWorker = diagnosticWorker;
     }
 
     public static ProductionRuntimeHostSession Create(
@@ -175,6 +179,48 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 maxProtocolSources: Math.Min(
                     options.MaxProtocolSources,
                     options.SchedulerMaxBindings - 1));
+        if ((options.EquipmentDatabaseRole is null) != (options.StagingSecretKey is null))
+        {
+            throw new InvalidOperationException(
+                "Runtime equipment diagnostic role and staging secret key must be configured together.");
+        }
+
+        var actualModbusFactory = modbusConnectionFactory ?? new TcpModbusConnectionFactory();
+        var actualSnmpFactory = snmpClientFactory ?? new UdpSnmpDatagramClientFactory();
+        var environmentResolver = protocolSecretResolver ??
+            new EnvironmentProtocolSecretResolver(options.WorkloadIdentity);
+        IProtocolSecretResolver actualSecretResolver = environmentResolver;
+        EquipmentDiagnosticWorker? diagnosticWorker = null;
+        if (options.EquipmentDatabaseRole is not null && options.StagingSecretKey is not null)
+        {
+            var equipmentStaging = new EquipmentStagingStore(
+                dataSource,
+                options.EquipmentDatabaseRole,
+                wallClock);
+            var databaseResolver = new DatabaseProtocolSecretResolver(
+                equipmentStaging,
+                FacilityScopeId.From(options.ScopeId.Value),
+                new StagingSecretProtector(options.StagingSecretKey),
+                options.WorkloadIdentity);
+            actualSecretResolver = new CompositeProtocolSecretResolver(
+                environmentResolver,
+                databaseResolver);
+            diagnosticWorker = new EquipmentDiagnosticWorker(
+                equipmentStaging,
+                FacilityScopeId.From(options.ScopeId.Value),
+                options.WorkloadIdentity.Value,
+                options.DiagnosticLeaseDuration,
+                options.DiagnosticPollInterval,
+                new ProtocolCommissioningLimits(options.ModbusLimits, options.SnmpLimits),
+                options.SnmpWireLimits,
+                options.WorkloadIdentity,
+                options.CreateProtocolIoLimits(),
+                actualSecretResolver,
+                actualModbusFactory,
+                actualSnmpFactory,
+                wallClock);
+        }
+
         return new ProductionRuntimeHostSession(
             dataSource,
             core,
@@ -184,10 +230,10 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             options,
             monotonicClock,
             wallClock,
-            modbusConnectionFactory ?? new TcpModbusConnectionFactory(),
-            snmpClientFactory ?? new UdpSnmpDatagramClientFactory(),
-            protocolSecretResolver ??
-                new EnvironmentProtocolSecretResolver(options.WorkloadIdentity));
+            actualModbusFactory,
+            actualSnmpFactory,
+            actualSecretResolver,
+            diagnosticWorker);
     }
 
     public async Task<Result> StartAsync(
@@ -271,6 +317,9 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private async Task<Result<RuntimeHostSessionCycleResult>> RunConfigurationReconciliationAsync(
         CancellationToken cancellationToken)
     {
+        using var diagnosticCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var diagnosticTask = diagnosticWorker?.RunAsync(diagnosticCancellation.Token);
         ActivatedRuntimeConfiguration? activeConfiguration = null;
         SimulatorPollingSource? legacySource = null;
         var restored = await configurationReconciler!.RestoreAsync(cancellationToken).ConfigureAwait(false);
@@ -328,6 +377,15 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (diagnosticTask?.IsCompleted == true)
+                {
+                    var diagnosticResult = await diagnosticTask.ConfigureAwait(false);
+                    if (diagnosticResult.IsFailure)
+                    {
+                        return Result.Failure<RuntimeHostSessionCycleResult>(diagnosticResult.Error!);
+                    }
+                }
+
                 if (workers is not null)
                 {
                     var interval = Task.Delay(
@@ -355,8 +413,16 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 {
                     if (workers is null)
                     {
-                        return Result.Success(new RuntimeHostSessionCycleResult(
-                            RuntimeHostSessionCycleStatus.NoActiveManifest));
+                        if (diagnosticTask is null)
+                        {
+                            return Result.Success(new RuntimeHostSessionCycleResult(
+                                RuntimeHostSessionCycleStatus.NoActiveManifest));
+                        }
+
+                        await Task.Delay(
+                            options.ConfigurationReconciliationInterval,
+                            cancellationToken).ConfigureAwait(false);
+                        continue;
                     }
 
                     continue;
@@ -397,10 +463,16 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         }
         finally
         {
+            diagnosticCancellation.Cancel();
             if (workers is not null)
             {
                 _ = await workers.StopAsync().ConfigureAwait(false);
                 await workers.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (diagnosticTask is not null)
+            {
+                _ = await diagnosticTask.ConfigureAwait(false);
             }
         }
     }
