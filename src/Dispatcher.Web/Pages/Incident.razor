@@ -1,0 +1,131 @@
+@page "/incidents/{IncidentId:guid}"
+@page "/incidents/{IncidentId:guid}/tasks/{TaskId:guid}"
+@inject IncidentMyWorkApiClient Api
+@inject IdentitySessionState Session
+
+<PageTitle>Incident</PageTitle>
+
+<GuardedContent Route="@($"/incidents/{IncidentId:D}")">
+    <section class="incident-summary" aria-labelledby="incident-title">
+        <header class="workspace-page-heading">
+            <div>
+                <span class="workspace-page-heading__eyebrow">Event response</span>
+                <h1 id="incident-title">Incident</h1>
+            </div>
+            @if (incident is not null)
+            {
+                <UiBadge Text="@($"v{incident.Version}")" Tone="@UiBadgeTone.Information" />
+            }
+        </header>
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <UiStatePanel Kind="@UiStateKind.Error"
+                          Title="Incident unavailable"
+                          Message="@error"
+                          ActionLabel="Retry"
+                          OnAction="@LoadAsync" />
+        }
+        else if (loading)
+        {
+            <UiStatePanel Kind="@UiStateKind.Loading"
+                          Title="Loading incident"
+                          Message="Reading the compact incident summary." />
+        }
+        else if (incident is null)
+        {
+            <UiStatePanel Kind="@UiStateKind.NotFound"
+                          Title="Incident not found"
+                          Message="The incident does not exist or is no longer available." />
+        }
+        else
+        {
+            <article class="incident-card" data-incident-id="@incident.IncidentId">
+                <header>
+                    <span>@Short(incident.IncidentId)</span>
+                    <h2>@incident.Summary</h2>
+                </header>
+                <dl>
+                    <dt>Coordinator</dt>
+                    <dd>@Short(incident.CoordinatorPersonId)</dd>
+                    <dt>Created</dt>
+                    <dd>@incident.CreatedAt.ToLocalTime().ToString("g")</dd>
+                    <dt>Updated</dt>
+                    <dd>@incident.UpdatedAt.ToLocalTime().ToString("g")</dd>
+                </dl>
+
+                <section>
+                    <h3>Available source links</h3>
+                    @if (incident.Sources.Count == 0)
+                    {
+                        <p>No source is visible with the current permissions.</p>
+                    }
+                    else
+                    {
+                        <ul class="incident-source-list">
+                            @foreach (var source in incident.Sources)
+                            {
+                                <li>
+                                    <a href="@source.Route">
+                                        Event @Short(source.EventId)
+                                    </a>
+                                    <span>Point @Short(source.PointId)</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </section>
+
+                @if (TaskId is { } taskId)
+                {
+                    <a class="incident-task-link" href="@($"/my-work?taskId={taskId:D}")">
+                        Open task in My Work
+                    </a>
+                }
+            </article>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    [Parameter]
+    public Guid IncidentId { get; set; }
+
+    [Parameter]
+    public Guid? TaskId { get; set; }
+
+    private IncidentSummaryPayload? incident;
+    private bool loading = true;
+    private string? error;
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        error = null;
+        var result = await Api.ReadIncidentAsync(IncidentId);
+        loading = false;
+        switch (result.Status)
+        {
+            case IncidentMyWorkApiStatus.Available:
+                incident = result.Payload;
+                break;
+            case IncidentMyWorkApiStatus.SessionExpired:
+                Session.Invalidate();
+                error = "The session expired. Sign in again.";
+                break;
+            case IncidentMyWorkApiStatus.Forbidden:
+                error = "The current session cannot read this incident.";
+                break;
+            case IncidentMyWorkApiStatus.NotFound:
+                incident = null;
+                break;
+            default:
+                error = "The server could not read the incident.";
+                break;
+        }
+    }
+
+    private static string Short(Guid value) => value.ToString("N")[..8];
+}

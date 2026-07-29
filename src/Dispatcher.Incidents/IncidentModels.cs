@@ -61,6 +61,8 @@ public sealed record IncidentTaskSnapshot(
     PersonId AssignedPersonId,
     IncidentTaskState State,
     StateVersion Version,
+    DateTimeOffset? DueAt,
+    string? LastTransitionReason,
     DateTimeOffset UpdatedAt);
 
 public sealed record CreateIncidentRequest(
@@ -81,13 +83,15 @@ public sealed record CreateIncidentTaskRequest(
     string Summary,
     PersonId AssignedPersonId,
     StateVersion ExpectedIncidentVersion,
-    string IdempotencyKey);
+    string IdempotencyKey,
+    DateTimeOffset? DueAt = null);
 
 public sealed record TransitionIncidentTaskRequest(
     IncidentTaskId TaskId,
     StateVersion ExpectedVersion,
     string IdempotencyKey,
-    PersonId? TransferTo = null);
+    PersonId? TransferTo = null,
+    string? Reason = null);
 
 public enum IncidentCommandDisposition { Applied = 1, Replay = 2 }
 public sealed record IncidentCommandResult<T>(T Value, IncidentCommandDisposition Disposition);

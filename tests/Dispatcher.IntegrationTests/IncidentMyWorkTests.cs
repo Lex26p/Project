@@ -75,17 +75,24 @@ public sealed class IncidentMyWorkTests
         Assert.Single(linked.Value.Value.SourceLinks);
 
         var taskId = IncidentTaskId.New();
-        var task = (await incidents.CreateTaskAsync(
-            commandSession,
-            new CreateIncidentTaskRequest(
-                taskId, incidentId, "Inspect source", FirstAssignee,
-                linked.Value.Value.Version, "incident-task-create-1"))).Value.Value;
+        var createTaskRequest = new CreateIncidentTaskRequest(
+            taskId, incidentId, "Inspect source", FirstAssignee,
+            linked.Value.Value.Version, "incident-task-create-1", Now.AddHours(-1));
+        var taskResult = await incidents.CreateTaskAsync(commandSession, createTaskRequest);
+        var taskReplay = await incidents.CreateTaskAsync(commandSession, createTaskRequest);
+        var task = taskResult.Value.Value;
+        Assert.Equal(IncidentCommandDisposition.Applied, taskResult.Value.Disposition);
+        Assert.Equal(IncidentCommandDisposition.Replay, taskReplay.Value.Disposition);
+        Assert.Equal(Now.AddHours(-1), task.DueAt);
         var myWorkStore = new MyWorkStore(dataSource, PostgreSqlClusterFixture.OwnerARole);
         var myWork = new MyWorkService(myWorkStore, clock);
         Assert.True((await myWork.AcceptSourceAssignmentAsync(WorkAssignmentProjection.FromIncidentTask(task))).IsSuccess);
         var visible = await myWork.ReadAsync(new MyWorkUserContext(
             Session(MyWorkPermissions.Read, IncidentPermissions.Read), FirstAssignee));
         Assert.Equal(taskId.Value, Assert.Single(visible.Value).SourceItemId);
+        var counters = await myWork.ReadCountersAsync(new MyWorkUserContext(
+            Session(MyWorkPermissions.Read, IncidentPermissions.Read), FirstAssignee));
+        Assert.Equal(new MyWorkCounters(1, 1, 1, 1), counters.Value);
         var filtered = await myWork.ReadAsync(new MyWorkUserContext(
             Session(MyWorkPermissions.Read), FirstAssignee));
         Assert.Empty(filtered.Value);
@@ -98,8 +105,9 @@ public sealed class IncidentMyWorkTests
         var transferred = (await incidents.TransferTaskAsync(
             firstContext,
             new TransitionIncidentTaskRequest(
-                taskId, accepted.Version, "incident-task-transfer-1", SecondAssignee))).Value.Value;
+                taskId, accepted.Version, "incident-task-transfer-1", SecondAssignee, "Second line response"))).Value.Value;
         Assert.Equal(SecondAssignee, transferred.AssignedPersonId);
+        Assert.Equal("Second line response", transferred.LastTransitionReason);
         Assert.True((await myWork.AcceptSourceAssignmentAsync(WorkAssignmentProjection.FromIncidentTask(transferred))).IsSuccess);
         Assert.Empty((await myWork.ReadAsync(new MyWorkUserContext(
             Session(MyWorkPermissions.Read, IncidentPermissions.Read), FirstAssignee))).Value);
@@ -107,9 +115,16 @@ public sealed class IncidentMyWorkTests
         var secondContext = new IncidentUserContext(Session(IncidentPermissions.TransitionTask), SecondAssignee);
         var returned = (await incidents.ReturnTaskAsync(
             secondContext,
-            new TransitionIncidentTaskRequest(taskId, transferred.Version, "incident-task-return-1"))).Value.Value;
+            new TransitionIncidentTaskRequest(
+                taskId, transferred.Version, "incident-task-return-1", Reason: "Requires coordinator decision"))).Value.Value;
         Assert.Equal(IncidentTaskState.Returned, returned.State);
         Assert.Equal(Coordinator, returned.AssignedPersonId);
+        Assert.Equal("Requires coordinator decision", returned.LastTransitionReason);
+        var repeatedReturn = await incidents.ReturnTaskAsync(
+            new IncidentUserContext(Session(IncidentPermissions.TransitionTask), Coordinator),
+            new TransitionIncidentTaskRequest(
+                taskId, returned.Version, "incident-task-return-invalid", Reason: "Still unavailable"));
+        Assert.Equal("incident.task_state", repeatedReturn.Error?.Code.Value);
         var finalProjection = WorkAssignmentProjection.FromIncidentTask(returned);
         Assert.True((await myWork.AcceptSourceAssignmentAsync(finalProjection)).IsSuccess);
         Assert.True((await myWork.RebuildOwnerAsync("incidents", [finalProjection])).IsSuccess);
@@ -123,6 +138,10 @@ public sealed class IncidentMyWorkTests
         Assert.Equal(
             AlarmAcknowledgementState.Unacknowledged,
             Assert.Single(await alarmStore.ReadOccurrencesAsync(ScopeId)).Acknowledgement.State);
+        await using var reasonCommand = dataSource.CreateCommand(
+            "SELECT reason FROM incidents.mutation_audit WHERE task_id = @task AND action = 'return-task';");
+        reasonCommand.Parameters.AddWithValue("task", taskId.Value);
+        Assert.Equal("Requires coordinator decision", await reasonCommand.ExecuteScalarAsync());
     }
 
     private static async Task<AlarmOccurrenceSnapshot> RaiseAlarmAsync(AlarmStore store, FixedClock clock)

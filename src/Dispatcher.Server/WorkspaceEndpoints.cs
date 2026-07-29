@@ -1,4 +1,6 @@
 using Dispatcher.Dashboards;
+using Dispatcher.Incidents;
+using Dispatcher.MyWork;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
 using Dispatcher.Workspace;
@@ -83,6 +85,31 @@ public static class WorkspaceEndpoints
             }
 
             var path = route.Split('?', 2)[0];
+            if (string.Equals(path, "/my-work", StringComparison.OrdinalIgnoreCase))
+            {
+                var access = SessionAuthorization.AuthorizeAccess(
+                    session,
+                    MyWorkPermissions.Read,
+                    SystemClock.Instance);
+                return ToHttpResult(access.IsSuccess
+                    ? Result.Success(true)
+                    : Result.Failure<bool>(access.Error!));
+            }
+
+            var incidentSegments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (incidentSegments.Length >= 2 &&
+                string.Equals(incidentSegments[0], "incidents", StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParse(incidentSegments[1], out _))
+            {
+                var access = SessionAuthorization.AuthorizeAccess(
+                    session,
+                    IncidentPermissions.Read,
+                    SystemClock.Instance);
+                return ToHttpResult(access.IsSuccess
+                    ? Result.Success(true)
+                    : Result.Failure<bool>(access.Error!));
+            }
+
             if (string.Equals(
                     path,
                     "/dashboards",

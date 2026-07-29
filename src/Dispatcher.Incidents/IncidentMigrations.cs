@@ -9,7 +9,8 @@ public static class IncidentMigrations
 
     public static ModuleMigrationPlan CreatePlan(string databaseRole) => new(
         Owner, Schema, databaseRole,
-        [new MigrationStep(1, "incident nucleus source links tasks commands and audit", $"""
+        [
+        new MigrationStep(1, "incident nucleus source links tasks commands and audit", $"""
         CREATE TABLE {Schema}.incident (
             incident_id uuid PRIMARY KEY,
             summary text NOT NULL CHECK (length(trim(summary)) BETWEEN 1 AND 500),
@@ -57,5 +58,18 @@ public static class IncidentMigrations
             changed_at timestamp with time zone NOT NULL
         );
         CREATE INDEX incident_audit_idx ON {Schema}.mutation_audit (incident_id, changed_at, audit_id);
-        """)]);
+        """),
+        new MigrationStep(2, "task due reason and auditable transition reason", $"""
+        ALTER TABLE {Schema}.task
+            ADD COLUMN due_at timestamp with time zone NULL,
+            ADD COLUMN last_transition_reason text NULL
+                CHECK (last_transition_reason IS NULL OR length(trim(last_transition_reason)) BETWEEN 1 AND 500);
+        ALTER TABLE {Schema}.mutation_audit
+            ADD COLUMN reason text NULL
+                CHECK (reason IS NULL OR length(trim(reason)) BETWEEN 1 AND 500);
+        CREATE INDEX task_due_idx
+            ON {Schema}.task (assigned_person_id, due_at, task_id)
+            WHERE due_at IS NOT NULL;
+        """)
+        ]);
 }

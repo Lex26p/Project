@@ -27,8 +27,8 @@
 | C14 | Complete | Engineering staging, configuration publication и durable RuntimeHost diagnostics реализованы и приняты |
 | C14A | Complete | Decimal telemetry end-to-end, offline migrations и semantic version 2 реализованы и приняты |
 | C15 | Complete | Реальные Modbus/SNMP happy path, bounded disconnect, Bad/Stale recovery и session fence приняты |
-| C16 | Ready | Event Dispatcher C09 выполнен |
-| C17 | Planned | После Incident/My Work |
+| C16 | Complete | Incident/My Work production API, Web, persistence и acceptance tests реализованы и приняты |
+| C17 | Ready | Incident/My Work C16 выполнен |
 | C18 | Ready | Web shell C08 и Event core C09 выполнены |
 | C19 | Planned | После Notifications/Web shell |
 | C20 | Ready | Dashboard/mimic/kiosk C10 и межпроцессный Simulator E2E C07 выполнены |

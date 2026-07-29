@@ -1,7 +1,9 @@
 @page "/events"
 @implements IAsyncDisposable
 @inject EventApiClient Api
+@inject IncidentMyWorkApiClient IncidentApi
 @inject IdentitySessionState Session
+@inject NavigationManager Navigation
 
 <PageTitle>Events</PageTitle>
 
@@ -157,6 +159,7 @@
     private string? error;
     private bool loading = true;
     private bool actionBusy;
+    private bool createIncidentTask = true;
     private bool resyncNotice;
     private ulong? historyNextAfter;
     private ulong? historyNextUpper;
@@ -446,6 +449,15 @@
                                     Unshelve
                                 </button>
                             }
+                            <label>
+                                <input type="checkbox" @bind="createIncidentTask" />
+                                <span>Create a My Work task</span>
+                            </label>
+                            <button type="button"
+                                    disabled="@actionBusy"
+                                    @onclick="CreateIncidentAsync">
+                                Create incident
+                            </button>
                         </div>
                     }
                     else
@@ -630,6 +642,52 @@
                 await InvokeAsync(
                     StateHasChanged);
             }
+        }
+    }
+
+    private async Task CreateIncidentAsync()
+    {
+        if (selected is null || mode != "Realtime")
+        {
+            return;
+        }
+
+        actionBusy = true;
+        error = null;
+        var result =
+            await IncidentApi.CreateFromOccurrenceAsync(
+                scopeId,
+                selected.OccurrenceId,
+                $"Investigate {Short(selected.PointId)}",
+                createIncidentTask,
+                createIncidentTask
+                    ? DateTimeOffset.UtcNow.AddHours(4)
+                    : null,
+                cancellation.Token);
+        actionBusy = false;
+        switch (result.Status)
+        {
+            case IncidentMyWorkApiStatus.Available:
+                Navigation.NavigateTo(
+                    $"/incidents/{result.Payload!.Incident.IncidentId:D}");
+                break;
+            case IncidentMyWorkApiStatus.SessionExpired:
+                Session.Invalidate();
+                error =
+                    "The session expired. Sign in again.";
+                break;
+            case IncidentMyWorkApiStatus.Forbidden:
+                error =
+                    "The current session cannot create an incident from this occurrence.";
+                break;
+            case IncidentMyWorkApiStatus.Conflict:
+                error =
+                    "The incident request conflicted with current state. Refresh and retry.";
+                break;
+            default:
+                error =
+                    "The server could not create the incident.";
+                break;
         }
     }
 

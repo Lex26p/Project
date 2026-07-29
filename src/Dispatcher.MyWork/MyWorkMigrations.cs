@@ -9,7 +9,8 @@ public static class MyWorkMigrations
 
     public static ModuleMigrationPlan CreatePlan(string databaseRole) => new(
         Owner, Schema, databaseRole,
-        [new MigrationStep(1, "rebuildable owner assignment projection", $"""
+        [
+        new MigrationStep(1, "rebuildable owner assignment projection", $"""
         CREATE TABLE {Schema}.assignment_projection (
             source_owner text NOT NULL,
             source_kind text NOT NULL,
@@ -26,5 +27,15 @@ public static class MyWorkMigrations
         );
         CREATE INDEX assignment_person_idx
             ON {Schema}.assignment_projection (assigned_person_id, updated_at DESC, source_owner, source_item_id);
-        """)]);
+        """),
+        new MigrationStep(2, "assignment due and transition reason projection", $"""
+        ALTER TABLE {Schema}.assignment_projection
+            ADD COLUMN due_at timestamp with time zone NULL,
+            ADD COLUMN last_transition_reason text NULL
+                CHECK (last_transition_reason IS NULL OR length(trim(last_transition_reason)) BETWEEN 1 AND 500);
+        CREATE INDEX assignment_due_idx
+            ON {Schema}.assignment_projection (assigned_person_id, due_at, source_owner, source_item_id)
+            WHERE due_at IS NOT NULL;
+        """)
+        ]);
 }

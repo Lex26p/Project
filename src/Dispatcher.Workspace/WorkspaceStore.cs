@@ -53,6 +53,41 @@ public sealed partial class WorkspaceStore
         CancellationToken cancellationToken = default) =>
         ReadProfileAsync(viewerAccountId, targetAccountId, false, cancellationToken);
 
+    public Task<PersonProfile?> ReadVisibleProfileByPersonAsync(
+        AccountId viewerAccountId,
+        PersonId targetPersonId,
+        CancellationToken cancellationToken = default) =>
+        QuerySingleAsync(
+            $"""
+            SELECT target.account_id, p.person_id, p.display_name, p.title, p.availability, p.visibility
+            FROM {WorkspaceMigrations.Schema}.account target
+            JOIN {WorkspaceMigrations.Schema}.person p ON p.person_id = target.person_id
+            WHERE target.person_id = @target_person_id
+              AND (target.account_id = @viewer_account_id OR
+                   (p.visibility = 1 AND EXISTS (
+                    SELECT 1
+                    FROM {WorkspaceMigrations.Schema}.account_membership viewer_membership
+                    JOIN {WorkspaceMigrations.Schema}.account_membership target_membership
+                      ON target_membership.audience_kind = 3
+                     AND target_membership.audience_key = viewer_membership.audience_key
+                     AND target_membership.account_id = target.account_id
+                    WHERE viewer_membership.account_id = @viewer_account_id
+                      AND viewer_membership.audience_kind = 3)));
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("viewer_account_id", viewerAccountId.Value);
+                command.Parameters.AddWithValue("target_person_id", targetPersonId.Value);
+            },
+            reader => new PersonProfile(
+                AccountId.From(reader.GetGuid(0)),
+                PersonId.From(reader.GetGuid(1)),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                (PersonAvailability)reader.GetInt16(4),
+                (ProfileVisibility)reader.GetInt16(5)),
+            cancellationToken);
+
     public async Task<WorkspacePreferences> ReadPreferencesAsync(
         AccountId accountId,
         CancellationToken cancellationToken = default)

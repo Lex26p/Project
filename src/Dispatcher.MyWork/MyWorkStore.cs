@@ -115,7 +115,7 @@ public sealed class MyWorkStore
         await using var command = new NpgsqlCommand(
             $"""
             SELECT source_owner, source_kind, source_item_id, source_version, assigned_person_id,
-                   summary, state, route, required_permissions, updated_at
+                   summary, state, route, required_permissions, due_at, last_transition_reason, updated_at
             FROM {MyWorkMigrations.Schema}.assignment_projection
             WHERE assigned_person_id = @person
             ORDER BY updated_at DESC, source_owner, source_item_id;
@@ -127,7 +127,10 @@ public sealed class MyWorkStore
             results.Add(new ProjectionDto(
                 reader.GetString(0), reader.GetString(1), reader.GetGuid(2), checked((ulong)reader.GetInt64(3)),
                 reader.GetGuid(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
-                reader.GetFieldValue<string[]>(8), reader.GetFieldValue<DateTimeOffset>(9)).ToModel());
+                reader.GetFieldValue<string[]>(8),
+                reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.GetFieldValue<DateTimeOffset>(11)).ToModel());
         }
 
         await reader.DisposeAsync().ConfigureAwait(false);
@@ -144,7 +147,10 @@ public sealed class MyWorkStore
             string.IsNullOrWhiteSpace(value.Summary) || value.Summary.Length > 500 ||
             string.IsNullOrWhiteSpace(value.State) || value.State.Length > 100 ||
             string.IsNullOrWhiteSpace(value.Route) || !value.Route.StartsWith('/') ||
-            value.RequiredPermissions.Count == 0 || value.UpdatedAt.Offset != TimeSpan.Zero)
+            value.RequiredPermissions.Count == 0 ||
+            value.DueAt is { } dueAt && dueAt.Offset != TimeSpan.Zero ||
+            value.LastTransitionReason?.Length > 500 ||
+            value.UpdatedAt.Offset != TimeSpan.Zero)
         {
             return Failure("my_work.projection_invalid", "Work assignment projection is invalid.");
         }
@@ -175,8 +181,9 @@ public sealed class MyWorkStore
             $"""
             INSERT INTO {MyWorkMigrations.Schema}.assignment_projection
                 (source_owner, source_kind, source_item_id, source_version, assigned_person_id,
-                 summary, state, route, required_permissions, updated_at, fingerprint)
-            VALUES (@owner, @kind, @item, @version, @person, @summary, @state, @route, @permissions, @updated, @fingerprint)
+                 summary, state, route, required_permissions, due_at, last_transition_reason, updated_at, fingerprint)
+            VALUES (@owner, @kind, @item, @version, @person, @summary, @state, @route, @permissions,
+                    @due, @reason, @updated, @fingerprint)
             ON CONFLICT (source_owner, source_item_id) DO UPDATE SET
                 source_kind = EXCLUDED.source_kind,
                 source_version = EXCLUDED.source_version,
@@ -185,6 +192,8 @@ public sealed class MyWorkStore
                 state = EXCLUDED.state,
                 route = EXCLUDED.route,
                 required_permissions = EXCLUDED.required_permissions,
+                due_at = EXCLUDED.due_at,
+                last_transition_reason = EXCLUDED.last_transition_reason,
                 updated_at = EXCLUDED.updated_at,
                 fingerprint = EXCLUDED.fingerprint;
             """, connection, transaction);
@@ -197,6 +206,8 @@ public sealed class MyWorkStore
         command.Parameters.AddWithValue("state", dto.State);
         command.Parameters.AddWithValue("route", dto.Route);
         command.Parameters.AddWithValue("permissions", dto.RequiredPermissions);
+        command.Parameters.AddWithValue("due", dto.DueAt is null ? DBNull.Value : dto.DueAt.Value);
+        command.Parameters.AddWithValue("reason", dto.LastTransitionReason is null ? DBNull.Value : dto.LastTransitionReason);
         command.Parameters.AddWithValue("updated", dto.UpdatedAt);
         command.Parameters.AddWithValue("fingerprint", fingerprint);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -221,16 +232,18 @@ public sealed class MyWorkStore
     private sealed record ProjectionDto(
         string SourceOwner, string SourceKind, Guid SourceItemId, ulong SourceVersion,
         Guid AssignedPersonId, string Summary, string State, string Route,
-        string[] RequiredPermissions, DateTimeOffset UpdatedAt)
+        string[] RequiredPermissions, DateTimeOffset? DueAt, string? LastTransitionReason, DateTimeOffset UpdatedAt)
     {
         public static ProjectionDto From(WorkAssignmentProjection value) => new(
             value.SourceOwner, value.SourceKind, value.SourceItemId, value.SourceVersion.Value,
             value.AssignedPersonId.Value, value.Summary, value.State, value.Route,
-            value.RequiredPermissions.Select(permission => permission.Value).ToArray(), value.UpdatedAt);
+            value.RequiredPermissions.Select(permission => permission.Value).ToArray(),
+            value.DueAt, value.LastTransitionReason, value.UpdatedAt);
 
         public WorkAssignmentProjection ToModel() => new(
             SourceOwner, SourceKind, SourceItemId, StateVersion.From(SourceVersion),
             PersonId.From(AssignedPersonId), Summary, State, Route,
-            RequiredPermissions.Select(PermissionCode.From).ToArray(), UpdatedAt);
+            RequiredPermissions.Select(PermissionCode.From).ToArray(),
+            DueAt, LastTransitionReason, UpdatedAt);
     }
 }

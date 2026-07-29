@@ -16,13 +16,15 @@ public sealed record WorkAssignmentProjection(
     string State,
     string Route,
     IReadOnlyList<PermissionCode> RequiredPermissions,
+    DateTimeOffset? DueAt,
+    string? LastTransitionReason,
     DateTimeOffset UpdatedAt)
 {
     public static WorkAssignmentProjection FromIncidentTask(IncidentTaskSnapshot task) => new(
         "incidents", "incident-task", task.TaskId.Value, task.Version, task.AssignedPersonId,
         task.Summary, task.State.ToString(),
         $"/incidents/{task.IncidentId.Value}/tasks/{task.TaskId.Value}",
-        [IncidentPermissions.Read], task.UpdatedAt);
+        [IncidentPermissions.Read], task.DueAt, task.LastTransitionReason, task.UpdatedAt);
 
     public static WorkAssignmentProjection FromMaintenanceWorkOrder(MaintenanceWorkOrderSnapshot workOrder) => new(
         "maintenance",
@@ -34,10 +36,18 @@ public sealed record WorkAssignmentProjection(
         workOrder.State.ToString(),
         $"/maintenance/work-orders/{workOrder.WorkOrderId.Value}",
         [MaintenancePermissions.Read(workOrder.ScopeId)],
+        null,
+        null,
         workOrder.UpdatedAt);
 }
 
 public sealed record MyWorkUserContext(SessionSnapshot Session, PersonId PersonId);
+
+public sealed record MyWorkCounters(
+    int Overdue,
+    int Today,
+    int RequiresDecision,
+    int AssignedToMe);
 
 public static class MyWorkPermissions
 {

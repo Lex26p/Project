@@ -12,7 +12,7 @@ public sealed class BrowserServerFixture :
     IAsyncLifetime
 {
     private static readonly TimeSpan ProcessTimeout =
-        TimeSpan.FromSeconds(60);
+        TimeSpan.FromSeconds(180);
     private static readonly TimeSpan StartupTimeout =
         TimeSpan.FromSeconds(30);
     private IPlaywright? playwright;

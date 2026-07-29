@@ -93,7 +93,7 @@ public sealed class IncidentStore
 
         await WriteReceiptAndAuditAsync(
             connection, transaction, request.IdempotencyKey, "create", fingerprint, dto,
-            authorization, request.IncidentId, null, StateVersion.Initial, now, cancellationToken).ConfigureAwait(false);
+            authorization, request.IncidentId, null, StateVersion.Initial, now, null, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Result.Success(new IncidentCommandResult<IncidentSnapshot>(dto.ToModel(), IncidentCommandDisposition.Applied));
     }
@@ -150,7 +150,7 @@ public sealed class IncidentStore
         var link = new SourceLinkDto(
             IncidentSourceLinkId.New().Value, request.Event.EventId.Value, request.Event.OccurrenceId.Value,
             request.Event.ScopeId.Value, request.Event.PointId.Value,
-            $"/events/{request.Event.EventId.Value}",
+            $"/events?eventId={request.Event.EventId.Value:D}",
             ["events.dispatcher.read", $"runtime.point.p{request.Event.PointId.Value:N}.read"]);
         await using (var command = new NpgsqlCommand(
             $"""
@@ -185,7 +185,7 @@ public sealed class IncidentStore
             .ConfigureAwait(false);
         await WriteReceiptAndAuditAsync(
             connection, transaction, request.IdempotencyKey, "link-source", fingerprint, next,
-            authorization, request.IncidentId, null, StateVersion.From(next.Version), now, cancellationToken).ConfigureAwait(false);
+            authorization, request.IncidentId, null, StateVersion.From(next.Version), now, null, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Result.Success(new IncidentCommandResult<IncidentSnapshot>(next.ToModel(), IncidentCommandDisposition.Applied));
     }
@@ -208,6 +208,7 @@ public sealed class IncidentStore
             TaskId = request.TaskId.Value, IncidentId = request.IncidentId.Value,
             Summary = request.Summary.Trim(), AssignedTo = request.AssignedPersonId.Value,
             ExpectedVersion = request.ExpectedIncidentVersion.Value,
+            request.DueAt,
         }));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -235,16 +236,22 @@ public sealed class IncidentStore
         }
 
         var now = UtcNow();
+        if (request.DueAt is { } dueAt && dueAt.Offset != TimeSpan.Zero)
+        {
+            return Failure<IncidentCommandResult<IncidentTaskSnapshot>>(
+                "incident.task_due", "Task due time must use UTC.");
+        }
+
         var task = new TaskDto(
             request.TaskId.Value, request.IncidentId.Value, request.Summary.Trim(), request.AssignedPersonId.Value,
-            (int)IncidentTaskState.Offered, StateVersion.Initial.Value, now);
+            (int)IncidentTaskState.Offered, StateVersion.Initial.Value, request.DueAt, null, now);
         await WriteTaskAsync(connection, transaction, task, insert: true, cancellationToken).ConfigureAwait(false);
         var incidentVersion = StateVersion.From(incident.Version).Next();
         await UpdateIncidentVersionAsync(connection, transaction, request.IncidentId, incidentVersion.Value, now, cancellationToken)
             .ConfigureAwait(false);
         await WriteReceiptAndAuditAsync(
             connection, transaction, request.IdempotencyKey, "create-task", fingerprint, task,
-            authorization, request.IncidentId, request.TaskId, StateVersion.Initial, now, cancellationToken).ConfigureAwait(false);
+            authorization, request.IncidentId, request.TaskId, StateVersion.Initial, now, null, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Result.Success(new IncidentCommandResult<IncidentTaskSnapshot>(task.ToModel(), IncidentCommandDisposition.Applied));
     }
@@ -293,7 +300,7 @@ public sealed class IncidentStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            $"SELECT task_id, incident_id, summary, assigned_person_id, state, version, updated_at FROM {IncidentMigrations.Schema}.task ORDER BY task_id;",
+            $"SELECT task_id, incident_id, summary, assigned_person_id, state, version, due_at, last_transition_reason, updated_at FROM {IncidentMigrations.Schema}.task ORDER BY task_id;",
             connection, transaction);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -326,12 +333,20 @@ public sealed class IncidentStore
                 "incident.task_transfer", "Transfer requires another target person.");
         }
 
+        if (action is "transfer-task" or "return-task" &&
+            (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Trim().Length > 500))
+        {
+            return Failure<IncidentCommandResult<IncidentTaskSnapshot>>(
+                "incident.task_reason", "Transfer and return require a reason of at most 500 characters.");
+        }
+
         var fingerprint = Fingerprint(JsonSerializer.Serialize(new
         {
             TaskId = request.TaskId.Value,
             ExpectedVersion = request.ExpectedVersion.Value,
             Actor = actor.Value,
             TransferTo = assignedTo?.Value,
+            Reason = request.Reason?.Trim(),
         }));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -371,6 +386,14 @@ public sealed class IncidentStore
             return Failure<IncidentCommandResult<IncidentTaskSnapshot>>("incident.task_state", "Only an offered task can be accepted.");
         }
 
+        if (action == "return-task" &&
+            current.State != (int)IncidentTaskState.Offered &&
+            current.State != (int)IncidentTaskState.Accepted)
+        {
+            return Failure<IncidentCommandResult<IncidentTaskSnapshot>>(
+                "incident.task_state", "Only an offered or accepted task can be returned.");
+        }
+
         var target = assignedTo?.Value;
         if (action == "return-task")
         {
@@ -384,12 +407,14 @@ public sealed class IncidentStore
             AssignedPersonId = target ?? current.AssignedPersonId,
             State = (int)state,
             Version = request.ExpectedVersion.Next().Value,
+            LastTransitionReason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim(),
             UpdatedAt = now,
         };
         await WriteTaskAsync(connection, transaction, next, insert: false, cancellationToken).ConfigureAwait(false);
         await WriteReceiptAndAuditAsync(
             connection, transaction, request.IdempotencyKey, action, fingerprint, next,
-            authorization, IncidentId.From(next.IncidentId), request.TaskId, StateVersion.From(next.Version), now, cancellationToken)
+            authorization, IncidentId.From(next.IncidentId), request.TaskId, StateVersion.From(next.Version), now,
+            next.LastTransitionReason, cancellationToken)
             .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Result.Success(new IncidentCommandResult<IncidentTaskSnapshot>(next.ToModel(), IncidentCommandDisposition.Applied));
@@ -482,7 +507,7 @@ public sealed class IncidentStore
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            $"SELECT task_id, incident_id, summary, assigned_person_id, state, version, updated_at FROM {IncidentMigrations.Schema}.task WHERE task_id = @id{(forUpdate ? " FOR UPDATE" : string.Empty)};",
+            $"SELECT task_id, incident_id, summary, assigned_person_id, state, version, due_at, last_transition_reason, updated_at FROM {IncidentMigrations.Schema}.task WHERE task_id = @id{(forUpdate ? " FOR UPDATE" : string.Empty)};",
             connection, transaction);
         command.Parameters.AddWithValue("id", taskId.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -491,7 +516,10 @@ public sealed class IncidentStore
 
     private static TaskDto ReadTask(NpgsqlDataReader reader) => new(
         reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetGuid(3), reader.GetInt16(4),
-        checked((ulong)reader.GetInt64(5)), reader.GetFieldValue<DateTimeOffset>(6));
+        checked((ulong)reader.GetInt64(5)),
+        reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
+        reader.IsDBNull(7) ? null : reader.GetString(7),
+        reader.GetFieldValue<DateTimeOffset>(8));
 
     private static async Task<Guid> ReadCoordinatorAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, IncidentId incidentId,
@@ -524,12 +552,15 @@ public sealed class IncidentStore
         var sql = insert
             ? $"""
               INSERT INTO {IncidentMigrations.Schema}.task
-                  (task_id, incident_id, summary, assigned_person_id, state, version, updated_at)
-              VALUES (@task, @incident, @summary, @assigned, @state, @version, @updated);
+                  (task_id, incident_id, summary, assigned_person_id, state, version,
+                   due_at, last_transition_reason, updated_at)
+              VALUES (@task, @incident, @summary, @assigned, @state, @version,
+                      @due, @reason, @updated);
               """
             : $"""
               UPDATE {IncidentMigrations.Schema}.task SET assigned_person_id = @assigned, state = @state,
-                  version = @version, updated_at = @updated WHERE task_id = @task;
+                  version = @version, due_at = @due, last_transition_reason = @reason,
+                  updated_at = @updated WHERE task_id = @task;
               """;
         await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("task", task.TaskId);
@@ -542,6 +573,8 @@ public sealed class IncidentStore
         command.Parameters.AddWithValue("assigned", task.AssignedPersonId);
         command.Parameters.AddWithValue("state", checked((short)task.State));
         command.Parameters.AddWithValue("version", checked((long)task.Version));
+        command.Parameters.AddWithValue("due", task.DueAt is null ? DBNull.Value : task.DueAt.Value);
+        command.Parameters.AddWithValue("reason", task.LastTransitionReason is null ? DBNull.Value : task.LastTransitionReason);
         command.Parameters.AddWithValue("updated", task.UpdatedAt);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -549,7 +582,7 @@ public sealed class IncidentStore
     private static async Task WriteReceiptAndAuditAsync<TDto>(
         NpgsqlConnection connection, NpgsqlTransaction transaction, string key, string action, string fingerprint,
         TDto result, AuthorizedMutation authorization, IncidentId incidentId, IncidentTaskId? taskId,
-        StateVersion resultingVersion, DateTimeOffset now, CancellationToken cancellationToken)
+        StateVersion resultingVersion, DateTimeOffset now, string? reason, CancellationToken cancellationToken)
     {
         await using (var command = new NpgsqlCommand(
             $"""
@@ -569,8 +602,8 @@ public sealed class IncidentStore
         await using var audit = new NpgsqlCommand(
             $"""
             INSERT INTO {IncidentMigrations.Schema}.mutation_audit
-                (audit_id, incident_id, task_id, session_id, subject_id, action, resulting_version, changed_at)
-            VALUES (@audit, @incident, @task, @session, @subject, @action, @version, @now);
+                (audit_id, incident_id, task_id, session_id, subject_id, action, resulting_version, changed_at, reason)
+            VALUES (@audit, @incident, @task, @session, @subject, @action, @version, @now, @reason);
             """, connection, transaction);
         audit.Parameters.AddWithValue("audit", Guid.NewGuid());
         audit.Parameters.AddWithValue("incident", incidentId.Value);
@@ -580,6 +613,7 @@ public sealed class IncidentStore
         audit.Parameters.AddWithValue("action", action);
         audit.Parameters.AddWithValue("version", checked((long)resultingVersion.Value));
         audit.Parameters.AddWithValue("now", now);
+        audit.Parameters.AddWithValue("reason", reason is null ? DBNull.Value : reason);
         await audit.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -629,11 +663,12 @@ public sealed class IncidentStore
 
     private sealed record TaskDto(
         Guid TaskId, Guid IncidentId, string Summary, Guid AssignedPersonId,
-        int State, ulong Version, DateTimeOffset UpdatedAt)
+        int State, ulong Version, DateTimeOffset? DueAt, string? LastTransitionReason, DateTimeOffset UpdatedAt)
     {
         public IncidentTaskSnapshot ToModel() => new(
             IncidentTaskId.From(TaskId), Dispatcher.Incidents.IncidentId.From(IncidentId), Summary,
-            PersonId.From(AssignedPersonId), (IncidentTaskState)State, StateVersion.From(Version), UpdatedAt);
+            PersonId.From(AssignedPersonId), (IncidentTaskState)State, StateVersion.From(Version),
+            DueAt, LastTransitionReason, UpdatedAt);
     }
 
     private sealed record Receipt<T>(T? Value) where T : class;

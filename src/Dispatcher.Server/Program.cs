@@ -115,6 +115,18 @@ if (eventEnabled)
         builder.Services.AddAlarmActionsServer(workspaceConnection!, alarmRole!);
     }
 }
+var incidentRole = builder.Configuration["Dispatcher:Incidents:DatabaseRole"];
+var myWorkRole = builder.Configuration["Dispatcher:MyWork:DatabaseRole"];
+var incidentMyWorkEnabled = eventEnabled && workspaceEnabled &&
+                            !string.IsNullOrWhiteSpace(incidentRole) &&
+                            !string.IsNullOrWhiteSpace(myWorkRole);
+if (incidentMyWorkEnabled)
+{
+    builder.Services.AddIncidentMyWorkServer(
+        workspaceConnection!,
+        incidentRole!,
+        myWorkRole!);
+}
 var dashboardRole = builder.Configuration["Dispatcher:Dashboards:DatabaseRole"];
 var dashboardMaxVisibleWindows = builder.Configuration.GetValue<int?>(
     "Dispatcher:Dashboards:MaxVisibleWindows");
@@ -299,6 +311,10 @@ if (eventEnabled)
     {
         app.MapAlarmActionsServer();
     }
+}
+if (incidentMyWorkEnabled)
+{
+    app.MapIncidentMyWorkServer();
 }
 if (dashboardEnabled)
 {

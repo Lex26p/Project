@@ -271,6 +271,26 @@ public sealed partial class EventStore
         return counters;
     }
 
+    public Task<OperationalEventRecord?> ReadAsync(
+        RuntimeScopeId scopeId,
+        OperationalEventId eventId,
+        CancellationToken cancellationToken = default) =>
+        ReadSingleAsync(
+            scopeId,
+            "event_id = @identity",
+            eventId.Value,
+            cancellationToken);
+
+    public Task<OperationalEventRecord?> ReadLatestForOccurrenceAsync(
+        RuntimeScopeId scopeId,
+        AlarmOccurrenceId occurrenceId,
+        CancellationToken cancellationToken = default) =>
+        ReadSingleAsync(
+            scopeId,
+            "occurrence_id = @identity",
+            occurrenceId.Value,
+            cancellationToken);
+
     public async Task<IReadOnlySet<PointId>> ReadKnownPointIdsAsync(
         RuntimeScopeId scopeId,
         CancellationToken cancellationToken = default)
@@ -415,6 +435,50 @@ public sealed partial class EventStore
         }
 
         return events;
+    }
+
+    private async Task<OperationalEventRecord?> ReadSingleAsync(
+        RuntimeScopeId scopeId,
+        string predicate,
+        Guid identity,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT event_id, event_position, point_id, occurrence_id, source_condition_version,
+                   priority, kind, occurred_at, accepted_at
+            FROM {EventMigrations.Schema}.journal_event
+            WHERE scope_id = @scope_id AND {predicate}
+            ORDER BY event_position DESC
+            LIMIT 1;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("scope_id", scopeId.Value);
+        command.Parameters.AddWithValue("identity", identity);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        OperationalEventRecord? result = null;
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result = new OperationalEventRecord(
+                OperationalEventId.From(reader.GetGuid(0)),
+                new EventJournalPosition(checked((ulong)reader.GetInt64(1))),
+                scopeId,
+                PointId.From(reader.GetGuid(2)),
+                AlarmOccurrenceId.From(reader.GetGuid(3)),
+                StateVersion.From(checked((ulong)reader.GetInt64(4))),
+                (AlarmPriority)reader.GetInt16(5),
+                (OperationalEventKind)reader.GetInt16(6),
+                reader.GetFieldValue<DateTimeOffset>(7),
+                reader.GetFieldValue<DateTimeOffset>(8));
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     private static async Task<IReadOnlyList<OccurrenceProjectionRecord>> ReadProjectionSnapshotAsync(

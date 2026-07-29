@@ -44,6 +44,25 @@ public sealed class MyWorkService
             .ToArray());
     }
 
+    public async Task<Result<MyWorkCounters>> ReadCountersAsync(
+        MyWorkUserContext? context,
+        CancellationToken cancellationToken = default)
+    {
+        var assignments = await ReadAsync(context, cancellationToken).ConfigureAwait(false);
+        if (assignments.IsFailure)
+        {
+            return Result.Failure<MyWorkCounters>(assignments.Error!);
+        }
+
+        var now = clock.GetUtcNow();
+        var today = now.UtcDateTime.Date;
+        return Result.Success(new MyWorkCounters(
+            assignments.Value.Count(item => item.DueAt is { } due && due < now),
+            assignments.Value.Count(item => item.DueAt is { } due && due.UtcDateTime.Date == today),
+            assignments.Value.Count(item => item.State is "Offered" or "Returned"),
+            assignments.Value.Count));
+    }
+
     private static Result<T> Failure<T>(string code, string message) =>
         Result.Failure<T>(new OperationError(ErrorCode.From(code), message));
 }

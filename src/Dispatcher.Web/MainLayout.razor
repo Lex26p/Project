@@ -32,6 +32,12 @@
 
         <div class="shell-header__actions">
             <ShellPreferenceControls />
+            @if (Session.IsAuthenticated)
+            {
+                <NavLink class="session-link" href="/my-work">
+                    <span>My Work</span>
+                </NavLink>
+            }
             <NavLink class="session-link" href="@SessionRoute">
                 <span class="session-link__indicator"
                       data-active="@Session.IsAuthenticated"

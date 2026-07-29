@@ -97,6 +97,15 @@ public sealed class BrowserScenario :
     private static readonly Guid CommissioningLocationId =
         Guid.Parse(
             "81000000-0000-0000-0000-000000000027");
+    private static readonly Guid IncidentId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000028");
+    private static readonly Guid IncidentTaskId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000029");
+    private static readonly Guid TransferPersonId =
+        Guid.Parse(
+            "81000000-0000-0000-0000-000000000030");
     private const string AccessToken =
         "browser-access-token";
     private const string RefreshToken =
@@ -107,6 +116,7 @@ public sealed class BrowserScenario :
     private bool c09Enabled;
     private bool c10Enabled;
     private bool c14Enabled;
+    private bool c16Enabled;
     private bool eventGap;
     private bool additionalOccurrence;
     private ulong occurrenceCursor = 1;
@@ -141,6 +151,10 @@ public sealed class BrowserScenario :
     private long c14ConfigurationVersion;
     private bool c14ConfigurationValidated;
     private bool c14ConfigurationPublished;
+    private bool incidentCreated;
+    private bool incidentTaskAssignedToCurrent = true;
+    private string incidentTaskState = "Offered";
+    private ulong incidentTaskVersion = 1;
 
     private BrowserScenario(
         IBrowserContext context,
@@ -182,6 +196,9 @@ public sealed class BrowserScenario :
 
     public static Guid CommissioningDefaultLocationId =>
         CommissioningLocationId;
+
+    public static Guid IncidentWorkflowId =>
+        IncidentId;
 
     public Guid PublishedDashboardRevisionId =>
         dashboardRevision == 1
@@ -252,6 +269,11 @@ public sealed class BrowserScenario :
     public void EnableC14()
     {
         c14Enabled = true;
+    }
+
+    public void EnableC16()
+    {
+        c16Enabled = true;
     }
 
     public void SetC14DiagnosticOutcome(
@@ -701,6 +723,25 @@ public sealed class BrowserScenario :
             return;
         }
 
+        if (c16Enabled &&
+            (path.StartsWith(
+                 "/api/incidents/",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/my-work",
+                 StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith(
+                 "/api/events/",
+                 StringComparison.OrdinalIgnoreCase) &&
+             path.EndsWith(
+                 "/incident",
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleC16Async(route, request, uri)
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (c09Enabled &&
             (path.StartsWith(
                  "/api/events/",
@@ -760,6 +801,156 @@ public sealed class BrowserScenario :
                 404)
             .ConfigureAwait(false);
     }
+
+    private async Task HandleC16Async(
+        IRoute route,
+        IRequest request,
+        Uri uri)
+    {
+        if (!IsAuthorized(request))
+        {
+            await StatusAsync(route, 401)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var path = uri.AbsolutePath;
+        if (path.StartsWith("/api/events/", StringComparison.OrdinalIgnoreCase) &&
+            path.EndsWith("/incident", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            incidentCreated = true;
+            incidentTaskAssignedToCurrent = true;
+            incidentTaskState = "Offered";
+            incidentTaskVersion = 1;
+            await JsonAsync(route, new
+            {
+                incident = IncidentPayload(),
+                task = IncidentTaskPayload(),
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (path.StartsWith("/api/incidents/", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, IncidentPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/transfer-candidates", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new[]
+            {
+                new
+                {
+                    personId = TransferPersonId,
+                    displayName = "Permitted engineer",
+                    title = "Engineer",
+                },
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith("/counters", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = incidentCreated && incidentTaskAssignedToCurrent ? 1 : 0;
+            await JsonAsync(route, new
+            {
+                overdue = 0,
+                today = count,
+                requiresDecision = incidentTaskState is "Offered" or "Returned" ? count : 0,
+                assignedToMe = count,
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (path.Contains("/tasks/", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            incidentTaskVersion = checked(incidentTaskVersion + 1);
+            if (path.EndsWith("/accept", StringComparison.OrdinalIgnoreCase))
+            {
+                incidentTaskState = "Accepted";
+            }
+            else if (path.EndsWith("/transfer", StringComparison.OrdinalIgnoreCase))
+            {
+                incidentTaskState = "Offered";
+                incidentTaskAssignedToCurrent = false;
+            }
+            else
+            {
+                incidentTaskState = "Returned";
+            }
+
+            await JsonAsync(route, IncidentTaskPayload())
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path.TrimEnd('/'), "/api/my-work", StringComparison.OrdinalIgnoreCase))
+        {
+            var items = incidentCreated && incidentTaskAssignedToCurrent
+                ? new[] { MyWorkPayload() }
+                : [];
+            await JsonAsync(route, items)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await StatusAsync(route, 404)
+            .ConfigureAwait(false);
+    }
+
+    private static object IncidentPayload() => new
+    {
+        incidentId = IncidentId,
+        summary = "Investigate browser point",
+        coordinatorPersonId = PersonId,
+        version = 3UL,
+        createdAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        updatedAt = DateTimeOffset.UtcNow,
+        sources = new[]
+        {
+            new
+            {
+                linkId = Guid.Parse("81000000-0000-0000-0000-000000000031"),
+                eventId = Guid.Parse("81000000-0000-0000-0000-000000000018"),
+                occurrenceId = EventOccurrenceId,
+                scopeId = ScopeId,
+                pointId = EventPointId,
+                route = $"/events?eventId=81000000-0000-0000-0000-000000000018",
+            },
+        },
+    };
+
+    private object IncidentTaskPayload() => new
+    {
+        taskId = IncidentTaskId,
+        incidentId = IncidentId,
+        summary = "Investigate browser point",
+        assignedPersonId = incidentTaskAssignedToCurrent ? PersonId : TransferPersonId,
+        state = incidentTaskState,
+        version = incidentTaskVersion,
+        dueAt = DateTimeOffset.UtcNow.AddHours(4),
+        lastTransitionReason = (string?)null,
+        updatedAt = DateTimeOffset.UtcNow,
+    };
+
+    private object MyWorkPayload() => new
+    {
+        sourceOwner = "incidents",
+        sourceKind = "incident-task",
+        sourceItemId = IncidentTaskId,
+        sourceVersion = incidentTaskVersion,
+        assignedPersonId = PersonId,
+        summary = "Investigate browser point",
+        state = incidentTaskState,
+        route = $"/incidents/{IncidentId:D}/tasks/{IncidentTaskId:D}",
+        dueAt = DateTimeOffset.UtcNow.AddHours(4),
+        lastTransitionReason = (string?)null,
+        updatedAt = DateTimeOffset.UtcNow,
+    };
 
     private async Task HandleC14Async(
         IRoute route,

@@ -1,0 +1,390 @@
+@page "/my-work"
+@implements IAsyncDisposable
+@inject IncidentMyWorkApiClient Api
+@inject IdentitySessionState Session
+@inject NavigationManager Navigation
+
+<PageTitle>My Work</PageTitle>
+
+<GuardedContent Route="/my-work">
+    <section class="my-work" aria-labelledby="my-work-title">
+        <header class="workspace-page-heading">
+            <div>
+                <span class="workspace-page-heading__eyebrow">Personal queue</span>
+                <h1 id="my-work-title">My Work</h1>
+            </div>
+            <button type="button" @onclick="LoadAsync">Refresh</button>
+        </header>
+
+        @if (counters is not null)
+        {
+            <div class="event-counters" aria-label="My Work counters">
+                <button type="button" @onclick="() => filter = WorkFilter.Overdue">
+                    <span>Overdue</span><strong>@counters.Overdue</strong>
+                </button>
+                <button type="button" @onclick="() => filter = WorkFilter.Today">
+                    <span>Today</span><strong>@counters.Today</strong>
+                </button>
+                <button type="button" @onclick="() => filter = WorkFilter.Decision">
+                    <span>Requires decision</span><strong>@counters.RequiresDecision</strong>
+                </button>
+                <button type="button" @onclick="() => filter = WorkFilter.All">
+                    <span>Assigned to me</span><strong>@counters.AssignedToMe</strong>
+                </button>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <UiStatePanel Kind="@UiStateKind.Error"
+                          Title="My Work unavailable"
+                          Message="@error"
+                          ActionLabel="Retry"
+                          OnAction="@LoadAsync" />
+        }
+        else if (loading)
+        {
+            <UiStatePanel Kind="@UiStateKind.Loading"
+                          Title="Loading My Work"
+                          Message="Reading assignments and counters." />
+        }
+        else if (VisibleItems.Count == 0)
+        {
+            <UiStatePanel Kind="@UiStateKind.Empty"
+                          Title="No matching assignments"
+                          Message="Choose another counter or wait for a workflow assignment." />
+        }
+        else
+        {
+            <div class="my-work-grid">
+                <div class="my-work-list" role="list">
+                    @foreach (var item in VisibleItems)
+                    {
+                        <button type="button"
+                                role="listitem"
+                                class="@(selected?.SourceItemId == item.SourceItemId ? "is-selected" : null)"
+                                data-task-id="@item.SourceItemId"
+                                @onclick="() => Select(item)">
+                            <span>@item.SourceKind</span>
+                            <strong>@item.Summary</strong>
+                            <small>@DueLabel(item)</small>
+                            <UiBadge Text="@item.State" Tone="@StateTone(item.State)" />
+                        </button>
+                    }
+                </div>
+                <aside class="my-work-detail" aria-label="Task details">
+                    @if (selected is null)
+                    {
+                        <UiStatePanel Kind="@UiStateKind.Empty"
+                                      Title="Select an assignment"
+                                      Message="Open a row to inspect context and the next action."
+                                      Compact />
+                    }
+                    else
+                    {
+                        <header>
+                            <span>@selected.SourceKind</span>
+                            <h2>@selected.Summary</h2>
+                        </header>
+                        <dl>
+                            <dt>State</dt><dd>@selected.State</dd>
+                            <dt>Due</dt><dd>@DueLabel(selected)</dd>
+                            <dt>Updated</dt><dd>@selected.UpdatedAt.ToLocalTime().ToString("g")</dd>
+                            @if (!string.IsNullOrWhiteSpace(selected.LastTransitionReason))
+                            {
+                                <dt>Last reason</dt><dd>@selected.LastTransitionReason</dd>
+                            }
+                        </dl>
+                        <a href="@selected.Route">Open source</a>
+
+                        @if (selected.SourceOwner == "incidents")
+                        {
+                            <div class="my-work-actions">
+                                @if (selected.State == "Offered")
+                                {
+                                    <button type="button"
+                                            disabled="@actionBusy"
+                                            @onclick="AcceptAsync">
+                                        Accept
+                                    </button>
+                                }
+                                <label>
+                                    <span>Reason</span>
+                                    <input @bind="reason" @bind:event="oninput" maxlength="500" />
+                                </label>
+                                <label>
+                                    <span>Transfer candidate</span>
+                                    <input @bind="candidateQuery" @bind:event="oninput" />
+                                </label>
+                                <button type="button"
+                                        disabled="@actionBusy"
+                                        @onclick="FindCandidatesAsync">
+                                    Find
+                                </button>
+                                @if (!string.IsNullOrWhiteSpace(candidateMessage))
+                                {
+                                    <small role="status">@candidateMessage</small>
+                                }
+                                <select @bind="candidatePersonId"
+                                        disabled="@(candidates.Count == 0)">
+                                    <option value="">Select a person</option>
+                                    @foreach (var candidate in candidates)
+                                    {
+                                        <option value="@candidate.PersonId">
+                                            @candidate.DisplayName
+                                        </option>
+                                    }
+                                </select>
+                                <button type="button"
+                                        disabled="@(actionBusy || candidates.Count == 0)"
+                                        @onclick="TransferAsync">
+                                    Transfer
+                                </button>
+                                <button type="button"
+                                        disabled="@actionBusy"
+                                        @onclick="ReturnAsync">
+                                    Cannot perform
+                                </button>
+                            </div>
+                        }
+                    }
+                </aside>
+            </div>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    private readonly CancellationTokenSource cancellation = new();
+    private IReadOnlyList<MyWorkItemPayload> items = [];
+    private IReadOnlyList<TransferCandidatePayload> candidates = [];
+    private MyWorkCountersPayload? counters;
+    private MyWorkItemPayload? selected;
+    private Task? polling;
+    private WorkFilter filter;
+    private string reason = string.Empty;
+    private string candidateQuery = string.Empty;
+    private string candidatePersonId = string.Empty;
+    private string? candidateMessage;
+    private string? error;
+    private bool loading = true;
+    private bool actionBusy;
+
+    private IReadOnlyList<MyWorkItemPayload> VisibleItems
+    {
+        get
+        {
+            var now = DateTimeOffset.UtcNow;
+            return items.Where(item => filter switch
+            {
+                WorkFilter.Overdue => item.DueAt is { } due && due < now,
+                WorkFilter.Today => item.DueAt is { } due && due.UtcDateTime.Date == now.UtcDateTime.Date,
+                WorkFilter.Decision => item.State is "Offered" or "Returned",
+                _ => true,
+            }).ToArray();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        polling = PollAsync(cancellation.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try
+            {
+                await polling;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        cancellation.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = items.Count == 0;
+        error = null;
+        var list = await Api.ReadMyWorkAsync(cancellation.Token);
+        var count = await Api.ReadCountersAsync(cancellation.Token);
+        loading = false;
+        if (ApplyFailure(list.Status) || ApplyFailure(count.Status))
+        {
+            return;
+        }
+
+        items = list.Payload ?? [];
+        counters = count.Payload;
+        var requestedTask = ReadRequestedTask();
+        selected = requestedTask is null
+            ? selected is null ? null : items.SingleOrDefault(item => item.SourceItemId == selected.SourceItemId)
+            : items.SingleOrDefault(item => item.SourceItemId == requestedTask);
+    }
+
+    private async Task PollAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(token))
+        {
+            try
+            {
+                await InvokeAsync(LoadAsync);
+            }
+            catch (HttpRequestException)
+            {
+                error = "My Work refresh is temporarily unavailable.";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private void Select(MyWorkItemPayload item)
+    {
+        selected = item;
+        reason = string.Empty;
+        candidates = [];
+        candidatePersonId = string.Empty;
+        candidateMessage = null;
+    }
+
+    private Task AcceptAsync() => ExecuteAsync(item => Api.AcceptAsync(item, cancellation.Token));
+
+    private async Task FindCandidatesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(candidateQuery))
+        {
+            candidateMessage = "Enter a candidate name.";
+            return;
+        }
+
+        candidateMessage = null;
+        var result = await Api.FindCandidatesAsync(candidateQuery.Trim(), cancellation.Token);
+        if (ApplyFailure(result.Status))
+        {
+            return;
+        }
+
+        candidates = result.Payload ?? [];
+        candidateMessage = candidates.Count == 0
+            ? "No permitted candidates matched the search."
+            : null;
+    }
+
+    private Task TransferAsync()
+    {
+        if (!Guid.TryParse(candidatePersonId, out var personId) || string.IsNullOrWhiteSpace(reason))
+        {
+            error = "Select a candidate and provide a transfer reason.";
+            return Task.CompletedTask;
+        }
+
+        return ExecuteAsync(item => Api.TransferAsync(item, personId, reason.Trim(), cancellation.Token));
+    }
+
+    private Task ReturnAsync()
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            error = "Provide a reason before returning the task.";
+            return Task.CompletedTask;
+        }
+
+        return ExecuteAsync(item => Api.ReturnAsync(item, reason.Trim(), cancellation.Token));
+    }
+
+    private async Task ExecuteAsync(
+        Func<MyWorkItemPayload, Task<IncidentMyWorkApiResult<IncidentTaskPayload>>> action)
+    {
+        if (selected is null)
+        {
+            return;
+        }
+
+        actionBusy = true;
+        error = null;
+        var result = await action(selected);
+        actionBusy = false;
+        if (ApplyFailure(result.Status))
+        {
+            return;
+        }
+
+        reason = string.Empty;
+        candidates = [];
+        candidatePersonId = string.Empty;
+        candidateMessage = null;
+        await LoadAsync();
+    }
+
+    private bool ApplyFailure(IncidentMyWorkApiStatus status)
+    {
+        switch (status)
+        {
+            case IncidentMyWorkApiStatus.Available:
+                return false;
+            case IncidentMyWorkApiStatus.SessionExpired:
+                Session.Invalidate();
+                error = "The session expired. Sign in again.";
+                break;
+            case IncidentMyWorkApiStatus.Forbidden:
+                error = "The current session cannot access this assignment.";
+                break;
+            case IncidentMyWorkApiStatus.NotFound:
+                error = "The assignment is no longer available.";
+                break;
+            case IncidentMyWorkApiStatus.Invalid:
+                error = "The action requires valid input.";
+                break;
+            case IncidentMyWorkApiStatus.Conflict:
+                error = "The assignment changed. The current state was refreshed.";
+                break;
+            default:
+                error = "The server could not complete the My Work request.";
+                break;
+        }
+
+        return true;
+    }
+
+    private Guid? ReadRequestedTask()
+    {
+        var query = new Uri(Navigation.Uri).Query.TrimStart('?');
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 &&
+                string.Equals(pair[0], "taskId", StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParse(Uri.UnescapeDataString(pair[1]), out var taskId))
+            {
+                return taskId;
+            }
+        }
+
+        return null;
+    }
+
+    private static string DueLabel(MyWorkItemPayload item) =>
+        item.DueAt is { } due ? due.ToLocalTime().ToString("g") : "No due date";
+
+    private static UiBadgeTone StateTone(string state) => state switch
+    {
+        "Accepted" => UiBadgeTone.Positive,
+        "Returned" => UiBadgeTone.Warning,
+        _ => UiBadgeTone.Information,
+    };
+
+    private enum WorkFilter
+    {
+        All,
+        Overdue,
+        Today,
+        Decision,
+    }
+}

@@ -1711,3 +1711,67 @@ html[data-density="compact"] .boot-screen {
         grid-column: 1 / -1;
     }
 }
+.incident-card,
+.my-work-detail {
+    border: 1px solid var(--border-subtle, #d7dde5);
+    border-radius: 0.75rem;
+    background: var(--surface-raised, #fff);
+    padding: 1rem;
+}
+
+.incident-card dl,
+.my-work-detail dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 1rem;
+}
+
+.incident-source-list {
+    display: grid;
+    gap: 0.5rem;
+    padding-left: 1.25rem;
+}
+
+.incident-source-list li {
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+}
+
+.my-work-grid {
+    display: grid;
+    grid-template-columns: minmax(18rem, 1fr) minmax(20rem, 0.8fr);
+    gap: 1rem;
+}
+
+.my-work-list,
+.my-work-actions {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.my-work-list > button {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.4rem 0.75rem;
+    text-align: left;
+    padding: 0.8rem;
+}
+
+.my-work-list > button.is-selected {
+    outline: 2px solid var(--accent, #326bd6);
+}
+
+.my-work-list > button strong {
+    grid-column: 1 / -1;
+}
+
+.my-work-actions {
+    margin-top: 1rem;
+}
+
+@media (max-width: 850px) {
+    .my-work-grid {
+        grid-template-columns: 1fr;
+    }
+}
