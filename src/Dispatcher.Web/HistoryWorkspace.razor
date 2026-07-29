@@ -280,7 +280,7 @@
                 buckets.Max(item =>
                     item.Maximum);
             var span =
-                Math.Max(1d, maximum - minimum);
+                Math.Max(1m, maximum - minimum);
             return string.Join(
                 " ",
                 buckets.Select(
@@ -293,8 +293,8 @@
                                   (buckets.Count - 1);
                         var y =
                             240d -
-                            (item.Average - minimum) /
-                            span * 220d;
+                            (double)((item.Average - minimum) /
+                            span) * 220d;
                         return FormattableString
                             .Invariant(
                                 $"{x:0.##},{y:0.##}");

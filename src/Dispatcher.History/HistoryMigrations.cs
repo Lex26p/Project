@@ -119,5 +119,19 @@ public static class HistoryMigrations
                 END;
                 $$ LANGUAGE plpgsql;
                 """),
-        ]);
+            new MigrationStep(
+                3,
+                "decimal measurement values",
+                $"""
+                ALTER TABLE {Schema}.sample
+                    RENAME COLUMN value TO measurement_value;
+                ALTER TABLE {Schema}.sample
+                    ALTER COLUMN measurement_value TYPE numeric
+                    USING measurement_value::numeric;
+                ALTER TABLE {Schema}.sample
+                    ADD CONSTRAINT sample_measurement_value_envelope CHECK (
+                        abs(measurement_value) < 10000000000000000000::numeric AND
+                        measurement_value = round(measurement_value, 9));
+                """),
+            ]);
 }

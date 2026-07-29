@@ -96,6 +96,11 @@ public static class EquipmentCommissioningTools
             {
                 errors.Add(Error("snmp_value_type", "staging.value", "SNMP value type is unsupported."));
             }
+
+            if (input.SnmpScale is null or 0m)
+            {
+                errors.Add(Error("snmp_scale", "staging.value", "SNMP scale must be non-zero."));
+            }
         }
 
         if (input.Action == StagingApplyAction.Update && input.EquipmentId == default)
@@ -131,6 +136,7 @@ public static class EquipmentCommissioningTools
             input.SnmpVersion,
             input.SnmpOid,
             input.SnmpValueType,
+            input.SnmpScale,
             input.Unit,
             SecretReference = secretReference,
             input.Action,
@@ -181,6 +187,7 @@ public static class EquipmentCommissioningTools
                         pointId = draft.RowId,
                         oid = draft.SnmpOid,
                         type = draft.SnmpValueType,
+                        scale = draft.SnmpScale,
                         unit = draft.Unit,
                     },
                 },

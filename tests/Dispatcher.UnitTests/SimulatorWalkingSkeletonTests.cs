@@ -7,6 +7,24 @@ namespace Dispatcher.UnitTests;
 
 public sealed class SimulatorWalkingSkeletonTests
 {
+    [Fact]
+    public void ScenarioPreservesFractionalBaseline()
+    {
+        var scenario = new SimulatorScenario(
+            new SimulatorScenarioConfig(
+                ScopeId,
+                SourceId,
+                1,
+                [new SimulatorPointConfig(PointA, 21.5m, 0m, Unit.FromSymbol("°C"))]),
+            new DeterministicClock(
+                DateTimeOffset.UnixEpoch,
+                TimeSpan.Zero,
+                0,
+                0));
+
+        Assert.Equal(21.5m, Assert.Single(scenario.NextStep()).Value.Value);
+    }
+
     private static readonly RuntimeScopeId ScopeId = RuntimeScopeId.From(
         Guid.Parse("11111111-1111-7111-8111-111111111111"));
     private static readonly SourceId SourceId = SourceId.From(
@@ -100,7 +118,7 @@ public sealed class SimulatorWalkingSkeletonTests
             SourceId,
             PointA,
             new OwnerPosition<SourceObservation>(1),
-            TypedValue.From(10L),
+            TypedValue.From(10m),
             Unit.None,
             DataQuality.Good,
             Freshness.Fresh,

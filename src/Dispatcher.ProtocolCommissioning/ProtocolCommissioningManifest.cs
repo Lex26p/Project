@@ -192,7 +192,12 @@ public static class ProtocolCommissioningManifest
                     "counter64" => SnmpNumericType.Counter64,
                     _ => throw new FormatException("Unsupported SNMP type."),
                 },
-                Unit.FromSymbol(point.GetProperty("unit").GetString()!))).ToArray(),
+                Unit.FromSymbol(point.GetProperty("unit").GetString()!))
+            {
+                Scale = point.TryGetProperty("scale", out var scale)
+                    ? scale.GetDecimal()
+                    : 1m,
+            }).ToArray(),
             new SnmpRetryPolicy(
                 retry.GetProperty("maxAttempts").GetInt32(),
                 TimeSpan.FromMilliseconds(retry.GetProperty("responseTimeoutMs").GetInt32()),

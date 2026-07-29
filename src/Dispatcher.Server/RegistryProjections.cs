@@ -55,7 +55,7 @@ public sealed record EquipmentListPayload(
     IReadOnlyList<EquipmentSummaryPayload> Items);
 
 public sealed record EquipmentCurrentPayload(
-    long Value,
+    decimal Value,
     string Unit,
     string Quality,
     string Freshness,

@@ -46,7 +46,7 @@ public sealed record HistorySample(
     SourceId SourceId,
     PointId PointId,
     OwnerPosition<SourceObservation> SourcePosition,
-    TypedValue<long> Value,
+    TypedValue<decimal> Value,
     Unit Unit,
     DataQuality Quality,
     Freshness Freshness,
@@ -117,15 +117,18 @@ public sealed record HistoryRangePage(
 
 public sealed record HistoryResolutionPolicy(
     int Version,
-    TimeSpan Resolution);
+    TimeSpan Resolution)
+{
+    public const int DecimalMeasurementVersion = 2;
+}
 
 public sealed record HistoryAggregateBucket(
     DateTimeOffset FromInclusive,
     DateTimeOffset ToExclusive,
     long Count,
-    double Average,
-    long Minimum,
-    long Maximum,
+    decimal Average,
+    decimal Minimum,
+    decimal Maximum,
     DataQuality Quality,
     Freshness Freshness,
     bool HasGap);

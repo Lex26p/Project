@@ -138,7 +138,9 @@ public static class HistoryEndpoints
                     from,
                     to,
                     PageSize: 1),
-                new HistoryResolutionPolicy(1, TimeSpan.FromSeconds(resolutionSeconds)),
+                new HistoryResolutionPolicy(
+                    HistoryResolutionPolicy.DecimalMeasurementVersion,
+                    TimeSpan.FromSeconds(resolutionSeconds)),
                 cancellationToken).ConfigureAwait(false);
             return result.IsSuccess ? Results.Ok(ToPayload(result.Value)) : Problem(result.Error!);
         });
@@ -191,7 +193,7 @@ public static class HistoryEndpoints
 public sealed record HistoryRecordPayload(
     ulong Position,
     string Kind,
-    long? Value,
+    decimal? Value,
     string? Unit,
     string? Quality,
     string? Freshness,
@@ -212,9 +214,9 @@ public sealed record HistoryBucketPayload(
     DateTimeOffset FromInclusive,
     DateTimeOffset ToExclusive,
     long Count,
-    double Average,
-    long Minimum,
-    long Maximum,
+    decimal Average,
+    decimal Minimum,
+    decimal Maximum,
     string Quality,
     string Freshness,
     bool HasGap);

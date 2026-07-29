@@ -133,7 +133,7 @@ public sealed class IncidentMyWorkTests
         Assert.True(runtime.ActivateBinding(binding).IsSuccess);
         var observation = new SourceObservation(
             ScopeId, SourceId, PointId, new OwnerPosition<SourceObservation>(1),
-            TypedValue.From(42L), Unit.FromSymbol("kW"), DataQuality.Good, Freshness.Fresh,
+            TypedValue.From(42m), Unit.FromSymbol("kW"), DataQuality.Good, Freshness.Fresh,
             SourceTimestamp.FromUtc(Now));
         var acceptance = runtime.Apply(RuntimeCut.Normalize(binding, 1, [observation]).Value).Value;
         var evaluated = await new AlarmEvaluator(ScopeId, RevisionNumber.Initial, store)

@@ -39,7 +39,7 @@ public sealed record LocationPlanContextPayload(
 public sealed record EquipmentListPayload(Guid ScopeId, int Total, IReadOnlyList<EquipmentSummaryPayload> Items);
 
 public sealed record EquipmentCurrentPayload(
-    long Value,
+    decimal Value,
     string Unit,
     string Quality,
     string Freshness,

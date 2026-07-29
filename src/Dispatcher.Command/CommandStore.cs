@@ -217,6 +217,10 @@ public sealed class CommandStore
             return Failure<PreparedCommandIntent>("permission.denied", "Prepare, scope and exact point control permissions are required.");
         if (request.InteractionMode != CommandInteractionMode.Live)
             return Failure<PreparedCommandIntent>("command.history_mode_denied", "Commands cannot be prepared from History mode.");
+        if (!MeasurementValue.IsRepresentable(request.DesiredValue))
+            return Failure<PreparedCommandIntent>(
+                "command.value_invalid",
+                "Desired value is outside the decimal measurement envelope.");
         if (activeManifest.Configuration.ScopeId != request.ScopeId ||
             activeManifest.Receipt.RevisionId != request.ExpectedRevisionId ||
             activeManifest.Receipt.RevisionNumber != request.ExpectedRevisionNumber ||
@@ -256,11 +260,11 @@ public sealed class CommandStore
             entry.Value.Value, entry.Quality, entry.Freshness, guard.Version.Value);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {CommandMigrations.Schema}.prepared_intent
-                (intent_id,fingerprint,lease_id,scope_id,point_id,desired_value,unit,revision_id,revision_number,
-                 manifest_generation,manifest_fingerprint,current_position,current_value,quality,freshness,
+                (intent_id,fingerprint,lease_id,scope_id,point_id,desired_measurement_value,unit,revision_id,revision_number,
+                 manifest_generation,manifest_fingerprint,current_position,current_measurement_value,quality,freshness,
                  safety_version,prepared_at,expires_at)
             VALUES (@intent,@fingerprint,@lease,@scope,@point,@desired,@unit,@revision,@revision_number,
-                    @generation,@manifest,@current_position,@current_value,@quality,@freshness,
+                    @generation,@manifest,@current_position,@current_measurement_value,@quality,@freshness,
                     @safety_version,@prepared,@expires)
             ON CONFLICT (intent_id) DO NOTHING;
             """, connection, transaction);
@@ -276,7 +280,7 @@ public sealed class CommandStore
         insert.Parameters.AddWithValue("generation", request.ExpectedGeneration);
         insert.Parameters.AddWithValue("manifest", request.ExpectedManifestFingerprint);
         insert.Parameters.AddWithValue("current_position", checked((long)request.ExpectedCurrentPosition));
-        insert.Parameters.AddWithValue("current_value", entry.Value.Value);
+        insert.Parameters.AddWithValue("current_measurement_value", entry.Value.Value);
         insert.Parameters.AddWithValue("quality", (short)entry.Quality);
         insert.Parameters.AddWithValue("freshness", (short)entry.Freshness);
         insert.Parameters.AddWithValue("safety_version", checked((long)guard.Version.Value));
@@ -358,8 +362,8 @@ public sealed class CommandStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, CommandIntentId id, CancellationToken token)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT fingerprint,lease_id,scope_id,point_id,desired_value,unit,revision_id,revision_number,
-                   manifest_generation,manifest_fingerprint,current_position,current_value,quality,freshness,
+            SELECT fingerprint,lease_id,scope_id,point_id,desired_measurement_value,unit,revision_id,revision_number,
+                   manifest_generation,manifest_fingerprint,current_position,current_measurement_value,quality,freshness,
                    safety_version,prepared_at,expires_at
             FROM {CommandMigrations.Schema}.prepared_intent WHERE intent_id=@intent;
             """, connection, transaction);
@@ -368,10 +372,10 @@ public sealed class CommandStore
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
         return (reader.GetString(0), new PreparedCommandIntent(
             id, ControlLeaseId.From(reader.GetGuid(1)), RuntimeScopeId.From(reader.GetGuid(2)), PointId.From(reader.GetGuid(3)),
-            reader.GetInt64(4), Unit.FromSymbol(reader.GetString(5)),
+            reader.GetDecimal(4), Unit.FromSymbol(reader.GetString(5)),
             Dispatcher.Configuration.ConfigurationRevisionId.From(reader.GetGuid(6)),
             RevisionNumber.From(checked((ulong)reader.GetInt64(7))), reader.GetInt64(8), reader.GetString(9),
-            checked((ulong)reader.GetInt64(10)), reader.GetInt64(11), (DataQuality)reader.GetInt16(12),
+            checked((ulong)reader.GetInt64(10)), reader.GetDecimal(11), (DataQuality)reader.GetInt16(12),
             (Freshness)reader.GetInt16(13), StateVersion.From(checked((ulong)reader.GetInt64(14))),
             reader.GetFieldValue<DateTimeOffset>(15), reader.GetFieldValue<DateTimeOffset>(16)));
     }

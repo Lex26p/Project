@@ -36,6 +36,15 @@ public sealed class ValueAndResultTests
         Assert.Throws<InvalidOperationException>(() => failure.Value);
     }
 
+    [Fact]
+    public void MeasurementScalingPreservesDecimalEngineeringValue()
+    {
+        Assert.True(MeasurementValue.TryScale(2313m, 0.1m, out var value));
+        Assert.Equal(231.3m, value);
+        Assert.False(MeasurementValue.IsRepresentable(0.0000000001m));
+        Assert.False(MeasurementValue.IsRepresentable(MeasurementValue.AbsoluteLimit));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("contains space")]

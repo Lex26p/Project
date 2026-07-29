@@ -25,7 +25,8 @@
 | C12 | Complete | Modbus TCP read-only production source и RuntimeHost pipeline реализованы и приняты |
 | C13 | Complete | SNMP v2c read-only production source и RuntimeHost pipeline реализованы и приняты |
 | C14 | Complete | Engineering staging, configuration publication и durable RuntimeHost diagnostics реализованы и приняты |
-| C15 | Ready | C14 выполнен; пользователь подтвердил доступ к Modbus TCP и SNMP устройству |
+| C14A | Complete | Decimal telemetry end-to-end, offline migrations и semantic version 2 реализованы и приняты |
+| C15 | Complete | Реальные Modbus/SNMP happy path, bounded disconnect, Bad/Stale recovery и session fence приняты |
 | C16 | Ready | Event Dispatcher C09 выполнен |
 | C17 | Planned | После Incident/My Work |
 | C18 | Ready | Web shell C08 и Event core C09 выполнены |

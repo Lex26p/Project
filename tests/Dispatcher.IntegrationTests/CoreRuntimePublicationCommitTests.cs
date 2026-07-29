@@ -217,7 +217,7 @@ public sealed class CoreRuntimePublicationCommitTests
                 SourceId,
                 PointId,
                 new OwnerPosition<SourceObservation>(sourcePosition),
-                TypedValue.From(value),
+                TypedValue.From((decimal)value),
                 Unit.FromSymbol("kW"),
                 DataQuality.Good,
                 Freshness.Fresh,
@@ -271,8 +271,8 @@ public sealed class CoreRuntimePublicationCommitTests
                     scope.ready,
                     (SELECT count(*) FROM {CoreRuntimeMigrations.Schema}.published_current
                      WHERE scope_id = @scope_id),
-                    COALESCE((SELECT value FROM {CoreRuntimeMigrations.Schema}.published_current
-                              WHERE scope_id = @scope_id LIMIT 1), 0),
+                    COALESCE((SELECT measurement_value FROM {CoreRuntimeMigrations.Schema}.published_current
+                              WHERE scope_id = @scope_id LIMIT 1), 0::numeric),
                     (SELECT count(*) FROM {CoreRuntimeMigrations.Schema}.published_delta
                      WHERE scope_id = @scope_id),
                     COALESCE((SELECT current_position FROM {CoreRuntimeMigrations.Schema}.published_delta
@@ -293,7 +293,7 @@ public sealed class CoreRuntimePublicationCommitTests
                 reader.GetInt64(2),
                 reader.GetBoolean(3),
                 reader.GetInt64(4),
-                reader.GetInt64(5),
+                reader.GetDecimal(5),
                 reader.GetInt64(6),
                 reader.GetInt64(7),
                 reader.GetInt64(8));
@@ -314,7 +314,7 @@ public sealed class CoreRuntimePublicationCommitTests
         long EarliestDeltaPosition,
         bool Ready,
         long CurrentCount,
-        long CurrentValue,
+        decimal CurrentValue,
         long DeltaCount,
         long OnlyDeltaPosition,
         long PublishedDeliveryCount);

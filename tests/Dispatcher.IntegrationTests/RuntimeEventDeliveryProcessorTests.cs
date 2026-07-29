@@ -345,7 +345,7 @@ public sealed class RuntimeEventDeliveryProcessorTests
                         SourceId,
                         PointId,
                         new OwnerPosition<SourceObservation>(1),
-                        TypedValue.From(value),
+                        TypedValue.From((decimal)value),
                         Unit.FromSymbol("kW"),
                         DataQuality.Good,
                         Freshness.Fresh,

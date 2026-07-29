@@ -197,7 +197,7 @@ public sealed partial class AlarmStore
         RevisionNumber epoch,
         AlarmDefinition definition,
         EvaluatorState state,
-        long value,
+        decimal value,
         DateTimeOffset evaluatedAt,
         CancellationToken cancellationToken)
     {
@@ -205,8 +205,8 @@ public sealed partial class AlarmStore
             ? value >= definition.Threshold
             : value <= definition.Threshold;
         var shouldClear = definition.Direction == AlarmThresholdDirection.High
-            ? (decimal)value <= (decimal)definition.Threshold - definition.Hysteresis
-            : (decimal)value >= (decimal)definition.Threshold + definition.Hysteresis;
+            ? value <= definition.Threshold - definition.Hysteresis
+            : value >= definition.Threshold + definition.Hysteresis;
 
         switch (state.State)
         {
@@ -370,7 +370,7 @@ public sealed partial class AlarmStore
         RevisionNumber epoch,
         AlarmDefinitionId definitionId,
         EvaluatorState state,
-        long? value,
+        decimal? value,
         ulong currentPosition,
         DateTimeOffset updatedAt,
         CancellationToken cancellationToken)
@@ -379,15 +379,15 @@ public sealed partial class AlarmStore
             $"""
             INSERT INTO {AlarmMigrations.Schema}.evaluator_state (
                 scope_id, definition_epoch, definition_id, condition_state, pending_since,
-                current_occurrence_id, last_value, last_current_position, updated_at)
+                current_occurrence_id, last_measurement_value, last_current_position, updated_at)
             VALUES (
                 @scope_id, @definition_epoch, @definition_id, @condition_state, @pending_since,
-                @current_occurrence_id, @last_value, @last_current_position, @updated_at)
+                @current_occurrence_id, @last_measurement_value, @last_current_position, @updated_at)
             ON CONFLICT (scope_id, definition_epoch, definition_id) DO UPDATE
             SET condition_state = EXCLUDED.condition_state,
                 pending_since = EXCLUDED.pending_since,
                 current_occurrence_id = EXCLUDED.current_occurrence_id,
-                last_value = EXCLUDED.last_value,
+                last_measurement_value = EXCLUDED.last_measurement_value,
                 last_current_position = EXCLUDED.last_current_position,
                 updated_at = EXCLUDED.updated_at;
             """,
@@ -399,7 +399,7 @@ public sealed partial class AlarmStore
         command.Parameters.AddWithValue("condition_state", (short)state.State);
         command.Parameters.AddWithValue("pending_since", (object?)state.PendingSince ?? DBNull.Value);
         command.Parameters.AddWithValue("current_occurrence_id", (object?)state.OccurrenceId?.Value ?? DBNull.Value);
-        command.Parameters.AddWithValue("last_value", (object?)value ?? DBNull.Value);
+        command.Parameters.AddWithValue("last_measurement_value", (object?)value ?? DBNull.Value);
         command.Parameters.AddWithValue("last_current_position", checked((long)currentPosition));
         command.Parameters.AddWithValue("updated_at", updatedAt);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -414,8 +414,8 @@ public sealed partial class AlarmStore
     {
         await using var command = new NpgsqlCommand(
             $"""
-            SELECT definition_id, point_id, name, direction, threshold, hysteresis,
-                   raise_delay_ticks, clear_delay_ticks, enabled, priority
+            SELECT definition_id, point_id, name, direction, threshold_value, hysteresis_value,
+                   raise_delay_ticks, clear_delay_ticks, enabled, priority, unit
             FROM {AlarmMigrations.Schema}.definition
             WHERE scope_id = @scope_id AND epoch = @epoch
             ORDER BY definition_id;
@@ -433,12 +433,13 @@ public sealed partial class AlarmStore
                 PointId.From(reader.GetGuid(1)),
                 reader.GetString(2),
                 (AlarmThresholdDirection)reader.GetInt16(3),
-                reader.GetInt64(4),
-                reader.GetInt64(5),
+                reader.GetDecimal(4),
+                reader.GetDecimal(5),
                 TimeSpan.FromTicks(reader.GetInt64(6)),
                 TimeSpan.FromTicks(reader.GetInt64(7)),
                 reader.GetBoolean(8),
-                (AlarmPriority)reader.GetInt16(9)));
+                (AlarmPriority)reader.GetInt16(9),
+                Unit.FromSymbol(reader.GetString(10))));
         }
 
         return definitions;
@@ -567,11 +568,11 @@ public sealed partial class AlarmStore
             await using var command = new NpgsqlCommand(
                 $"""
                 INSERT INTO {AlarmMigrations.Schema}.definition (
-                    scope_id, epoch, definition_id, point_id, name, direction, threshold,
-                    hysteresis, raise_delay_ticks, clear_delay_ticks, enabled, priority)
+                    scope_id, epoch, definition_id, point_id, name, direction, threshold_value,
+                    hysteresis_value, raise_delay_ticks, clear_delay_ticks, enabled, priority, unit)
                 VALUES (
-                    @scope_id, @epoch, @definition_id, @point_id, @name, @direction, @threshold,
-                    @hysteresis, @raise_delay_ticks, @clear_delay_ticks, @enabled, @priority);
+                    @scope_id, @epoch, @definition_id, @point_id, @name, @direction, @threshold_value,
+                    @hysteresis_value, @raise_delay_ticks, @clear_delay_ticks, @enabled, @priority, @unit);
                 """,
                 connection,
                 transaction);
@@ -581,12 +582,13 @@ public sealed partial class AlarmStore
             command.Parameters.AddWithValue("point_id", definition.PointId.Value);
             command.Parameters.AddWithValue("name", definition.Name);
             command.Parameters.AddWithValue("direction", (short)definition.Direction);
-            command.Parameters.AddWithValue("threshold", definition.Threshold);
-            command.Parameters.AddWithValue("hysteresis", definition.Hysteresis);
+            command.Parameters.AddWithValue("threshold_value", definition.Threshold);
+            command.Parameters.AddWithValue("hysteresis_value", definition.Hysteresis);
             command.Parameters.AddWithValue("raise_delay_ticks", definition.RaiseDelay.Ticks);
             command.Parameters.AddWithValue("clear_delay_ticks", definition.ClearDelay.Ticks);
             command.Parameters.AddWithValue("enabled", definition.Enabled);
             command.Parameters.AddWithValue("priority", (short)definition.Priority);
+            command.Parameters.AddWithValue("unit", definition.Unit.Symbol);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 

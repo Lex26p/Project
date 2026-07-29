@@ -165,7 +165,7 @@ public sealed class CoreRuntimePendingDeliveryTests
                 SourceId,
                 PointId,
                 new OwnerPosition<SourceObservation>(sourcePosition),
-                TypedValue.From(value),
+                TypedValue.From((decimal)value),
                 Unit.FromSymbol("kW"),
                 DataQuality.Good,
                 Freshness.Fresh,

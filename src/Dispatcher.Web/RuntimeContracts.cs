@@ -2,7 +2,7 @@ namespace Dispatcher.Web;
 
 public sealed record RuntimePointPayload(
     Guid PointId,
-    long Value,
+    decimal Value,
     string Unit,
     string Quality,
     string Freshness,

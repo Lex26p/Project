@@ -457,11 +457,11 @@ public sealed partial class CoreRuntimeStore
             $"""
             INSERT INTO {CoreRuntimeMigrations.Schema}.published_current
                 (scope_id, point_id, source_id, binding_generation, session_generation,
-                 source_position, current_position, value, unit, quality, freshness,
+                 source_position, current_position, measurement_value, unit, quality, freshness,
                  source_timestamp, receive_timestamp, processed_timestamp)
             VALUES
                 (@scope_id, @point_id, @source_id, @binding_generation, @session_generation,
-                 @source_position, @current_position, @value, @unit, @quality, @freshness,
+                 @source_position, @current_position, @measurement_value, @unit, @quality, @freshness,
                  @source_timestamp, @receive_timestamp, @processed_timestamp)
             ON CONFLICT (scope_id, point_id) DO UPDATE
             SET source_id = EXCLUDED.source_id,
@@ -469,7 +469,7 @@ public sealed partial class CoreRuntimeStore
                 session_generation = EXCLUDED.session_generation,
                 source_position = EXCLUDED.source_position,
                 current_position = EXCLUDED.current_position,
-                value = EXCLUDED.value,
+                measurement_value = EXCLUDED.measurement_value,
                 unit = EXCLUDED.unit,
                 quality = EXCLUDED.quality,
                 freshness = EXCLUDED.freshness,
@@ -480,12 +480,12 @@ public sealed partial class CoreRuntimeStore
             INSERT INTO {CoreRuntimeMigrations.Schema}.published_delta
                 (scope_id, current_position, point_id, source_id,
                  binding_generation, session_generation, source_position,
-                 value, unit, quality, freshness,
+                 measurement_value, unit, quality, freshness,
                  source_timestamp, receive_timestamp, processed_timestamp)
             VALUES
                 (@scope_id, @current_position, @point_id, @source_id,
                  @binding_generation, @session_generation, @source_position,
-                 @value, @unit, @quality, @freshness,
+                 @measurement_value, @unit, @quality, @freshness,
                  @source_timestamp, @receive_timestamp, @processed_timestamp);
             """,
             connection,
@@ -505,7 +505,10 @@ public sealed partial class CoreRuntimeStore
         command.Parameters.AddWithValue(
             "current_position",
             checked((long)transition.CurrentPosition.Value));
-        command.Parameters.AddWithValue("value", transition.Value.Value);
+        command.Parameters.AddWithValue(
+            "measurement_value",
+            NpgsqlDbType.Numeric,
+            transition.Value.Value);
         command.Parameters.AddWithValue("unit", transition.Unit.Symbol);
         command.Parameters.AddWithValue("quality", (short)transition.Quality);
         command.Parameters.AddWithValue("freshness", (short)transition.Freshness);
@@ -532,11 +535,13 @@ public sealed partial class CoreRuntimeStore
             INSERT INTO {CoreRuntimeMigrations.Schema}.published_scope
                 (scope_id, completed_obligation_position, current_position,
                  earliest_delta_position, protected_continuity, ready,
-                 degradation_reason_code, heartbeat_at, published_at)
+                 degradation_reason_code, heartbeat_at, published_at,
+                 measurement_semantic_version)
             VALUES
                 (@scope_id, @completed_position, @current_position,
                  @earliest_delta_position, @protected_continuity, @ready,
-                 @degradation_reason_code, @heartbeat_at, @published_at)
+                 @degradation_reason_code, @heartbeat_at, @published_at,
+                 @measurement_semantic_version)
             ON CONFLICT (scope_id) DO UPDATE
             SET completed_obligation_position = EXCLUDED.completed_obligation_position,
                 current_position = EXCLUDED.current_position,
@@ -544,7 +549,8 @@ public sealed partial class CoreRuntimeStore
                 ready = EXCLUDED.ready,
                 degradation_reason_code = EXCLUDED.degradation_reason_code,
                 heartbeat_at = EXCLUDED.heartbeat_at,
-                published_at = EXCLUDED.published_at;
+                published_at = EXCLUDED.published_at,
+                measurement_semantic_version = EXCLUDED.measurement_semantic_version;
             """,
             connection,
             transaction);
@@ -562,6 +568,9 @@ public sealed partial class CoreRuntimeStore
             (object?)degradationReasonCode ?? DBNull.Value);
         command.Parameters.AddWithValue("heartbeat_at", now);
         command.Parameters.AddWithValue("published_at", now);
+        command.Parameters.AddWithValue(
+            "measurement_semantic_version",
+            (short)PublishedRuntimeReadiness.CurrentMeasurementSemanticVersion);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 

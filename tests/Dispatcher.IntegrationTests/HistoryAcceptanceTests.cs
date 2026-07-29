@@ -124,12 +124,14 @@ public sealed class HistoryAcceptanceTests
     public async Task VersionedAggregateIsReproducibleAndCarriesWorstQualityAndGap()
     {
         await using var context = await HistoryTestContext.CreateAsync(cluster);
-        await context.Store.AcceptAsync(context.Cut(1, 1, 1, 10, Start.AddSeconds(5)));
+        await context.Store.AcceptAsync(context.Cut(1, 1, 1, 10.1m, Start.AddSeconds(5)));
         await context.Store.AcceptAsync(context.Cut(
-            2, 2, 2, 20, Start.AddSeconds(35), DataQuality.Bad, Freshness.Stale));
+            2, 2, 2, 20.2m, Start.AddSeconds(35), DataQuality.Bad, Freshness.Stale));
         await context.Store.AcceptAsync(context.Gap(3, 3, 3, 3, "source_gap"));
-        await context.Store.AcceptAsync(context.Cut(4, 4, 4, 30, Start.AddSeconds(65)));
-        var policy = new HistoryResolutionPolicy(1, TimeSpan.FromMinutes(1));
+        await context.Store.AcceptAsync(context.Cut(4, 4, 4, 30.3m, Start.AddSeconds(65)));
+        var policy = new HistoryResolutionPolicy(
+            HistoryResolutionPolicy.DecimalMeasurementVersion,
+            TimeSpan.FromMinutes(1));
 
         var first = await context.Store.QueryAggregatesAsync(context.Range(), policy);
         var second = await context.Store.QueryAggregatesAsync(context.Range(), policy);
@@ -138,7 +140,9 @@ public sealed class HistoryAcceptanceTests
         Assert.Equal(first.Value.Buckets.ToArray(), second.Value.Buckets.ToArray());
         Assert.Equal(2, first.Value.Buckets.Count);
         Assert.Equal(2, first.Value.Buckets[0].Count);
-        Assert.Equal(15d, first.Value.Buckets[0].Average);
+        Assert.Equal(15.15m, first.Value.Buckets[0].Average);
+        Assert.Equal(10.1m, first.Value.Buckets[0].Minimum);
+        Assert.Equal(20.2m, first.Value.Buckets[0].Maximum);
         Assert.Equal(DataQuality.Bad, first.Value.Buckets[0].Quality);
         Assert.Equal(Freshness.Stale, first.Value.Buckets[0].Freshness);
         Assert.True(first.Value.Buckets[0].HasGap);
@@ -289,7 +293,7 @@ public sealed class HistoryAcceptanceTests
             ulong runtimePosition,
             ulong scheduleSequence,
             ulong sourcePosition,
-            long value,
+            decimal value,
             DateTimeOffset sourceTimestamp,
             DataQuality quality = DataQuality.Good,
             Freshness freshness = Freshness.Fresh)

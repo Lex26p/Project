@@ -4,16 +4,16 @@ namespace Dispatcher.Web;
 
 public sealed record CommandContextPayload(
     Guid ScopeId, Guid PointId, Guid RevisionId, ulong RevisionNumber, long Generation,
-    string ManifestFingerprint, ulong CurrentPosition, long CurrentValue, string Unit,
+    string ManifestFingerprint, ulong CurrentPosition, decimal CurrentValue, string Unit,
     string Quality, string Freshness);
 public sealed record CommandExecutionPayload(
     Guid ExecutionId, Guid IntentId, Guid LeaseId, Guid ScopeId, Guid PointId,
-    string State, byte Progress, long? ResultValue, string? RejectionCode,
+    string State, byte Progress, decimal? ResultValue, string? RejectionCode,
     DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, DateTimeOffset? CompletedAt,
     ulong Version, string Disposition);
 public sealed record CommandExecutionTransitionPayload(
     ulong Position, Guid ExecutionId, Guid PointId, string State, byte Progress,
-    long? ResultValue, string? RejectionCode, DateTimeOffset OccurredAt, ulong Version);
+    decimal? ResultValue, string? RejectionCode, DateTimeOffset OccurredAt, ulong Version);
 public sealed record CommandExecutionSnapshotPayload(
     ulong Cursor, IReadOnlyList<CommandExecutionPayload> Executions);
 public sealed record CommandExecutionFeedPayload(
@@ -40,7 +40,7 @@ public sealed class ControlApiClient(HttpClient http)
         }, token);
 
     public Task<HttpResponseMessage> PrepareAsync(
-        Guid intentId, Guid leaseId, CommandContextPayload context, long desiredValue,
+        Guid intentId, Guid leaseId, CommandContextPayload context, decimal desiredValue,
         CancellationToken token = default) =>
         http.PostAsJsonAsync("api/commands/intents/prepare", new
         {

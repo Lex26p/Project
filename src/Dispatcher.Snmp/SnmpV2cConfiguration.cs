@@ -88,7 +88,10 @@ public sealed record SnmpPointConfiguration(
     PointId PointId,
     SnmpOid Oid,
     SnmpNumericType ValueType,
-    Unit Unit);
+    Unit Unit)
+{
+    public decimal Scale { get; init; } = 1m;
+}
 
 public sealed record SnmpRetryPolicy
 {
@@ -174,6 +177,11 @@ public sealed record SnmpV2cSourceConfiguration(
             if (point.ValueType is < SnmpNumericType.Signed32 or > SnmpNumericType.Counter64)
             {
                 return Failure("snmp.value_type", "SNMP value type is unsupported.");
+            }
+
+            if (point.Scale == 0m)
+            {
+                return Failure("snmp.scale", "SNMP point scale must be non-zero.");
             }
 
             var oid = SnmpOid.Parse(point.Oid.Value, limits.MaxOidArcs, limits.MaxOidBytes);

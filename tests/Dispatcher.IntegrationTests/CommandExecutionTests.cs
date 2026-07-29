@@ -196,7 +196,7 @@ public sealed class CommandExecutionTests
             scopeId, SourceId.From(Guid.NewGuid()), pointId,
             SourceBindingGeneration.From(1), SourceSessionGeneration.From(1),
             new OwnerPosition<SourceObservation>(1), new OwnerPosition<CurrentEntry>(position),
-            TypedValue.From(10L), Unit.FromSymbol("kW"), DataQuality.Good, Freshness.Fresh,
+            TypedValue.From(10m), Unit.FromSymbol("kW"), DataQuality.Good, Freshness.Fresh,
             SourceTimestamp.FromUtc(Start), ReceiveTimestamp.FromUtc(Start),
             ProcessedTimestamp.FromUtc(Start), new MonotonicTimestamp(1));
         return new CurrentSnapshot(scopeId, new OwnerPosition<CurrentEntry>(position), [entry]);

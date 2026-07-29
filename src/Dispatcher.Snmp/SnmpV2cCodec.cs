@@ -153,9 +153,16 @@ public static class SnmpV2cCodec
                 return Malformed("SNMP response variable binding is malformed or reordered.");
             }
 
-            items.Add(errorStatus == 0
-                ? DecodeValue(points[index].ValueType, valueTag, valueBytes)
-                : SnmpDecodedItem.Failed($"snmp.error_status_{errorStatus}"));
+            if (errorStatus != 0)
+            {
+                items.Add(SnmpDecodedItem.Failed($"snmp.error_status_{errorStatus}"));
+                continue;
+            }
+
+            var decoded = DecodeValue(points[index].ValueType, valueTag, valueBytes);
+            items.Add(decoded.Success
+                ? ApplyScale(decoded, points[index].Scale)
+                : decoded);
         }
 
         return bindingsReader.End
@@ -204,6 +211,11 @@ public static class SnmpV2cCodec
             ? new SnmpDecodedItem(true, checked((long)unsigned), "snmp.ok")
             : SnmpDecodedItem.Failed("snmp.value_range");
     }
+
+    private static SnmpDecodedItem ApplyScale(SnmpDecodedItem item, decimal scale)
+        => MeasurementValue.TryScale(item.Value, scale, out var scaled)
+            ? item with { Value = scaled }
+            : SnmpDecodedItem.Failed("snmp.scale_result");
 
     private static bool TryReadSigned(ReadOnlySpan<byte> bytes, int maxBytes, out long value)
     {
@@ -436,9 +448,9 @@ public static class SnmpV2cCodec
     }
 }
 
-internal sealed record SnmpDecodedItem(bool Success, long Value, string Code)
+internal sealed record SnmpDecodedItem(bool Success, decimal Value, string Code)
 {
-    public static SnmpDecodedItem Failed(string code) => new(false, 0, code);
+    public static SnmpDecodedItem Failed(string code) => new(false, 0m, code);
 }
 
 public sealed class SnmpObservationParser : IProtocolObservationParser, IProtocolDiagnosticParser
@@ -446,7 +458,8 @@ public sealed class SnmpObservationParser : IProtocolObservationParser, IProtoco
     private readonly object sync = new();
     private readonly SnmpV2cSourceConfiguration configuration;
     private readonly IWallClock clock;
-    private readonly Dictionary<PointId, long> lastValues = [];
+    private readonly Dictionary<PointId, decimal> lastValues = [];
+    private SourceBinding? activeBinding;
     private ulong sourcePosition;
 
     public SnmpObservationParser(SnmpV2cSourceConfiguration configuration, IWallClock clock)
@@ -474,6 +487,13 @@ public sealed class SnmpObservationParser : IProtocolObservationParser, IProtoco
 
         lock (sync)
         {
+            if (!ActivateBinding(binding))
+            {
+                return Failure<IReadOnlyList<SourceObservation>>(
+                    "snmp.binding_stale",
+                    "SNMP response belongs to a stale source session.");
+            }
+
             var timestamp = SourceTimestamp.FromUtc(clock.GetUtcNow());
             var observations = new SourceObservation[decoded.Value.Count];
             for (var index = 0; index < decoded.Value.Count; index++)
@@ -531,6 +551,12 @@ public sealed class SnmpObservationParser : IProtocolObservationParser, IProtoco
 
         lock (sync)
         {
+            if (!ActivateBinding(binding))
+            {
+                throw new InvalidOperationException(
+                    "Cannot create an unavailable cut for a stale SNMP source session.");
+            }
+
             var timestamp = SourceTimestamp.FromUtc(clock.GetUtcNow());
             return configuration.Points.Select(point =>
             {
@@ -547,6 +573,34 @@ public sealed class SnmpObservationParser : IProtocolObservationParser, IProtoco
                     timestamp);
             }).ToArray();
         }
+    }
+
+    private bool ActivateBinding(SourceBinding binding)
+    {
+        if (activeBinding is null)
+        {
+            activeBinding = binding;
+            return true;
+        }
+
+        if (activeBinding == binding)
+        {
+            return true;
+        }
+
+        var newer =
+            binding.BindingGeneration > activeBinding.BindingGeneration ||
+            (binding.BindingGeneration == activeBinding.BindingGeneration &&
+             binding.SessionGeneration > activeBinding.SessionGeneration);
+        if (!newer)
+        {
+            return false;
+        }
+
+        activeBinding = binding;
+        sourcePosition = 0;
+        lastValues.Clear();
+        return true;
     }
 
     private static Result<TValue> Failure<TValue>(string code, string message) =>

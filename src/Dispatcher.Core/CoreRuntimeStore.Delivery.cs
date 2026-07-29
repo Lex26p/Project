@@ -405,12 +405,19 @@ public sealed partial class CoreRuntimeStore
         CurrentDto[] CurrentTransitions,
         LivenessDto Liveness)
     {
-        public static ProcessingAcceptanceDto From(RuntimeCutAcceptance acceptance) => new(
-            acceptance.CurrentTransitions.Select(CurrentDto.From).ToArray(),
-            LivenessDto.From(acceptance.Liveness));
+        public int MeasurementSemanticVersion { get; init; }
+
+        public static ProcessingAcceptanceDto From(RuntimeCutAcceptance acceptance) =>
+            new(
+                acceptance.CurrentTransitions.Select(CurrentDto.From).ToArray(),
+                LivenessDto.From(acceptance.Liveness))
+            {
+                MeasurementSemanticVersion = CurrentMeasurementSemanticVersion,
+            };
 
         public RuntimeCutAcceptance ToModel(RuntimeSourceObligation obligation)
         {
+            EnsureMeasurementSemanticVersion(MeasurementSemanticVersion);
             if (obligation.Cut is null)
             {
                 throw new InvalidOperationException(

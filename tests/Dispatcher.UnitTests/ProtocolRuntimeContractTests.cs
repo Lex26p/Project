@@ -174,7 +174,7 @@ public sealed class ProtocolRuntimeContractTests
             ? "a3000000-0000-0000-0000-000000000001"
             : "a3000000-0000-0000-0000-000000000002")),
         new OwnerPosition<SourceObservation>(position),
-        TypedValue.From(10L + checked((long)position)),
+        TypedValue.From(10m + position),
         Unit.FromSymbol("kW"),
         DataQuality.Good,
         Freshness.Fresh,

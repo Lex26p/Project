@@ -261,7 +261,10 @@ public sealed record EquipmentStagingDraftPayload(
     string Fingerprint,
     long Version,
     DateTimeOffset? AppliedAt,
-    IReadOnlyList<EquipmentStagingFieldErrorPayload> Errors);
+    IReadOnlyList<EquipmentStagingFieldErrorPayload> Errors)
+{
+    public decimal? SnmpScale { get; init; } = 1m;
+}
 public sealed record EquipmentStagingRowResultPayload(
     Guid RowId,
     EquipmentIdPayload EquipmentId,
@@ -277,7 +280,7 @@ public sealed record EquipmentStagingApplyPayload(
     IReadOnlyList<EquipmentStagingFieldErrorPayload> Errors);
 public sealed record EquipmentDiagnosticSamplePayload(
     string Name,
-    long? Value,
+    decimal? Value,
     string? Unit,
     string Quality,
     DateTimeOffset ObservedAt,
@@ -313,7 +316,10 @@ public sealed record EquipmentStagingTemplatePayload(
     string? SnmpOid,
     string? SnmpValueType,
     string Unit,
-    long Version);
+    long Version)
+{
+    public decimal? SnmpScale { get; init; } = 1m;
+}
 public sealed record ConfigurationRevisionIdPayload(Guid Value);
 public sealed record EquipmentConfigurationRevisionPayload(
     ConfigurationRevisionIdPayload RevisionId,
@@ -360,6 +366,7 @@ public sealed class EquipmentStagingDraftEdit
     public string? SnmpVersion { get; set; }
     public string? SnmpOid { get; set; }
     public string? SnmpValueType { get; set; }
+    public decimal? SnmpScale { get; set; } = 1m;
     public string Unit { get; set; } = "-";
     public string? Secret { get; set; }
     public string Action { get; set; } = "Create";
@@ -389,6 +396,7 @@ public sealed class EquipmentStagingDraftEdit
             SnmpVersion = snmp ? "v2c" : null,
             SnmpOid = snmp ? "1.3.6.1.2.1.1.3.0" : null,
             SnmpValueType = snmp ? "timeticks" : null,
+            SnmpScale = snmp ? 1m : null,
             Secret = snmp ? "public" : null,
         };
     }
@@ -414,6 +422,7 @@ public sealed class EquipmentStagingDraftEdit
         SnmpVersion = row.SnmpVersion,
         SnmpOid = row.SnmpOid,
         SnmpValueType = row.SnmpValueType,
+        SnmpScale = row.SnmpScale,
         Unit = row.Unit,
         Action = ((StagingActionPayload)row.Action).ToString(),
         ExpectedVersion = row.Version,
@@ -439,6 +448,7 @@ public sealed class EquipmentStagingDraftEdit
         SnmpVersion,
         SnmpOid,
         SnmpValueType,
+        SnmpScale,
         Unit,
         Secret,
         Action,

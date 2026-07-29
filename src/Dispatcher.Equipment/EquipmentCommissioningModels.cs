@@ -52,6 +52,8 @@ public sealed record EquipmentStagingDraftInput(
     StagingApplyAction Action,
     long? ExpectedVersion)
 {
+    public decimal? SnmpScale { get; init; } = 1m;
+
     public static EquipmentStagingDraftInput New(
         FacilityScopeId scopeId,
         LocationId locationId,
@@ -110,7 +112,10 @@ public sealed record EquipmentStagingDraftSnapshot(
     string Fingerprint,
     long Version,
     DateTimeOffset? AppliedAt,
-    IReadOnlyList<StagingFieldError> Errors);
+    IReadOnlyList<StagingFieldError> Errors)
+{
+    public decimal? SnmpScale { get; init; } = 1m;
+}
 
 public sealed record EquipmentStagingTemplateSnapshot(
     Guid TemplateId,
@@ -128,7 +133,10 @@ public sealed record EquipmentStagingTemplateSnapshot(
     string? SnmpOid,
     string? SnmpValueType,
     string Unit,
-    long Version);
+    long Version)
+{
+    public decimal? SnmpScale { get; init; } = 1m;
+}
 
 public sealed record EquipmentStagingApplyResult(
     Guid RowId,
@@ -138,7 +146,7 @@ public sealed record EquipmentStagingApplyResult(
 
 public sealed record EquipmentDiagnosticSample(
     string Name,
-    long? Value,
+    decimal? Value,
     string? Unit,
     string Quality,
     DateTimeOffset ObservedAt,

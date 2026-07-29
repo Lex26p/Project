@@ -234,7 +234,7 @@ public sealed class RuntimeSchedulingTests
         SourceBinding binding,
         PointId pointId,
         ulong sourcePosition,
-        long value,
+        decimal value,
         Freshness freshness = Freshness.Fresh) =>
         new(
             binding.ScopeId,

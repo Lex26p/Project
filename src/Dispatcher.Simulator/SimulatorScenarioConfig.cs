@@ -5,11 +5,19 @@ namespace Dispatcher.Simulator;
 
 public sealed record SimulatorPointConfig
 {
-    public SimulatorPointConfig(PointId pointId, long baseline, long amplitude, Unit unit)
+    public SimulatorPointConfig(PointId pointId, decimal baseline, decimal amplitude, Unit unit)
     {
         _ = pointId.Value;
         ArgumentOutOfRangeException.ThrowIfNegative(amplitude);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(amplitude, (long.MaxValue - 1) / 2);
+        if (!MeasurementValue.IsRepresentable(baseline) ||
+            !MeasurementValue.IsRepresentable(amplitude) ||
+            !MeasurementValue.IsRepresentable(baseline - amplitude) ||
+            !MeasurementValue.IsRepresentable(baseline + amplitude))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(amplitude),
+                "Simulator values must fit the decimal measurement envelope.");
+        }
 
         ArgumentNullException.ThrowIfNull(unit);
         PointId = pointId;
@@ -20,9 +28,9 @@ public sealed record SimulatorPointConfig
 
     public PointId PointId { get; }
 
-    public long Baseline { get; }
+    public decimal Baseline { get; }
 
-    public long Amplitude { get; }
+    public decimal Amplitude { get; }
 
     public Unit Unit { get; }
 }

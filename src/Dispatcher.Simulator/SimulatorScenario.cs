@@ -26,6 +26,11 @@ public sealed class SimulatorScenario
         {
             var point = config.Points[index];
             var value = checked(point.Baseline + NextOffset(point.Amplitude));
+            if (!MeasurementValue.IsRepresentable(value))
+            {
+                throw new OverflowException(
+                    "Simulator output exceeds the decimal measurement envelope.");
+            }
             sourcePosition = checked(sourcePosition + 1);
             observations[index] = new SourceObservation(
                 config.ScopeId,
@@ -42,15 +47,23 @@ public sealed class SimulatorScenario
         return observations;
     }
 
-    private long NextOffset(long amplitude)
+    private decimal NextOffset(decimal amplitude)
     {
-        if (amplitude == 0)
+        if (amplitude == 0m)
         {
-            return 0;
+            return 0m;
         }
 
-        var range = checked((ulong)((amplitude * 2) + 1));
-        return checked((long)(random.Next() % range) - amplitude);
+        if (amplitude == decimal.Truncate(amplitude) &&
+            amplitude <= (long.MaxValue - 1) / 2)
+        {
+            var integralAmplitude = decimal.ToInt64(amplitude);
+            var range = checked((ulong)((integralAmplitude * 2) + 1));
+            return checked((long)(random.Next() % range) - integralAmplitude);
+        }
+
+        var fraction = random.Next() / (decimal)ulong.MaxValue;
+        return MeasurementValue.RoundDerived(((fraction * 2m) - 1m) * amplitude);
     }
 
     private struct SplitMix64

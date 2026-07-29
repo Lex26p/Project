@@ -262,6 +262,7 @@ public sealed class EquipmentCommissioningService
                 SnmpVersion = template.Value.SnmpVersion,
                 SnmpOid = template.Value.SnmpOid,
                 SnmpValueType = template.Value.SnmpValueType,
+                SnmpScale = template.Value.SnmpScale,
                 Unit = template.Value.Unit,
             };
         }
@@ -279,6 +280,7 @@ public sealed class EquipmentCommissioningService
                 SnmpVersion = template.Value.SnmpVersion,
                 SnmpOid = template.Value.SnmpOid,
                 SnmpValueType = template.Value.SnmpValueType,
+                SnmpScale = template.Value.SnmpScale,
                 Unit = template.Value.Unit,
                 Secret = null,
             };
@@ -492,30 +494,34 @@ public sealed class EquipmentCommissioningService
         StagingApplyAction.Create,
         null);
 
-    private static EquipmentStagingDraftInput ToInput(EquipmentStagingDraftSnapshot row) => new(
-        row.RowId,
-        row.EquipmentId,
-        row.ScopeId,
-        row.LocationId,
-        row.Code,
-        row.Name,
-        row.Protocol,
-        row.Host,
-        row.Port,
-        row.ModbusUnitId,
-        row.ModbusTable,
-        row.ModbusAddress,
-        row.ModbusValueType,
-        row.ModbusByteOrder,
-        row.ModbusWordOrder,
-        row.ModbusScale,
-        row.SnmpVersion,
-        row.SnmpOid,
-        row.SnmpValueType,
-        row.Unit,
-        null,
-        row.Action,
-        row.Version);
+    private static EquipmentStagingDraftInput ToInput(EquipmentStagingDraftSnapshot row) =>
+        new(
+            row.RowId,
+            row.EquipmentId,
+            row.ScopeId,
+            row.LocationId,
+            row.Code,
+            row.Name,
+            row.Protocol,
+            row.Host,
+            row.Port,
+            row.ModbusUnitId,
+            row.ModbusTable,
+            row.ModbusAddress,
+            row.ModbusValueType,
+            row.ModbusByteOrder,
+            row.ModbusWordOrder,
+            row.ModbusScale,
+            row.SnmpVersion,
+            row.SnmpOid,
+            row.SnmpValueType,
+            row.Unit,
+            null,
+            row.Action,
+            row.Version)
+        {
+            SnmpScale = row.SnmpScale,
+        };
 
     private static StagingRowResult AssertSingle(IReadOnlyList<StagingRowResult> rows) =>
         rows.Count == 1

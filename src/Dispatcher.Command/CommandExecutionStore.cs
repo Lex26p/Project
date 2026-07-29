@@ -151,7 +151,7 @@ public sealed class CommandExecutionStore
         var cursor = await ReadCursorAsync(connection, transaction, access.Value.Session.Id, scopeId, token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
             SELECT execution_id,intent_id,lease_id,scope_id,point_id,session_id,subject_id,state,progress,
-                   result_value,rejection_code,accepted_at,updated_at,completed_at,version
+                   result_measurement_value,rejection_code,accepted_at,updated_at,completed_at,version
             FROM {CommandMigrations.Schema}.command_execution
             WHERE session_id=@session AND scope_id=@scope ORDER BY accepted_at,execution_id LIMIT 128;
             """, connection, transaction);
@@ -177,7 +177,7 @@ public sealed class CommandExecutionStore
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
         await SetRoleAsync(connection, transaction, token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
-            SELECT t.position,t.execution_id,t.scope_id,t.point_id,t.state,t.progress,t.result_value,
+            SELECT t.position,t.execution_id,t.scope_id,t.point_id,t.state,t.progress,t.result_measurement_value,
                    t.rejection_code,t.occurred_at,t.version
             FROM {CommandMigrations.Schema}.execution_transition t
             JOIN {CommandMigrations.Schema}.command_execution e ON e.execution_id=t.execution_id
@@ -229,7 +229,7 @@ public sealed class CommandExecutionStore
 
     private async Task<CommandExecutionSnapshot> AdvanceAsync(
         CommandExecutionSnapshot execution, CommandExecutionState state, byte progress,
-        long? resultValue, string? rejectionCode, CancellationToken token)
+        decimal? resultValue, string? rejectionCode, CancellationToken token)
     {
         await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -245,7 +245,7 @@ public sealed class CommandExecutionStore
 
     private async Task<CommandExecutionSnapshot> AdvanceLockedAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, CommandExecutionSnapshot current,
-        CommandExecutionState state, byte progress, long? resultValue, string? rejectionCode,
+        CommandExecutionState state, byte progress, decimal? resultValue, string? rejectionCode,
         string auditAction, CancellationToken token)
     {
         if (current.State is CommandExecutionState.Succeeded or CommandExecutionState.Rejected)
@@ -261,7 +261,7 @@ public sealed class CommandExecutionStore
         };
         await using (var update = new NpgsqlCommand($"""
             UPDATE {CommandMigrations.Schema}.command_execution
-            SET state=@state,progress=@progress,result_value=@result,rejection_code=@rejection,
+            SET state=@state,progress=@progress,result_measurement_value=@result,rejection_code=@rejection,
                 updated_at=@updated,completed_at=@completed,version=@version
             WHERE execution_id=@execution AND version=@expected;
             """, connection, transaction))
@@ -269,7 +269,7 @@ public sealed class CommandExecutionStore
             update.Parameters.AddWithValue("execution", current.ExecutionId.Value);
             update.Parameters.AddWithValue("state", (short)state);
             update.Parameters.AddWithValue("progress", (short)progress);
-            AddNullableInt64(update, "result", resultValue);
+            AddNullableDecimal(update, "result", resultValue);
             AddNullableText(update, "rejection", rejectionCode);
             update.Parameters.AddWithValue("updated", now);
             AddNullableTimestamp(update, "completed", next.CompletedAt);
@@ -288,8 +288,8 @@ public sealed class CommandExecutionStore
         ActiveSimulatorManifest active, CancellationToken token)
     {
         var point = active.Configuration.Points.Single(value => value.PointId == intent.PointId);
-        var allowed = (decimal)intent.DesiredValue >= (decimal)point.Baseline - point.Amplitude &&
-                      (decimal)intent.DesiredValue <= (decimal)point.Baseline + point.Amplitude;
+        var allowed = intent.DesiredValue >= point.Baseline - point.Amplitude &&
+                      intent.DesiredValue <= point.Baseline + point.Amplitude;
         var receipt = new SimulatorReceipt(
             allowed ? CommandExecutionState.Succeeded : CommandExecutionState.Rejected,
             allowed ? intent.DesiredValue : null, allowed ? null : "simulator.value_out_of_range");
@@ -301,14 +301,14 @@ public sealed class CommandExecutionStore
         await SetRoleAsync(connection, transaction, token).ConfigureAwait(false);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {CommandMigrations.Schema}.simulator_execution_receipt
-                (execution_id,fingerprint,outcome,result_value,rejection_code,accepted_at)
+                (execution_id,fingerprint,outcome,result_measurement_value,rejection_code,accepted_at)
             VALUES (@execution,@fingerprint,@outcome,@result,@rejection,@accepted)
             ON CONFLICT (execution_id) DO NOTHING;
             """, connection, transaction);
         insert.Parameters.AddWithValue("execution", execution.ExecutionId.Value);
         insert.Parameters.AddWithValue("fingerprint", fingerprint);
         insert.Parameters.AddWithValue("outcome", (short)receipt.State);
-        AddNullableInt64(insert, "result", receipt.ResultValue);
+        AddNullableDecimal(insert, "result", receipt.ResultValue);
         AddNullableText(insert, "rejection", receipt.RejectionCode);
         insert.Parameters.AddWithValue("accepted", UtcNow());
         if (await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false) != 1)
@@ -331,7 +331,7 @@ public sealed class CommandExecutionStore
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {CommandMigrations.Schema}.command_execution
                 (execution_id,intent_id,request_fingerprint,lease_id,scope_id,point_id,session_id,subject_id,
-                 state,progress,result_value,rejection_code,accepted_at,updated_at,completed_at,version)
+                 state,progress,result_measurement_value,rejection_code,accepted_at,updated_at,completed_at,version)
             VALUES (@execution,@intent,@fingerprint,@lease,@scope,@point,@session,@subject,
                     @state,@progress,NULL,NULL,@accepted,@updated,NULL,@version);
             """, connection, transaction);
@@ -355,8 +355,8 @@ public sealed class CommandExecutionStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, CommandIntentId id, CancellationToken token)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT lease_id,scope_id,point_id,desired_value,unit,revision_id,revision_number,
-                   manifest_generation,manifest_fingerprint,current_position,current_value,quality,freshness,
+            SELECT lease_id,scope_id,point_id,desired_measurement_value,unit,revision_id,revision_number,
+                   manifest_generation,manifest_fingerprint,current_position,current_measurement_value,quality,freshness,
                    safety_version,prepared_at,expires_at
             FROM {CommandMigrations.Schema}.prepared_intent WHERE intent_id=@intent;
             """, connection, transaction);
@@ -364,10 +364,10 @@ public sealed class CommandExecutionStore
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         return await reader.ReadAsync(token).ConfigureAwait(false) ? new PreparedCommandIntent(
             id, ControlLeaseId.From(reader.GetGuid(0)), RuntimeScopeId.From(reader.GetGuid(1)), PointId.From(reader.GetGuid(2)),
-            reader.GetInt64(3), Unit.FromSymbol(reader.GetString(4)),
+            reader.GetDecimal(3), Unit.FromSymbol(reader.GetString(4)),
             Dispatcher.Configuration.ConfigurationRevisionId.From(reader.GetGuid(5)),
             RevisionNumber.From(checked((ulong)reader.GetInt64(6))), reader.GetInt64(7), reader.GetString(8),
-            checked((ulong)reader.GetInt64(9)), reader.GetInt64(10), (DataQuality)reader.GetInt16(11),
+            checked((ulong)reader.GetInt64(9)), reader.GetDecimal(10), (DataQuality)reader.GetInt16(11),
             (Freshness)reader.GetInt16(12), StateVersion.From(checked((ulong)reader.GetInt64(13))),
             reader.GetFieldValue<DateTimeOffset>(14), reader.GetFieldValue<DateTimeOffset>(15)) : null;
     }
@@ -406,7 +406,7 @@ public sealed class CommandExecutionStore
     {
         await using var command = new NpgsqlCommand($"""
             SELECT execution_id,intent_id,lease_id,scope_id,point_id,session_id,subject_id,state,progress,
-                   result_value,rejection_code,accepted_at,updated_at,completed_at,version
+                   result_measurement_value,rejection_code,accepted_at,updated_at,completed_at,version
             FROM {CommandMigrations.Schema}.command_execution WHERE execution_id=@execution{(update ? " FOR UPDATE" : string.Empty)};
             """, connection, transaction);
         command.Parameters.AddWithValue("execution", id.Value);
@@ -432,14 +432,14 @@ public sealed class CommandExecutionStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, CommandExecutionId id, CancellationToken token)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT fingerprint,outcome,result_value,rejection_code
+            SELECT fingerprint,outcome,result_measurement_value,rejection_code
             FROM {CommandMigrations.Schema}.simulator_execution_receipt WHERE execution_id=@execution;
             """, connection, transaction);
         command.Parameters.AddWithValue("execution", id.Value);
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         return await reader.ReadAsync(token).ConfigureAwait(false)
             ? (reader.GetString(0), new SimulatorReceipt((CommandExecutionState)reader.GetInt16(1),
-                reader.IsDBNull(2) ? null : reader.GetInt64(2), reader.IsDBNull(3) ? null : reader.GetString(3)))
+                reader.IsDBNull(2) ? null : reader.GetDecimal(2), reader.IsDBNull(3) ? null : reader.GetString(3)))
             : null;
     }
 
@@ -448,7 +448,7 @@ public sealed class CommandExecutionStore
         ControlLeaseId.From(reader.GetGuid(2)), RuntimeScopeId.From(reader.GetGuid(3)), PointId.From(reader.GetGuid(4)),
         SessionId.From(reader.GetGuid(5)), SubjectId.From(reader.GetGuid(6)),
         (CommandExecutionState)reader.GetInt16(7), checked((byte)reader.GetInt16(8)),
-        reader.IsDBNull(9) ? null : reader.GetInt64(9), reader.IsDBNull(10) ? null : reader.GetString(10),
+        reader.IsDBNull(9) ? null : reader.GetDecimal(9), reader.IsDBNull(10) ? null : reader.GetString(10),
         reader.GetFieldValue<DateTimeOffset>(11), reader.GetFieldValue<DateTimeOffset>(12),
         reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13),
         StateVersion.From(checked((ulong)reader.GetInt64(14))), CommandExecutionDisposition.Accepted);
@@ -457,7 +457,7 @@ public sealed class CommandExecutionStore
         checked((ulong)reader.GetInt64(0)), CommandExecutionId.From(reader.GetGuid(1)),
         RuntimeScopeId.From(reader.GetGuid(2)), PointId.From(reader.GetGuid(3)),
         (CommandExecutionState)reader.GetInt16(4), checked((byte)reader.GetInt16(5)),
-        reader.IsDBNull(6) ? null : reader.GetInt64(6), reader.IsDBNull(7) ? null : reader.GetString(7),
+        reader.IsDBNull(6) ? null : reader.GetDecimal(6), reader.IsDBNull(7) ? null : reader.GetString(7),
         reader.GetFieldValue<DateTimeOffset>(8), StateVersion.From(checked((ulong)reader.GetInt64(9))));
 
     private static async Task WriteTransitionAsync(
@@ -466,7 +466,7 @@ public sealed class CommandExecutionStore
     {
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {CommandMigrations.Schema}.execution_transition
-                (execution_id,scope_id,point_id,state,progress,result_value,rejection_code,occurred_at,version)
+                (execution_id,scope_id,point_id,state,progress,result_measurement_value,rejection_code,occurred_at,version)
             VALUES (@execution,@scope,@point,@state,@progress,@result,@rejection,@occurred,@version);
             """, connection, transaction);
         command.Parameters.AddWithValue("execution", execution.ExecutionId.Value);
@@ -474,7 +474,7 @@ public sealed class CommandExecutionStore
         command.Parameters.AddWithValue("point", execution.PointId.Value);
         command.Parameters.AddWithValue("state", (short)execution.State);
         command.Parameters.AddWithValue("progress", (short)execution.Progress);
-        AddNullableInt64(command, "result", execution.ResultValue);
+        AddNullableDecimal(command, "result", execution.ResultValue);
         AddNullableText(command, "rejection", execution.RejectionCode);
         command.Parameters.AddWithValue("occurred", execution.UpdatedAt);
         command.Parameters.AddWithValue("version", checked((long)execution.Version.Value));
@@ -537,8 +537,8 @@ public sealed class CommandExecutionStore
         return now.Offset == TimeSpan.Zero ? now : throw new InvalidOperationException("Command execution requires UTC.");
     }
 
-    private static void AddNullableInt64(NpgsqlCommand command, string name, long? value) =>
-        command.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.Bigint) { Value = value ?? (object)DBNull.Value });
+    private static void AddNullableDecimal(NpgsqlCommand command, string name, decimal? value) =>
+        command.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.Numeric) { Value = value ?? (object)DBNull.Value });
     private static void AddNullableText(NpgsqlCommand command, string name, string? value) =>
         command.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.Text) { Value = value ?? (object)DBNull.Value });
     private static void AddNullableTimestamp(NpgsqlCommand command, string name, DateTimeOffset? value) =>
@@ -562,5 +562,5 @@ public sealed class CommandExecutionStore
         RuntimeScopeId ScopeId, SessionId SessionId, SubjectId SubjectId,
         DateTimeOffset ExpiresAt, DateTimeOffset? RevokedAt);
     private sealed record SimulatorReceipt(
-        CommandExecutionState State, long? ResultValue, string? RejectionCode);
+        CommandExecutionState State, decimal? ResultValue, string? RejectionCode);
 }

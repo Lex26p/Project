@@ -397,6 +397,7 @@ public sealed partial class EquipmentStagingStore
             draft.Value.Snapshot.SnmpVersion,
             draft.Value.Snapshot.SnmpOid,
             draft.Value.Snapshot.SnmpValueType,
+            draft.Value.Snapshot.SnmpScale,
             draft.Value.Snapshot.Unit,
         });
         await using (var command = new NpgsqlCommand(
@@ -738,7 +739,11 @@ public sealed partial class EquipmentStagingStore
 
         ArgumentNullException.ThrowIfNull(samples);
         var now = clock.GetUtcNow();
-        var resultJson = JsonSerializer.Serialize(samples.Take(256));
+        var resultJson = JsonSerializer.Serialize(new DiagnosticResultDto
+        {
+            MeasurementSemanticVersion = 2,
+            Samples = samples.Take(256).ToArray(),
+        });
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
@@ -830,6 +835,7 @@ public sealed partial class EquipmentStagingStore
             input.SnmpVersion,
             input.SnmpOid,
             input.SnmpValueType,
+            input.SnmpScale,
             input.Unit,
         });
 
@@ -896,7 +902,10 @@ public sealed partial class EquipmentStagingStore
             root.GetProperty("Unit").GetString() ?? string.Empty,
             null,
             (StagingApplyAction)reader.GetInt16(9),
-            reader.GetInt64(13));
+            reader.GetInt64(13))
+        {
+            SnmpScale = NullableDecimal(root, "SnmpScale") ?? 1m,
+        };
         var snapshot = new EquipmentStagingDraftSnapshot(
             input.RowId,
             input.EquipmentId,
@@ -925,7 +934,10 @@ public sealed partial class EquipmentStagingStore
             reader.GetString(12),
             reader.GetInt64(13),
             reader.IsDBNull(14) ? null : reader.GetFieldValue<DateTimeOffset>(14),
-            EquipmentCommissioningTools.ValidateDraft(input, secretReference is not null));
+            EquipmentCommissioningTools.ValidateDraft(input, secretReference is not null))
+        {
+            SnmpScale = input.SnmpScale,
+        };
         return (snapshot, secretReference);
     }
 
@@ -960,7 +972,7 @@ public sealed partial class EquipmentStagingStore
 
         var samples = reader.IsDBNull(13)
             ? []
-            : JsonSerializer.Deserialize<EquipmentDiagnosticSample[]>(reader.GetString(13)) ?? [];
+            : DeserializeDiagnosticSamples(reader.GetString(13));
         return new EquipmentDiagnosticJobSnapshot(
             reader.GetGuid(0),
             reader.GetGuid(1),
@@ -976,6 +988,32 @@ public sealed partial class EquipmentStagingStore
             reader.IsDBNull(11) ? null : reader.GetString(11),
             reader.IsDBNull(12) ? null : reader.GetString(12),
             samples);
+    }
+
+    private static EquipmentDiagnosticSample[] DeserializeDiagnosticSamples(
+        string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind == JsonValueKind.Array)
+        {
+            return JsonSerializer.Deserialize<EquipmentDiagnosticSample[]>(json) ?? [];
+        }
+
+        var result = JsonSerializer.Deserialize<DiagnosticResultDto>(json)
+            ?? throw new JsonException("Diagnostic result is missing.");
+        if (result.MeasurementSemanticVersion != 2)
+        {
+            throw new JsonException("Unsupported diagnostic measurement semantic version.");
+        }
+
+        return result.Samples;
+    }
+
+    private sealed record DiagnosticResultDto
+    {
+        public int MeasurementSemanticVersion { get; init; }
+
+        public EquipmentDiagnosticSample[] Samples { get; init; } = [];
     }
 
     private static async Task<EquipmentStagingTemplateSnapshot?> ReadTemplateAsync(
@@ -1021,7 +1059,10 @@ public sealed partial class EquipmentStagingStore
             NullableString(root, "SnmpOid"),
             NullableString(root, "SnmpValueType"),
             root.GetProperty("Unit").GetString() ?? string.Empty,
-            reader.GetInt64(5));
+            reader.GetInt64(5))
+        {
+            SnmpScale = NullableDecimal(root, "SnmpScale") ?? 1m,
+        };
     }
 
     private async Task InsertCommissioningAuditAsync(

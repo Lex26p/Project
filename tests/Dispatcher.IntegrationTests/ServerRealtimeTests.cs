@@ -332,7 +332,7 @@ public sealed class ServerRealtimeTests
                 sourceId,
                 pointId,
                 new OwnerPosition<SourceObservation>(sourcePosition),
-                TypedValue.From(value),
+                TypedValue.From((decimal)value),
                 Unit.FromSymbol("°C"),
                 DataQuality.Good,
                 Freshness.Fresh,

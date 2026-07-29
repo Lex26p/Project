@@ -29,6 +29,7 @@ public sealed class ProtocolCommissioningTests
         Assert.True(plan.IsSuccess);
         Assert.Single(plan.Value.ModbusSources);
         Assert.Single(plan.Value.SnmpSources);
+        Assert.Equal(0.1m, Assert.Single(plan.Value.SnmpSources[0].Points).Scale);
         Assert.Equal((ulong)7, plan.Value.BindingGeneration.Value);
         var bindings = plan.Value.CreateBindings(SourceSessionGeneration.From(3));
         Assert.Equal(2, bindings.Count);
@@ -65,7 +66,7 @@ public sealed class ProtocolCommissioningTests
             previousBinding.SourceId,
             PointId.From(ModbusPoint),
             new OwnerPosition<SourceObservation>(1),
-            TypedValue.From(42L),
+            TypedValue.From(42m),
             Unit.FromSymbol("kW"),
             DataQuality.Good,
             Freshness.Fresh,
@@ -144,6 +145,7 @@ public sealed class ProtocolCommissioningTests
                             pointId = SnmpPoint,
                             oid = "1.3.6.1.2.1.1.3.0",
                             type = "timeticks",
+                            scale = 0.1m,
                             unit = "s",
                         },
                     },

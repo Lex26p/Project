@@ -326,7 +326,7 @@ public sealed class AlarmActionTests
                 SourceId,
                 PointId,
                 new OwnerPosition<SourceObservation>(1),
-                TypedValue.From(110L),
+                TypedValue.From(110m),
                 Unit.FromSymbol("kW"),
                 DataQuality.Good,
                 Freshness.Fresh,

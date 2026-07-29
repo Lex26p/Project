@@ -33,7 +33,7 @@ public sealed record PublishedCurrentEntry(
     SourceSessionGeneration SessionGeneration,
     OwnerPosition<SourceObservation> SourcePosition,
     OwnerPosition<PublishedCurrentEntry> CurrentPosition,
-    TypedValue<long> Value,
+    TypedValue<decimal> Value,
     Unit Unit,
     DataQuality Quality,
     Freshness Freshness,
@@ -53,10 +53,16 @@ public sealed record PublishedRuntimeReadiness(
     DateTimeOffset? HeartbeatAt,
     DateTimeOffset? PublishedAt)
 {
+    public const int CurrentMeasurementSemanticVersion = 2;
+
+    public int MeasurementSemanticVersion { get; init; } =
+        CurrentMeasurementSemanticVersion;
+
     public bool CanServeCurrent =>
         Published &&
         Ready &&
-        ProtectedContinuity;
+        ProtectedContinuity &&
+        MeasurementSemanticVersion == CurrentMeasurementSemanticVersion;
 }
 
 public sealed record PublishedCurrentSnapshot(

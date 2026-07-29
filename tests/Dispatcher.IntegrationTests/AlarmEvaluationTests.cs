@@ -45,7 +45,7 @@ public sealed class AlarmEvaluationTests
             transaction);
         await setRole.ExecuteNonQueryAsync();
         await using var mutation = new NpgsqlCommand(
-            $"UPDATE {AlarmMigrations.Schema}.definition SET threshold = 999 WHERE scope_id = @scope_id;",
+            $"UPDATE {AlarmMigrations.Schema}.definition SET threshold_value = 999 WHERE scope_id = @scope_id;",
             connection,
             transaction);
         mutation.Parameters.AddWithValue("scope_id", context.ScopeId.Value);
@@ -59,22 +59,22 @@ public sealed class AlarmEvaluationTests
         await using var context = await AlarmTestContext.CreateAsync(cluster);
         var epoch = RevisionNumber.Initial;
         Assert.True((await context.Store.ActivateDefinitionSetAsync(
-            context.DefinitionSet(epoch, threshold: 100))).IsSuccess);
+            context.DefinitionSet(epoch, threshold: 100.5m))).IsSuccess);
         var evaluator = new AlarmEvaluator(context.ScopeId, epoch, context.Store);
 
-        Assert.Empty((await context.EvaluateAsync(evaluator, 110)).Occurrences);
+        Assert.Empty((await context.EvaluateAsync(evaluator, 110.75m)).Occurrences);
         context.Clock.Advance(TimeSpan.FromSeconds(9));
-        Assert.Empty((await context.EvaluateAsync(evaluator, 111)).Occurrences);
+        Assert.Empty((await context.EvaluateAsync(evaluator, 111.25m)).Occurrences);
         context.Clock.Advance(TimeSpan.FromSeconds(1));
-        var raised = Assert.Single((await context.EvaluateAsync(evaluator, 112)).Occurrences);
+        var raised = Assert.Single((await context.EvaluateAsync(evaluator, 112.5m)).Occurrences);
         Assert.Equal(AlarmConditionState.Active, raised.Condition.State);
         Assert.Equal(Start.AddSeconds(10), raised.OpenedAt);
 
         context.Clock.Advance(TimeSpan.FromSeconds(1));
-        var insideHysteresis = Assert.Single((await context.EvaluateAsync(evaluator, 95)).Occurrences);
+        var insideHysteresis = Assert.Single((await context.EvaluateAsync(evaluator, 95.25m)).Occurrences);
         Assert.Equal(AlarmConditionState.Active, insideHysteresis.Condition.State);
         context.Clock.Advance(TimeSpan.FromSeconds(1));
-        var pendingClear = Assert.Single((await context.EvaluateAsync(evaluator, 90)).Occurrences);
+        var pendingClear = Assert.Single((await context.EvaluateAsync(evaluator, 90.25m)).Occurrences);
         Assert.Equal(AlarmConditionState.PendingClear, pendingClear.Condition.State);
 
         var restartedStore = new AlarmStore(
@@ -83,10 +83,10 @@ public sealed class AlarmEvaluationTests
             context.Clock);
         var restartedEvaluator = new AlarmEvaluator(context.ScopeId, epoch, restartedStore);
         context.Clock.Advance(TimeSpan.FromSeconds(4));
-        var stillPending = Assert.Single((await context.EvaluateAsync(restartedEvaluator, 89)).Occurrences);
+        var stillPending = Assert.Single((await context.EvaluateAsync(restartedEvaluator, 90.2m)).Occurrences);
         Assert.Equal(AlarmConditionState.PendingClear, stillPending.Condition.State);
         context.Clock.Advance(TimeSpan.FromSeconds(1));
-        var finalInput = context.Apply(88);
+        var finalInput = context.Apply(89.9m);
         var cleared = Assert.Single((await restartedEvaluator.EvaluatePostRuntimeCutAsync(
             finalInput.Acceptance,
             finalInput.Snapshot)).Value.Occurrences);
@@ -164,7 +164,7 @@ public sealed class AlarmEvaluationTests
             return new AlarmTestContext(database, dataSource, new MutableClock(Start));
         }
 
-        public AlarmDefinitionSet DefinitionSet(RevisionNumber epoch, long threshold) => new(
+        public AlarmDefinitionSet DefinitionSet(RevisionNumber epoch, decimal threshold) => new(
             ScopeId,
             epoch,
             [
@@ -174,18 +174,18 @@ public sealed class AlarmEvaluationTests
                     "High power",
                     AlarmThresholdDirection.High,
                     threshold,
-                    hysteresis: 10,
+                    hysteresis: 10.25m,
                     raiseDelay: TimeSpan.FromSeconds(10),
                     clearDelay: TimeSpan.FromSeconds(5)),
             ]);
 
-        public async Task<AlarmEvaluationSnapshot> EvaluateAsync(AlarmEvaluator evaluator, long value)
+        public async Task<AlarmEvaluationSnapshot> EvaluateAsync(AlarmEvaluator evaluator, decimal value)
         {
             var input = Apply(value);
             return (await evaluator.EvaluatePostRuntimeCutAsync(input.Acceptance, input.Snapshot)).Value;
         }
 
-        public EvaluationInput Apply(long value)
+        public EvaluationInput Apply(decimal value)
         {
             sourcePosition = checked(sourcePosition + 1);
             scheduleSequence = checked(scheduleSequence + 1);

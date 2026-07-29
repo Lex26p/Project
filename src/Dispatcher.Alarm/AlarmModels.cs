@@ -70,17 +70,25 @@ public sealed record AlarmDefinition
         PointId pointId,
         string name,
         AlarmThresholdDirection direction,
-        long threshold,
-        long hysteresis,
+        decimal threshold,
+        decimal hysteresis,
         TimeSpan raiseDelay,
         TimeSpan clearDelay,
         bool enabled = true,
-        AlarmPriority priority = AlarmPriority.Medium)
+        AlarmPriority priority = AlarmPriority.Medium,
+        Unit? unit = null)
     {
         _ = definitionId.Value;
         _ = pointId.Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentOutOfRangeException.ThrowIfNegative(hysteresis);
+        if (!MeasurementValue.IsRepresentable(threshold) ||
+            !MeasurementValue.IsRepresentable(hysteresis))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(threshold),
+                "Alarm values must fit the decimal measurement envelope.");
+        }
         ArgumentOutOfRangeException.ThrowIfLessThan(raiseDelay, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThan(clearDelay, TimeSpan.Zero);
         if (name.Length > 200)
@@ -104,6 +112,7 @@ public sealed record AlarmDefinition
         Direction = direction;
         Threshold = threshold;
         Hysteresis = hysteresis;
+        Unit = unit ?? Dispatcher.Semantics.Unit.FromSymbol("-");
         RaiseDelay = raiseDelay;
         ClearDelay = clearDelay;
         Enabled = enabled;
@@ -118,9 +127,11 @@ public sealed record AlarmDefinition
 
     public AlarmThresholdDirection Direction { get; }
 
-    public long Threshold { get; }
+    public decimal Threshold { get; }
 
-    public long Hysteresis { get; }
+    public decimal Hysteresis { get; }
+
+    public Unit Unit { get; }
 
     public TimeSpan RaiseDelay { get; }
 

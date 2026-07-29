@@ -68,6 +68,7 @@ public sealed class AuthorizedRuntimeReader
                 readiness.Published,
                 readiness.Ready,
                 readiness.CanServeCurrent,
+                readiness.MeasurementSemanticVersion,
                 readiness.DegradationReasonCode,
                 readiness.HeartbeatAt,
                 readiness.PublishedAt));

@@ -231,7 +231,7 @@ public sealed class CoreRuntimeDownstreamProgressTests
                         SourceId,
                         PointId,
                         new OwnerPosition<SourceObservation>(1),
-                        TypedValue.From(42L),
+                        TypedValue.From(42m),
                         Unit.FromSymbol("kW"),
                         DataQuality.Good,
                         Freshness.Fresh,

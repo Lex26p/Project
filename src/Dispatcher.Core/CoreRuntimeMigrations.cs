@@ -233,6 +233,34 @@ public static partial class CoreRuntimeMigrations
                     ADD COLUMN alarm_definition_epoch bigint NULL
                         CHECK (alarm_definition_epoch > 0);
                     """),
+                new MigrationStep(
+                    6,
+                    "decimal measurement values and semantic version",
+                    $"""
+                    ALTER TABLE {Schema}.published_current
+                        RENAME COLUMN value TO measurement_value;
+                    ALTER TABLE {Schema}.published_current
+                        ALTER COLUMN measurement_value TYPE numeric
+                        USING measurement_value::numeric;
+                    ALTER TABLE {Schema}.published_current
+                        ADD CONSTRAINT published_current_measurement_value_envelope CHECK (
+                            abs(measurement_value) < 10000000000000000000
+                            AND measurement_value = round(measurement_value, 9));
+
+                    ALTER TABLE {Schema}.published_delta
+                        RENAME COLUMN value TO measurement_value;
+                    ALTER TABLE {Schema}.published_delta
+                        ALTER COLUMN measurement_value TYPE numeric
+                        USING measurement_value::numeric;
+                    ALTER TABLE {Schema}.published_delta
+                        ADD CONSTRAINT published_delta_measurement_value_envelope CHECK (
+                            abs(measurement_value) < 10000000000000000000
+                            AND measurement_value = round(measurement_value, 9));
+
+                    ALTER TABLE {Schema}.published_scope
+                        ADD COLUMN measurement_semantic_version smallint NOT NULL DEFAULT 2
+                            CHECK (measurement_semantic_version = 2);
+                    """),
             ]);
     }
 

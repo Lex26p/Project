@@ -76,8 +76,8 @@ internal static class SimulatorManifestValidator
             var points = simulator.GetProperty("points").EnumerateArray()
                 .Select(point => new SimulatorPointConfig(
                     PointId.From(point.GetProperty("pointId").GetGuid()),
-                    point.GetProperty("baseline").GetInt64(),
-                    point.GetProperty("amplitude").GetInt64(),
+                    point.GetProperty("baseline").GetDecimal(),
+                    point.GetProperty("amplitude").GetDecimal(),
                     Unit.FromSymbol(point.GetProperty("unit").GetString()!)))
                 .ToArray();
             return Result.Success(new SimulatorScenarioConfig(RuntimeScopeId.From(scopeId.Value), sourceId, seed, points));

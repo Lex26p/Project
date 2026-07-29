@@ -553,7 +553,7 @@ public sealed class RuntimePipelineFaultRecoveryTests
                         TestPointId,
                         new OwnerPosition<SourceObservation>(
                             sourcePosition),
-                        TypedValue.From(value),
+                        TypedValue.From((decimal)value),
                         Unit.FromSymbol("kW"),
                         DataQuality.Good,
                         Freshness.Fresh,

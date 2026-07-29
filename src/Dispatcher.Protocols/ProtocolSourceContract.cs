@@ -62,7 +62,7 @@ public interface IProtocolObservationParser
 
 public sealed record ProtocolDiagnosticSample(
     PointId PointId,
-    long Value,
+    decimal Value,
     Unit Unit,
     DataQuality Quality,
     string Code);

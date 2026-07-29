@@ -156,5 +156,43 @@ public static class AlarmMigrations
                     ADD CONSTRAINT action_request_action_kind_check
                     CHECK (action_kind IN (1, 2, 3, 4));
                 """),
+            new MigrationStep(
+                4,
+                "decimal measurement values",
+                $"""
+                ALTER TABLE {Schema}.definition
+                    RENAME COLUMN threshold TO threshold_value;
+                ALTER TABLE {Schema}.definition
+                    RENAME COLUMN hysteresis TO hysteresis_value;
+                ALTER TABLE {Schema}.definition
+                    ALTER COLUMN threshold_value TYPE numeric
+                    USING threshold_value::numeric;
+                ALTER TABLE {Schema}.definition
+                    ALTER COLUMN hysteresis_value TYPE numeric
+                    USING hysteresis_value::numeric;
+                ALTER TABLE {Schema}.definition
+                    ADD COLUMN unit text NOT NULL DEFAULT '-'
+                    CHECK (length(unit) BETWEEN 1 AND 100);
+                ALTER TABLE {Schema}.definition
+                    ADD CONSTRAINT definition_threshold_value_envelope CHECK (
+                        abs(threshold_value) < 10000000000000000000::numeric AND
+                        threshold_value = round(threshold_value, 9));
+                ALTER TABLE {Schema}.definition
+                    ADD CONSTRAINT definition_hysteresis_value_envelope CHECK (
+                        hysteresis_value >= 0 AND
+                        hysteresis_value < 10000000000000000000::numeric AND
+                        hysteresis_value = round(hysteresis_value, 9));
+
+                ALTER TABLE {Schema}.evaluator_state
+                    RENAME COLUMN last_value TO last_measurement_value;
+                ALTER TABLE {Schema}.evaluator_state
+                    ALTER COLUMN last_measurement_value TYPE numeric
+                    USING last_measurement_value::numeric;
+                ALTER TABLE {Schema}.evaluator_state
+                    ADD CONSTRAINT evaluator_last_measurement_value_envelope CHECK (
+                        last_measurement_value IS NULL OR (
+                            abs(last_measurement_value) < 10000000000000000000::numeric AND
+                            last_measurement_value = round(last_measurement_value, 9)));
+                """),
         ]);
 }

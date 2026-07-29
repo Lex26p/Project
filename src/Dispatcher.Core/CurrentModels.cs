@@ -31,7 +31,7 @@ public sealed record CurrentEntry(
     SourceSessionGeneration SessionGeneration,
     OwnerPosition<SourceObservation> SourcePosition,
     OwnerPosition<CurrentEntry> CurrentPosition,
-    TypedValue<long> Value,
+    TypedValue<decimal> Value,
     Unit Unit,
     DataQuality Quality,
     Freshness Freshness,

@@ -15,23 +15,23 @@ namespace Dispatcher.Server;
 public sealed record AcquireControlLeasePayload(Guid LeaseId, Guid ScopeId, int LifetimeSeconds, string? StepUpPassword);
 public sealed record RevokeControlLeasePayload(string Reason);
 public sealed record PrepareCommandPayload(
-    Guid IntentId, Guid LeaseId, Guid ScopeId, Guid PointId, long DesiredValue, string Unit,
+    Guid IntentId, Guid LeaseId, Guid ScopeId, Guid PointId, decimal DesiredValue, string Unit,
     int InteractionMode, Guid ExpectedRevisionId, ulong ExpectedRevisionNumber,
     long ExpectedGeneration, string ExpectedManifestFingerprint, ulong ExpectedCurrentPosition);
 public sealed record CommandContextPayload(
     Guid ScopeId, Guid PointId, Guid RevisionId, ulong RevisionNumber, long Generation,
-    string ManifestFingerprint, ulong CurrentPosition, long CurrentValue, string Unit,
+    string ManifestFingerprint, ulong CurrentPosition, decimal CurrentValue, string Unit,
     string Quality, string Freshness);
 public sealed record ExecuteCommandPayload(Guid ExecutionId, Guid IntentId, Guid ScopeId, Guid PointId);
 public sealed record ReconcileCommandPayload(Guid ScopeId, Guid PointId);
 public sealed record CommandExecutionPayload(
     Guid ExecutionId, Guid IntentId, Guid LeaseId, Guid ScopeId, Guid PointId,
-    string State, byte Progress, long? ResultValue, string? RejectionCode,
+    string State, byte Progress, decimal? ResultValue, string? RejectionCode,
     DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, DateTimeOffset? CompletedAt,
     ulong Version, string Disposition);
 public sealed record CommandExecutionTransitionPayload(
     ulong Position, Guid ExecutionId, Guid PointId, string State, byte Progress,
-    long? ResultValue, string? RejectionCode, DateTimeOffset OccurredAt, ulong Version);
+    decimal? ResultValue, string? RejectionCode, DateTimeOffset OccurredAt, ulong Version);
 public sealed record CommandExecutionSnapshotPayload(
     ulong Cursor, IReadOnlyList<CommandExecutionPayload> Executions);
 public sealed record CommandExecutionFeedPayload(

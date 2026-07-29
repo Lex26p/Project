@@ -109,12 +109,14 @@ public sealed class EquipmentStagingToolsTests
             SnmpVersion = "v3",
             SnmpOid = string.Empty,
             SnmpValueType = "octet_string",
+            SnmpScale = 0m,
             Secret = null,
         };
         var errors = EquipmentCommissioningTools.ValidateDraft(snmp, hasSecret: false);
         Assert.Contains(errors, error => error.Field == "snmp_version");
         Assert.Contains(errors, error => error.Field == "snmp_oid");
         Assert.Contains(errors, error => error.Field == "snmp_value_type");
+        Assert.Contains(errors, error => error.Field == "snmp_scale");
         Assert.Contains(errors, error => error.Field == "secret");
     }
 

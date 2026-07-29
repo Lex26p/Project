@@ -71,14 +71,14 @@ public sealed record CommandSafetyBlockFact(
 
 public sealed record PrepareSimulatorCommand(
     CommandIntentId IntentId, ControlLeaseId LeaseId, RuntimeScopeId ScopeId, PointId PointId,
-    long DesiredValue, Unit Unit, CommandInteractionMode InteractionMode,
+    decimal DesiredValue, Unit Unit, CommandInteractionMode InteractionMode,
     ConfigurationRevisionId ExpectedRevisionId, RevisionNumber ExpectedRevisionNumber,
     long ExpectedGeneration, string ExpectedManifestFingerprint, ulong ExpectedCurrentPosition);
 
 public sealed record PreparedCommandIntent(
     CommandIntentId IntentId, ControlLeaseId LeaseId, RuntimeScopeId ScopeId, PointId PointId,
-    long DesiredValue, Unit Unit, ConfigurationRevisionId RevisionId, RevisionNumber RevisionNumber,
-    long ManifestGeneration, string ManifestFingerprint, ulong CurrentPosition, long CurrentValue,
+    decimal DesiredValue, Unit Unit, ConfigurationRevisionId RevisionId, RevisionNumber RevisionNumber,
+    long ManifestGeneration, string ManifestFingerprint, ulong CurrentPosition, decimal CurrentValue,
     DataQuality Quality, Freshness Freshness, StateVersion SafetyVersion,
     DateTimeOffset PreparedAt, DateTimeOffset ExpiresAt);
 
@@ -89,13 +89,13 @@ public sealed record ExecuteSimulatorCommand(
 public sealed record CommandExecutionSnapshot(
     CommandExecutionId ExecutionId, CommandIntentId IntentId, ControlLeaseId LeaseId,
     RuntimeScopeId ScopeId, PointId PointId, SessionId SessionId, SubjectId SubjectId,
-    CommandExecutionState State, byte Progress, long? ResultValue, string? RejectionCode,
+    CommandExecutionState State, byte Progress, decimal? ResultValue, string? RejectionCode,
     DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, DateTimeOffset? CompletedAt,
     StateVersion Version, CommandExecutionDisposition Disposition);
 
 public sealed record CommandExecutionTransition(
     ulong Position, CommandExecutionId ExecutionId, RuntimeScopeId ScopeId, PointId PointId,
-    CommandExecutionState State, byte Progress, long? ResultValue, string? RejectionCode,
+    CommandExecutionState State, byte Progress, decimal? ResultValue, string? RejectionCode,
     DateTimeOffset OccurredAt, StateVersion Version);
 
 public sealed record CommandExecutionFeed(

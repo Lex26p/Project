@@ -9,7 +9,7 @@ public sealed record SourceObservation
         SourceId sourceId,
         PointId pointId,
         OwnerPosition<SourceObservation> sourcePosition,
-        TypedValue<long> value,
+        TypedValue<decimal> value,
         Unit unit,
         DataQuality quality,
         Freshness freshness,
@@ -25,6 +25,12 @@ public sealed record SourceObservation
 
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(unit);
+        if (!MeasurementValue.IsRepresentable(value.Value))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                "Observation value must fit the decimal measurement envelope.");
+        }
         ScopeId = scopeId;
         SourceId = sourceId;
         PointId = pointId;
@@ -44,7 +50,7 @@ public sealed record SourceObservation
 
     public OwnerPosition<SourceObservation> SourcePosition { get; }
 
-    public TypedValue<long> Value { get; }
+    public TypedValue<decimal> Value { get; }
 
     public Unit Unit { get; }
 

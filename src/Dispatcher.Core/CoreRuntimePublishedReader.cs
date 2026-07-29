@@ -185,7 +185,8 @@ public sealed partial class CoreRuntimePublishedReader
                    ready,
                    degradation_reason_code,
                    heartbeat_at,
-                   published_at
+                   published_at,
+                   measurement_semantic_version
             FROM {CoreRuntimeMigrations.Schema}.published_scope
             WHERE scope_id = @scope_id;
             """,
@@ -229,7 +230,10 @@ public sealed partial class CoreRuntimePublishedReader
             reader.GetFieldValue<DateTimeOffset>(6),
             reader.IsDBNull(7)
                 ? null
-                : reader.GetFieldValue<DateTimeOffset>(7));
+                : reader.GetFieldValue<DateTimeOffset>(7))
+        {
+            MeasurementSemanticVersion = reader.GetInt16(8),
+        };
     }
 
     private static async Task<IReadOnlyList<PublishedCurrentEntry>> ReadEntriesAsync(
@@ -251,7 +255,7 @@ public sealed partial class CoreRuntimePublishedReader
                    session_generation,
                    source_position,
                    current_position,
-                   value,
+                   measurement_value,
                    unit,
                    quality,
                    freshness,
@@ -294,7 +298,7 @@ public sealed partial class CoreRuntimePublishedReader
                     checked((ulong)reader.GetInt64(4))),
                 new OwnerPosition<PublishedCurrentEntry>(
                     checked((ulong)reader.GetInt64(5))),
-                TypedValue.From(reader.GetInt64(6)),
+                TypedValue.From(reader.GetDecimal(6)),
                 Unit.FromSymbol(reader.GetString(7)),
                 (DataQuality)reader.GetInt16(8),
                 (Freshness)reader.GetInt16(9),

@@ -2,7 +2,7 @@ namespace Dispatcher.Server;
 
 public sealed record RuntimePointPayload(
     Guid PointId,
-    long Value,
+    decimal Value,
     string Unit,
     string Quality,
     string Freshness,
@@ -26,6 +26,7 @@ public sealed record RuntimeReadinessPayload(
     bool Published,
     bool Ready,
     bool CanServeCurrent,
+    int MeasurementSemanticVersion,
     string? DegradationReasonCode,
     DateTimeOffset? HeartbeatAt,
     DateTimeOffset? PublishedAt);

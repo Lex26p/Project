@@ -395,10 +395,27 @@ public sealed partial class CoreRuntimeStore
     private static Result Failure(string code, string message) =>
         Result.Failure(new OperationError(ErrorCode.From(code), message));
 
+    private const int CurrentMeasurementSemanticVersion = 2;
+
+    private static void EnsureMeasurementSemanticVersion(int version)
+    {
+        if (version is not 0 and not CurrentMeasurementSemanticVersion)
+        {
+            throw new InvalidOperationException(
+                "Stored runtime state uses an unsupported measurement semantic version.");
+        }
+    }
+
+    private static decimal EnsureMeasurementValue(decimal value) =>
+        MeasurementValue.IsRepresentable(value)
+            ? value
+            : throw new InvalidOperationException(
+                "Stored runtime value is outside the decimal measurement envelope.");
+
     private sealed record ObservationDto(
         Guid PointId,
         ulong SourcePosition,
-        long Value,
+        decimal Value,
         string Unit,
         int Quality,
         int Freshness,
@@ -418,7 +435,7 @@ public sealed partial class CoreRuntimeStore
             binding.SourceId,
             Dispatcher.Semantics.PointId.From(PointId),
             new OwnerPosition<SourceObservation>(SourcePosition),
-            TypedValue.From(Value),
+            TypedValue.From(EnsureMeasurementValue(Value)),
             Dispatcher.Semantics.Unit.FromSymbol(Unit),
             (DataQuality)Quality,
             (Dispatcher.Semantics.Freshness)Freshness,
@@ -427,10 +444,22 @@ public sealed partial class CoreRuntimeStore
 
     private sealed record CutDto(ObservationDto[] Observations)
     {
-        public static CutDto From(RuntimeCut cut) => new(cut.Observations.Select(ObservationDto.From).ToArray());
+        public int MeasurementSemanticVersion { get; init; }
 
-        public RuntimeCut ToModel(SourceBinding binding, ulong scheduleSequence) =>
-            RuntimeCut.Normalize(binding, scheduleSequence, Observations.Select(item => item.ToModel(binding))).Value;
+        public static CutDto From(RuntimeCut cut) =>
+            new(cut.Observations.Select(ObservationDto.From).ToArray())
+            {
+                MeasurementSemanticVersion = CurrentMeasurementSemanticVersion,
+            };
+
+        public RuntimeCut ToModel(SourceBinding binding, ulong scheduleSequence)
+        {
+            EnsureMeasurementSemanticVersion(MeasurementSemanticVersion);
+            return RuntimeCut.Normalize(
+                binding,
+                scheduleSequence,
+                Observations.Select(item => item.ToModel(binding))).Value;
+        }
     }
 
     private sealed record BindingDto(Guid SourceId, ulong BindingGeneration, ulong SessionGeneration, ulong SourcePosition)
@@ -457,7 +486,7 @@ public sealed partial class CoreRuntimeStore
         ulong SessionGeneration,
         ulong SourcePosition,
         ulong CurrentPosition,
-        long Value,
+        decimal Value,
         string Unit,
         int Quality,
         int Freshness,
@@ -490,7 +519,7 @@ public sealed partial class CoreRuntimeStore
             SourceSessionGeneration.From(SessionGeneration),
             new OwnerPosition<SourceObservation>(SourcePosition),
             new OwnerPosition<CurrentEntry>(CurrentPosition),
-            TypedValue.From(Value),
+            TypedValue.From(EnsureMeasurementValue(Value)),
             Dispatcher.Semantics.Unit.FromSymbol(Unit),
             (DataQuality)Quality,
             (Dispatcher.Semantics.Freshness)Freshness,
@@ -546,16 +575,23 @@ public sealed partial class CoreRuntimeStore
         CurrentDto[] Current,
         LivenessDto[] Liveness)
     {
-        public static CheckpointDto From(CoreRuntimeCheckpoint checkpoint) => new(
-            checkpoint.ScopeId.Value,
-            checkpoint.CurrentPosition.Value,
-            checkpoint.LivenessPosition.Value,
-            checkpoint.Sources.Select(BindingDto.From).ToArray(),
-            checkpoint.Current.Select(CurrentDto.From).ToArray(),
-            checkpoint.Liveness.Select(LivenessDto.From).ToArray());
+        public int MeasurementSemanticVersion { get; init; }
+
+        public static CheckpointDto From(CoreRuntimeCheckpoint checkpoint) =>
+            new(
+                checkpoint.ScopeId.Value,
+                checkpoint.CurrentPosition.Value,
+                checkpoint.LivenessPosition.Value,
+                checkpoint.Sources.Select(BindingDto.From).ToArray(),
+                checkpoint.Current.Select(CurrentDto.From).ToArray(),
+                checkpoint.Liveness.Select(LivenessDto.From).ToArray())
+            {
+                MeasurementSemanticVersion = CurrentMeasurementSemanticVersion,
+            };
 
         public CoreRuntimeCheckpoint ToModel()
         {
+            EnsureMeasurementSemanticVersion(MeasurementSemanticVersion);
             var scopeId = RuntimeScopeId.From(ScopeId);
             return new CoreRuntimeCheckpoint(
                 scopeId,

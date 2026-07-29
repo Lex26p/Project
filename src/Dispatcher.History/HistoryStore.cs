@@ -255,7 +255,8 @@ public sealed partial class HistoryStore
             return Result.Failure<HistoryAggregateSeries>(validation.Error!);
         }
 
-        if (policy.Version != 1 || policy.Resolution <= TimeSpan.Zero)
+        if (policy.Version != HistoryResolutionPolicy.DecimalMeasurementVersion ||
+            policy.Resolution <= TimeSpan.Zero)
         {
             return Failure<HistoryAggregateSeries>(
                 "history.policy_unsupported",
@@ -425,7 +426,7 @@ public sealed partial class HistoryStore
         await using var command = new NpgsqlCommand(
             $"""
             SELECT history_stream_position, runtime_fact_position, source_id, point_id,
-                   source_position, value, unit, quality, freshness, source_timestamp,
+                   source_position, measurement_value, unit, quality, freshness, source_timestamp,
                    accepted_at, is_late, is_out_of_order
             FROM {HistoryMigrations.Schema}.sample
             WHERE scope_id = @scope_id AND source_id = @source_id AND point_id = @point_id
@@ -492,9 +493,9 @@ public sealed partial class HistoryStore
             WITH buckets AS (
                 SELECT date_bin(@resolution, source_timestamp, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS bucket,
                        count(*) AS sample_count,
-                       avg(value)::double precision AS average_value,
-                       min(value) AS minimum_value,
-                       max(value) AS maximum_value,
+                       round(avg(measurement_value), 9) AS average_value,
+                       min(measurement_value) AS minimum_value,
+                       max(measurement_value) AS maximum_value,
                        max(CASE quality WHEN 3 THEN 4 WHEN 0 THEN 3 WHEN 2 THEN 2 ELSE 1 END) AS quality_rank,
                        max(CASE freshness WHEN 2 THEN 3 WHEN 0 THEN 2 ELSE 1 END) AS freshness_rank
                 FROM {HistoryMigrations.Schema}.sample
@@ -530,9 +531,9 @@ public sealed partial class HistoryStore
                 from,
                 from.Add(policy.Resolution),
                 reader.GetInt64(1),
-                reader.GetDouble(2),
-                reader.GetInt64(3),
-                reader.GetInt64(4),
+                reader.GetDecimal(2),
+                reader.GetDecimal(3),
+                reader.GetDecimal(4),
                 QualityFromRank(reader.GetInt32(5)),
                 FreshnessFromRank(reader.GetInt32(6)),
                 reader.GetBoolean(7)));
@@ -565,7 +566,7 @@ public sealed partial class HistoryStore
         SourceId.From(reader.GetGuid(2)),
         PointId.From(reader.GetGuid(3)),
         new OwnerPosition<SourceObservation>(checked((ulong)reader.GetInt64(4))),
-        TypedValue.From(reader.GetInt64(5)),
+        TypedValue.From(reader.GetDecimal(5)),
         Unit.FromSymbol(reader.GetString(6)),
         (DataQuality)reader.GetInt16(7),
         (Freshness)reader.GetInt16(8),
@@ -684,11 +685,11 @@ public sealed partial class HistoryStore
                          $"""
                          INSERT INTO {HistoryMigrations.Schema}.sample
                              (scope_id, history_stream_position, runtime_fact_position, source_id, point_id,
-                              source_position, value, unit, quality, freshness, source_timestamp,
+                              source_position, measurement_value, unit, quality, freshness, source_timestamp,
                               accepted_at, is_late, is_out_of_order)
                          VALUES
                              (@scope_id, @stream_position, @runtime_position, @source_id, @point_id,
-                              @source_position, @value, @unit, @quality, @freshness, @source_timestamp,
+                              @source_position, @measurement_value, @unit, @quality, @freshness, @source_timestamp,
                               @accepted_at, @is_late, @is_out_of_order);
                          """,
                          connection,
@@ -700,7 +701,7 @@ public sealed partial class HistoryStore
             insert.Parameters.AddWithValue("source_id", observation.SourceId.Value);
             insert.Parameters.AddWithValue("point_id", observation.PointId.Value);
             insert.Parameters.AddWithValue("source_position", checked((long)observation.SourcePosition.Value));
-            insert.Parameters.AddWithValue("value", observation.Value.Value);
+            insert.Parameters.AddWithValue("measurement_value", observation.Value.Value);
             insert.Parameters.AddWithValue("unit", observation.Unit.Symbol);
             insert.Parameters.AddWithValue("quality", (short)observation.Quality);
             insert.Parameters.AddWithValue("freshness", (short)observation.Freshness);
@@ -899,7 +900,7 @@ public sealed partial class HistoryStore
         await using var command = new NpgsqlCommand(
             $"""
             SELECT history_stream_position, runtime_fact_position, source_id, point_id,
-                   source_position, value, unit, quality, freshness, source_timestamp,
+                   source_position, measurement_value, unit, quality, freshness, source_timestamp,
                    accepted_at, is_late, is_out_of_order
             FROM {HistoryMigrations.Schema}.sample
             WHERE scope_id = @scope_id{predicate}
@@ -924,7 +925,7 @@ public sealed partial class HistoryStore
                 SourceId.From(reader.GetGuid(2)),
                 PointId.From(reader.GetGuid(3)),
                 new OwnerPosition<SourceObservation>(checked((ulong)reader.GetInt64(4))),
-                TypedValue.From(reader.GetInt64(5)),
+                TypedValue.From(reader.GetDecimal(5)),
                 Unit.FromSymbol(reader.GetString(6)),
                 (DataQuality)reader.GetInt16(7),
                 (Freshness)reader.GetInt16(8),
@@ -1166,7 +1167,7 @@ public sealed partial class HistoryStore
     private sealed record ObservationFingerprint(
         Guid PointId,
         ulong SourcePosition,
-        long Value,
+        decimal Value,
         string Unit,
         int Quality,
         int Freshness,

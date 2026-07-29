@@ -81,7 +81,7 @@ public sealed class RuntimeConfigurationReconciliationTests
                     SourceId.From(SourceValue),
                     PointId.From(PointValue),
                     new OwnerPosition<SourceObservation>(1),
-                    TypedValue.From(10L),
+                    TypedValue.From(10m),
                     Unit.FromSymbol("kW"),
                     DataQuality.Good,
                     Freshness.Fresh,
@@ -413,7 +413,7 @@ public sealed class RuntimeConfigurationReconciliationTests
             "Test deployment rejected.")).IsSuccess);
     }
 
-    private static long Poll(SimulatorPollingSource source)
+    private static decimal Poll(SimulatorPollingSource source)
     {
         var scheduler = new BoundedPollScheduler(
             RuntimeScopeId.From(ScopeValue),

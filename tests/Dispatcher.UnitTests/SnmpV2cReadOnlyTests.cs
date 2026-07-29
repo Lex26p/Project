@@ -44,6 +44,10 @@ public sealed class SnmpV2cReadOnlyTests
             "snmp.profile",
             (Configuration(Points()) with { Profile = (SnmpRuntimeProfile)99 })
             .Validate(ConfigurationLimits).Error?.Code.Value);
+        Assert.Equal(
+            "snmp.scale",
+            Configuration([Points()[0] with { Scale = 0m }])
+                .Validate(ConfigurationLimits).Error?.Code.Value);
 
         var newForm = EquipmentProtocolForm.NewSnmp();
         Assert.Equal("v2c", newForm.SnmpVersion);
@@ -72,6 +76,25 @@ public sealed class SnmpV2cReadOnlyTests
         Assert.Equal(DataQuality.Good, acquired.Value.Observations[0].Quality);
         Assert.Equal(DataQuality.Bad, acquired.Value.Observations[1].Quality);
         Assert.Equal(Freshness.Stale, acquired.Value.Observations[1].Freshness);
+    }
+
+    [Fact]
+    public async Task AcquisitionAppliesConfiguredScale()
+    {
+        var response = Response(
+            1,
+            OldCommunity,
+            0,
+            Variable(OidA, 0x02, [0x09, 0x09]));
+        using var source = CreateSource(
+            Configuration([Points()[0] with { Scale = 0.1m }]),
+            new MutableSecretResolver(OldCommunity),
+            new QueueClientFactory(new StaticClient(response)));
+
+        var acquired = await source.AcquireAsync(Binding(), 1);
+
+        Assert.True(acquired.IsSuccess);
+        Assert.Equal(231.3m, Assert.Single(acquired.Value.Observations).Value.Value);
     }
 
     [Fact]

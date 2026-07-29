@@ -104,7 +104,8 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
     private readonly object sync = new();
     private readonly ModbusTcpSourceConfiguration configuration;
     private readonly IWallClock clock;
-    private readonly Dictionary<PointId, long> lastValues = [];
+    private readonly Dictionary<PointId, decimal> lastValues = [];
+    private SourceBinding? activeBinding;
     private ulong sourcePosition;
 
     public ModbusObservationParser(ModbusTcpSourceConfiguration configuration, IWallClock clock)
@@ -134,6 +135,13 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
 
         lock (sync)
         {
+            if (!ActivateBinding(binding))
+            {
+                return Failure<IReadOnlyList<SourceObservation>>(
+                    "modbus.binding_stale",
+                    "Modbus response belongs to a stale source session.");
+            }
+
             var timestamp = SourceTimestamp.FromUtc(clock.GetUtcNow());
             var observations = new SourceObservation[decoded.Value.Count];
             for (var index = 0; index < decoded.Value.Count; index++)
@@ -191,6 +199,12 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
 
         lock (sync)
         {
+            if (!ActivateBinding(binding))
+            {
+                throw new InvalidOperationException(
+                    "Cannot create an unavailable cut for a stale Modbus source session.");
+            }
+
             var timestamp = SourceTimestamp.FromUtc(clock.GetUtcNow());
             return configuration.Points.Select(point =>
             {
@@ -207,6 +221,34 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
                     timestamp);
             }).ToArray();
         }
+    }
+
+    private bool ActivateBinding(SourceBinding binding)
+    {
+        if (activeBinding is null)
+        {
+            activeBinding = binding;
+            return true;
+        }
+
+        if (activeBinding == binding)
+        {
+            return true;
+        }
+
+        var newer =
+            binding.BindingGeneration > activeBinding.BindingGeneration ||
+            (binding.BindingGeneration == activeBinding.BindingGeneration &&
+             binding.SessionGeneration > activeBinding.SessionGeneration);
+        if (!newer)
+        {
+            return false;
+        }
+
+        activeBinding = binding;
+        sourcePosition = 0;
+        lastValues.Clear();
+        return true;
     }
 
     private Result<IReadOnlyList<DecodedItem>> Decode(ReadOnlyMemory<byte> response)
@@ -275,29 +317,19 @@ public sealed class ModbusObservationParser : IProtocolObservationParser, IProto
             _ => throw new ArgumentOutOfRangeException(nameof(point)),
         };
 
-        try
-        {
-            var scaled = rawValue * point.Scale;
-            if (scaled != decimal.Truncate(scaled) ||
-                scaled < long.MinValue ||
-                scaled > long.MaxValue)
-            {
-                return DecodedItem.Failed("modbus.scale_result");
-            }
-
-            return new DecodedItem(true, decimal.ToInt64(scaled), "modbus.ok");
-        }
-        catch (OverflowException)
-        {
-            return DecodedItem.Failed("modbus.scale_result");
-        }
+        return MeasurementValue.TryScale(
+            rawValue,
+            point.Scale,
+            out var scaled)
+            ? new DecodedItem(true, scaled, "modbus.ok")
+            : DecodedItem.Failed("modbus.scale_result");
     }
 
     private static Result<TValue> Failure<TValue>(string code, string message) =>
         Result.Failure<TValue>(new OperationError(ErrorCode.From(code), message));
 
-    private sealed record DecodedItem(bool Success, long Value, string Code)
+    private sealed record DecodedItem(bool Success, decimal Value, string Code)
     {
-        public static DecodedItem Failed(string code) => new(false, 0, code);
+        public static DecodedItem Failed(string code) => new(false, 0m, code);
     }
 }

@@ -20,7 +20,8 @@
 | C12 | Modbus TCP read-only production source | C11 |
 | C13 | SNMP v2c read-only production source | C11 |
 | C14 | Engineering staging, commissioning и durable diagnostics | C12, C13 |
-| C15 | Лабораторная приёмка реальных Modbus/SNMP устройств | C14 |
+| C14A | Decimal semantics измеряемых значений | C14 |
+| C15 | Лабораторная приёмка реальных Modbus/SNMP устройств | C14, C14A |
 | C16 | Incident + My Work Core API и Web | C09 |
 | C17 | Maintenance Core API и Web | C16 |
 | C18 | Notification inbox, policy и delivery visibility | C08, C09 |

@@ -129,5 +129,58 @@ public static class CommandMigrations
         CREATE TRIGGER execution_transition_immutable BEFORE UPDATE OR DELETE
             ON {Schema}.execution_transition FOR EACH ROW
             EXECUTE FUNCTION {Schema}.deny_command_fact_mutation();
+        """),
+        new MigrationStep(3, "decimal simulator command measurement values", $"""
+        ALTER TABLE {Schema}.prepared_intent
+            RENAME COLUMN desired_value TO desired_measurement_value;
+        ALTER TABLE {Schema}.prepared_intent
+            RENAME COLUMN current_value TO current_measurement_value;
+        ALTER TABLE {Schema}.prepared_intent
+            ALTER COLUMN desired_measurement_value TYPE numeric
+            USING desired_measurement_value::numeric;
+        ALTER TABLE {Schema}.prepared_intent
+            ALTER COLUMN current_measurement_value TYPE numeric
+            USING current_measurement_value::numeric;
+        ALTER TABLE {Schema}.prepared_intent
+            ADD CONSTRAINT prepared_desired_measurement_envelope CHECK (
+                abs(desired_measurement_value) < 10000000000000000000::numeric AND
+                desired_measurement_value = round(desired_measurement_value, 9));
+        ALTER TABLE {Schema}.prepared_intent
+            ADD CONSTRAINT prepared_current_measurement_envelope CHECK (
+                abs(current_measurement_value) < 10000000000000000000::numeric AND
+                current_measurement_value = round(current_measurement_value, 9));
+
+        ALTER TABLE {Schema}.command_execution
+            RENAME COLUMN result_value TO result_measurement_value;
+        ALTER TABLE {Schema}.command_execution
+            ALTER COLUMN result_measurement_value TYPE numeric
+            USING result_measurement_value::numeric;
+        ALTER TABLE {Schema}.command_execution
+            ADD CONSTRAINT execution_result_measurement_envelope CHECK (
+                result_measurement_value IS NULL OR (
+                    abs(result_measurement_value) < 10000000000000000000::numeric AND
+                    result_measurement_value = round(result_measurement_value, 9)));
+
+        ALTER TABLE {Schema}.simulator_execution_receipt
+            RENAME COLUMN result_value TO result_measurement_value;
+        ALTER TABLE {Schema}.simulator_execution_receipt
+            ALTER COLUMN result_measurement_value TYPE numeric
+            USING result_measurement_value::numeric;
+        ALTER TABLE {Schema}.simulator_execution_receipt
+            ADD CONSTRAINT receipt_result_measurement_envelope CHECK (
+                result_measurement_value IS NULL OR (
+                    abs(result_measurement_value) < 10000000000000000000::numeric AND
+                    result_measurement_value = round(result_measurement_value, 9)));
+
+        ALTER TABLE {Schema}.execution_transition
+            RENAME COLUMN result_value TO result_measurement_value;
+        ALTER TABLE {Schema}.execution_transition
+            ALTER COLUMN result_measurement_value TYPE numeric
+            USING result_measurement_value::numeric;
+        ALTER TABLE {Schema}.execution_transition
+            ADD CONSTRAINT transition_result_measurement_envelope CHECK (
+                result_measurement_value IS NULL OR (
+                    abs(result_measurement_value) < 10000000000000000000::numeric AND
+                    result_measurement_value = round(result_measurement_value, 9)));
         """)]);
 }

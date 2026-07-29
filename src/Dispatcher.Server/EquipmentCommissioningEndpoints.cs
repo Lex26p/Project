@@ -397,36 +397,42 @@ public sealed record EquipmentStagingDraftRequest(
     string Action,
     long? ExpectedVersion)
 {
-    public EquipmentStagingDraftInput ToDomain(Guid rowId) => new(
-        rowId,
-        Dispatcher.Equipment.EquipmentId.From(EquipmentId),
-        FacilityScopeId.From(ScopeId),
-        Dispatcher.Facilities.LocationId.From(LocationId),
-        Code,
-        Name,
-        Protocol.Equals("modbus_tcp", StringComparison.OrdinalIgnoreCase)
-            ? EquipmentProtocol.ModbusTcp
-            : Protocol.Equals("snmp_v2c", StringComparison.OrdinalIgnoreCase)
-                ? EquipmentProtocol.Snmp
-                : throw new ArgumentException("Unsupported protocol."),
-        Host,
-        Port,
-        ModbusUnitId,
-        ModbusTable,
-        ModbusAddress,
-        ModbusValueType,
-        ModbusByteOrder,
-        ModbusWordOrder,
-        ModbusScale,
-        SnmpVersion,
-        SnmpOid,
-        SnmpValueType,
-        Unit,
-        string.IsNullOrEmpty(Secret) ? null : WriteOnlySecret.From(Secret),
-        Enum.TryParse<StagingApplyAction>(Action, true, out var action)
-            ? action
-            : throw new ArgumentException("Unsupported staging action."),
-        ExpectedVersion);
+    public decimal? SnmpScale { get; init; } = 1m;
+
+    public EquipmentStagingDraftInput ToDomain(Guid rowId) =>
+        new(
+            rowId,
+            Dispatcher.Equipment.EquipmentId.From(EquipmentId),
+            FacilityScopeId.From(ScopeId),
+            Dispatcher.Facilities.LocationId.From(LocationId),
+            Code,
+            Name,
+            Protocol.Equals("modbus_tcp", StringComparison.OrdinalIgnoreCase)
+                ? EquipmentProtocol.ModbusTcp
+                : Protocol.Equals("snmp_v2c", StringComparison.OrdinalIgnoreCase)
+                    ? EquipmentProtocol.Snmp
+                    : throw new ArgumentException("Unsupported protocol."),
+            Host,
+            Port,
+            ModbusUnitId,
+            ModbusTable,
+            ModbusAddress,
+            ModbusValueType,
+            ModbusByteOrder,
+            ModbusWordOrder,
+            ModbusScale,
+            SnmpVersion,
+            SnmpOid,
+            SnmpValueType,
+            Unit,
+            string.IsNullOrEmpty(Secret) ? null : WriteOnlySecret.From(Secret),
+            Enum.TryParse<StagingApplyAction>(Action, true, out var action)
+                ? action
+                : throw new ArgumentException("Unsupported staging action."),
+            ExpectedVersion)
+        {
+            SnmpScale = SnmpScale,
+        };
 }
 
 public sealed record EquipmentStagingCsvRequest(string Csv);

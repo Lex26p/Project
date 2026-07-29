@@ -121,8 +121,8 @@ public static class RuntimeConfigurationActivationPlanFactory
                     "low" => AlarmThresholdDirection.Low,
                     _ => throw new FormatException("Unsupported alarm threshold direction."),
                 },
-                definition.GetProperty("threshold").GetInt64(),
-                definition.GetProperty("hysteresis").GetInt64(),
+                definition.GetProperty("threshold").GetDecimal(),
+                definition.GetProperty("hysteresis").GetDecimal(),
                 TimeSpan.FromMilliseconds(definition.GetProperty("raiseDelayMs").GetInt64()),
                 TimeSpan.FromMilliseconds(definition.GetProperty("clearDelayMs").GetInt64()),
                 !definition.TryGetProperty("enabled", out var enabled) || enabled.GetBoolean(),
@@ -135,7 +135,10 @@ public static class RuntimeConfigurationActivationPlanFactory
                         "high" => AlarmPriority.High,
                         "critical" => AlarmPriority.Critical,
                         _ => throw new FormatException("Unsupported alarm priority."),
-                    }))
+                    },
+                definition.TryGetProperty("unit", out var unit)
+                    ? Unit.FromSymbol(unit.GetString()!)
+                    : null))
             .ToArray();
     }
 

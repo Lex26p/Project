@@ -92,24 +92,22 @@ public sealed class ModbusTcpReadOnlyTests
     }
 
     [Fact]
-    public async Task AcquisitionAppliesConfiguredScaleAfterByteAndWordOrder()
+    public async Task AcquisitionPreservesFractionalConfiguredScale()
     {
-        var point = Point(PointA, ModbusValueType.Unsigned32, 20) with
+        var point = Point(PointA, ModbusValueType.Unsigned16, 20) with
         {
-            ByteOrder = ModbusByteOrder.LittleEndian,
-            WordOrder = ModbusWordOrder.LowWordFirst,
-            Scale = 2m,
+            Scale = 0.1m,
         };
         using var source = CreateSource(
             Configuration([point]),
             new QueueConnectionFactory(
-                new QueueConnection(Response(1, 7, 3, 0x78, 0x56, 0x34, 0x12))));
+                new QueueConnection(Response(1, 7, 3, 0x09, 0x09))));
 
         var acquired = await source.AcquireAsync(
             new ProtocolSourceRequest(Binding(1), 1, null));
 
         Assert.True(acquired.IsSuccess);
-        Assert.Equal(0x2468acf0L, Assert.Single(acquired.Value.Observations).Value.Value);
+        Assert.Equal(231.3m, Assert.Single(acquired.Value.Observations).Value.Value);
     }
 
     [Fact]
