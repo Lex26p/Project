@@ -23,8 +23,8 @@
 | C10 | Complete | Dashboard, mimic и kiosk runtime/editor реализованы и приняты |
 | C11 | Complete | Workload configuration reconciliation и безопасная activation реализованы и приняты |
 | C12 | Complete | Modbus TCP read-only production source и RuntimeHost pipeline реализованы и приняты |
-| C13 | Ready | Configuration reconciliation C11 выполнена |
-| C14 | Planned | После обоих protocol adapters |
+| C13 | Complete | SNMP v2c read-only production source и RuntimeHost pipeline реализованы и приняты |
+| C14 | Ready | Modbus C12 и SNMP C13 production adapters выполнены |
 | C15 | Planned | Требует доступа пользователя к устройствам |
 | C16 | Ready | Event Dispatcher C09 выполнен |
 | C17 | Planned | После Incident/My Work |

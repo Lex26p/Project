@@ -196,6 +196,115 @@ public sealed class SnmpV2cReadOnlyTests
         Assert.Contains(CommunityReference.Value, persistedContract, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task MissingSecretReturnsSanitisedReasonWithoutReferenceOrCommunity()
+    {
+        using var source = CreateSource(
+            Configuration(Points()),
+            new MissingSecretResolver(),
+            new QueueClientFactory());
+
+        var result = await source.AcquireAsync(Binding(), 1);
+
+        Assert.Equal("protocol.secret_unavailable", result.Error?.Code.Value);
+        Assert.DoesNotContain(CommunityReference.Value, result.Error?.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(OldCommunity, result.Error?.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WrongRequestIdAndCommunityAreRejectedSafely()
+    {
+        using var wrongId = CreateSource(
+            Configuration(Points()),
+            new MutableSecretResolver(OldCommunity),
+            new QueueClientFactory(new StaticClient(Response(
+                7,
+                OldCommunity,
+                0,
+                Variable(OidA, 0x02, [1]),
+                Variable(OidB, 0x41, [2])))));
+        using var wrongCommunity = CreateSource(
+            Configuration(Points()),
+            new MutableSecretResolver(OldCommunity),
+            new QueueClientFactory(new StaticClient(Response(
+                1,
+                NewCommunity,
+                0,
+                Variable(OidA, 0x02, [1]),
+                Variable(OidB, 0x41, [2])))));
+
+        var requestId = await wrongId.AcquireAsync(Binding(), 1);
+        var community = await wrongCommunity.AcquireAsync(Binding(), 1);
+
+        Assert.Equal("snmp.response_malformed", requestId.Error?.Code.Value);
+        Assert.Equal("protocol.io_failed", community.Error?.Code.Value);
+        Assert.DoesNotContain(OldCommunity, community.Error?.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(NewCommunity, community.Error?.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnavailableCutKeepsLastValueBadAndStale()
+    {
+        using var source = CreateSource(
+            Configuration(Points()),
+            new MutableSecretResolver(OldCommunity),
+            new QueueClientFactory(new StaticClient(Response(
+                1,
+                OldCommunity,
+                0,
+                Variable(OidA, 0x02, [5]),
+                Variable(OidB, 0x41, [6])))));
+        var binding = Binding();
+        Assert.True((await source.AcquireAsync(binding, 1)).IsSuccess);
+
+        var unavailable = source.CreateUnavailableCut(binding, 2);
+
+        Assert.True(unavailable.IsSuccess);
+        Assert.Equal([5L, 6L], unavailable.Value.Observations.Select(item => item.Value.Value));
+        Assert.All(unavailable.Value.Observations, item =>
+        {
+            Assert.Equal(DataQuality.Bad, item.Quality);
+            Assert.Equal(Freshness.Stale, item.Freshness);
+        });
+    }
+
+    [Fact]
+    public async Task LateResponseIsFencedAfterBindingGenerationChanges()
+    {
+        var blocking = new BlockingClient();
+        using var source = CreateSource(
+            Configuration(Points()),
+            new MutableSecretResolver(OldCommunity),
+            new QueueClientFactory(blocking));
+        var supervisor = new ProtocolRuntimeSupervisor(Workload, 1);
+        Assert.True(supervisor.Register(SourceId, source.Controller).IsSuccess);
+        var oldBinding = Binding();
+        Assert.True(supervisor.ActivateBinding(oldBinding).IsSuccess);
+        Assert.True(supervisor.Start().IsSuccess);
+        var pending = supervisor.AcquireAsync(new ProtocolSourceRequest(
+            oldBinding,
+            1,
+            CommunityReference));
+        await blocking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var newer = new SourceBinding(
+            oldBinding.ScopeId,
+            oldBinding.SourceId,
+            SourceBindingGeneration.From(2),
+            oldBinding.SessionGeneration);
+
+        Assert.True(supervisor.ActivateBinding(newer).IsSuccess);
+        blocking.Release.TrySetResult(Response(
+            1,
+            OldCommunity,
+            0,
+            Variable(OidA, 0x02, [1]),
+            Variable(OidB, 0x41, [2])));
+        var late = await pending;
+
+        Assert.Equal("protocol.binding_stale", late.Error?.Code.Value);
+        Assert.True((await supervisor.StopAsync()).IsSuccess);
+    }
+
     private static SnmpV2cSource CreateSource(
         SnmpV2cSourceConfiguration configuration,
         IProtocolSecretResolver resolver,
@@ -328,6 +437,17 @@ public sealed class SnmpV2cReadOnlyTests
             ValueTask.FromResult(ProtocolSecretLease.Create(value));
     }
 
+    private sealed class MissingSecretResolver : IProtocolSecretResolver
+    {
+        public ValueTask<ProtocolSecretLease> ResolveAsync(
+            ProtocolSecretReference reference,
+            ProtocolWorkloadIdentity workloadIdentity,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromException<ProtocolSecretLease>(
+                new InvalidOperationException(
+                    $"Unavailable {reference.Value} {OldCommunity}"));
+    }
+
     private sealed class QueueClientFactory : ISnmpDatagramClientFactory
     {
         private readonly Queue<ISnmpDatagramClient> clients;
@@ -393,6 +513,26 @@ public sealed class SnmpV2cReadOnlyTests
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return ReadOnlyMemory<byte>.Empty;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingClient : ISnmpDatagramClient
+    {
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<ReadOnlyMemory<byte>> Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<ReadOnlyMemory<byte>> ExchangeAsync(
+            ReadOnlyMemory<byte> request,
+            int maxResponseBytes,
+            CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            return await Release.Task.WaitAsync(cancellationToken);
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

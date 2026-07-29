@@ -3,6 +3,7 @@ using Dispatcher.Core;
 using Dispatcher.Modbus;
 using Dispatcher.Protocols;
 using Dispatcher.Semantics;
+using Dispatcher.Snmp;
 
 namespace Dispatcher.RuntimeHost;
 
@@ -115,6 +116,10 @@ public sealed record RuntimeHostOptions(
     public TimeSpan ConfigurationReconciliationInterval { get; init; } = TimeSpan.FromSeconds(1);
 
     public ModbusConfigurationLimits ModbusLimits { get; init; } = new(256, 512);
+
+    public SnmpConfigurationLimits SnmpLimits { get; init; } = new(256, 128, 512);
+
+    public SnmpWireLimits SnmpWireLimits { get; init; } = new(128, 4096);
 
     public int ProtocolMaxResponseBytes { get; init; } = 65_536;
 
@@ -270,6 +275,28 @@ public sealed record RuntimeHostOptions(
                     read,
                     "DISPATCHER_RUNTIME_MODBUS_MAX_REGISTERS_PER_POLL",
                     512)),
+            SnmpLimits = new SnmpConfigurationLimits(
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_SNMP_MAX_POINTS",
+                    256),
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_SNMP_MAX_OID_ARCS",
+                    128),
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_SNMP_MAX_OID_BYTES",
+                    512)),
+            SnmpWireLimits = new SnmpWireLimits(
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_SNMP_MAX_COMMUNITY_BYTES",
+                    128),
+                OptionalPositiveInt(
+                    read,
+                    "DISPATCHER_RUNTIME_SNMP_MAX_REQUEST_BYTES",
+                    4096)),
             ProtocolMaxResponseBytes = OptionalPositiveInt(
                 read,
                 "DISPATCHER_RUNTIME_PROTOCOL_MAX_RESPONSE_BYTES",

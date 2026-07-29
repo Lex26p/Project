@@ -34,6 +34,12 @@ public sealed class RuntimeConfigurationReconciliationTests
         Guid.Parse("e3000000-0000-0000-0000-000000000012");
     private static readonly Guid ModbusAlarmValue =
         Guid.Parse("e4000000-0000-0000-0000-000000000012");
+    private static readonly Guid SnmpSourceValue =
+        Guid.Parse("e2000000-0000-0000-0000-000000000013");
+    private static readonly Guid SnmpPointValue =
+        Guid.Parse("e3000000-0000-0000-0000-000000000013");
+    private static readonly Guid SnmpAlarmValue =
+        Guid.Parse("e4000000-0000-0000-0000-000000000013");
     private static readonly DateTimeOffset Start =
         new(2026, 7, 28, 8, 0, 0, TimeSpan.Zero);
     private readonly PostgreSqlClusterFixture cluster;
@@ -154,6 +160,7 @@ public sealed class RuntimeConfigurationReconciliationTests
             SchedulerMaxBindings = 2,
             ProtocolMaxObservations = 4,
             ModbusLimits = new(4, 8),
+            SnmpLimits = new(4, 32, 128),
         };
         await using var session = ProductionRuntimeHostSession.Create(
             options,
@@ -192,9 +199,9 @@ public sealed class RuntimeConfigurationReconciliationTests
                 item.Freshness == Freshness.Fresh,
             TimeSpan.FromSeconds(10));
         Assert.True(recovered.SourcePosition.Value > unavailable.SourcePosition.Value);
-        await context.WaitForModbusPipelineAsync(
+        await context.WaitForProtocolPipelineAsync(
             ModbusPointValue,
-            TimeSpan.FromSeconds(10));
+            TimeSpan.FromSeconds(20));
         Assert.NotEmpty(peer.FunctionCodes);
         Assert.All(peer.FunctionCodes, code => Assert.Equal((byte)3, code));
 
@@ -202,6 +209,97 @@ public sealed class RuntimeConfigurationReconciliationTests
         var stoppedWorker = await running.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(stoppedWorker.IsSuccess, stoppedWorker.Error?.Code.Value);
         Assert.True((await session.StopAsync(CancellationToken.None)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task ProductionSnmpUsesEnvironmentSecretAndPublishesWholePipeline()
+    {
+        const string community = "c13-runtime-community";
+        var variableName =
+            $"C13_SNMP_{Guid.NewGuid():N}".ToUpperInvariant();
+        var secretReference = $"env:{variableName}";
+        Environment.SetEnvironmentVariable(variableName, community);
+        try
+        {
+            await using var peer = new FakeSnmpUdpPeer(
+                (request, _, _) =>
+                    ValueTask.FromResult<byte[]?>(
+                        FakeSnmpUdpPeer.Response(
+                            request,
+                            new (byte, byte[])[]
+                            {
+                                (0x43, [50]),
+                            })));
+            await using var context = await Context.CreateAsync(cluster);
+            var manifest = Context.CreateSnmpManifest(
+                peer.Port,
+                secretReference);
+            Assert.DoesNotContain(
+                community,
+                manifest,
+                StringComparison.Ordinal);
+            var revision = await context.PublishRawAsync(manifest);
+            var options = context.CreateRuntimeOptions(revision.RevisionId) with
+            {
+                SchedulerMaxBindings = 2,
+                ProtocolMaxObservations = 4,
+                ModbusLimits = new(4, 8),
+                SnmpLimits = new(4, 32, 128),
+                SnmpWireLimits = new(64, 1024),
+            };
+            await using var session = ProductionRuntimeHostSession.Create(
+                options,
+                context.Clock,
+                context.Clock);
+            Assert.True((await session.StartAsync(CancellationToken.None)).IsSuccess);
+            using var cancellation = new CancellationTokenSource();
+            var running = session.RunSimulatorCycleAsync(cancellation.Token);
+
+            var good = await context.WaitForPointAsync(
+                SnmpPointValue,
+                item =>
+                    item.Value.Value == 50 &&
+                    item.Quality == DataQuality.Good &&
+                    item.Freshness == Freshness.Fresh,
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(SourceBindingGeneration.From(1), good.BindingGeneration);
+            await context.WaitForProtocolPipelineAsync(
+                SnmpPointValue,
+                TimeSpan.FromSeconds(20));
+            Assert.NotEmpty(peer.PduTypes);
+            Assert.All(peer.PduTypes, pdu => Assert.Equal((byte)0xA0, pdu));
+
+            Environment.SetEnvironmentVariable(variableName, null);
+            var unavailable = await context.WaitForPointAsync(
+                SnmpPointValue,
+                item =>
+                    item.Quality == DataQuality.Bad &&
+                    item.Freshness == Freshness.Stale,
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(50L, unavailable.Value.Value);
+
+            Environment.SetEnvironmentVariable(variableName, community);
+            var recovered = await context.WaitForPointAsync(
+                SnmpPointValue,
+                item =>
+                    item.Value.Value == 50 &&
+                    item.Quality == DataQuality.Good &&
+                    item.Freshness == Freshness.Fresh &&
+                    item.SourcePosition.Value > unavailable.SourcePosition.Value,
+                TimeSpan.FromSeconds(10));
+            Assert.True(
+                recovered.SourcePosition.Value >
+                unavailable.SourcePosition.Value);
+
+            cancellation.Cancel();
+            var stoppedWorker = await running.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(stoppedWorker.IsSuccess, stoppedWorker.Error?.Code.Value);
+            Assert.True((await session.StopAsync(CancellationToken.None)).IsSuccess);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
     }
 
     [Theory]
@@ -559,7 +657,7 @@ public sealed class RuntimeConfigurationReconciliationTests
             }
         }
 
-        public async Task WaitForModbusPipelineAsync(
+        public async Task WaitForProtocolPipelineAsync(
             Guid pointId,
             TimeSpan timeout)
         {
@@ -584,7 +682,7 @@ public sealed class RuntimeConfigurationReconciliationTests
                     return;
                 }
 
-                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellation.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellation.Token);
             }
         }
 
@@ -701,6 +799,71 @@ public sealed class RuntimeConfigurationReconciliationTests
                         definitionId = ModbusAlarmValue,
                         pointId = ModbusPointValue,
                         name = "Modbus high value",
+                        direction = "high",
+                        threshold = 40L,
+                        hysteresis = 0L,
+                        raiseDelayMs = 0L,
+                        clearDelayMs = 0L,
+                        enabled = true,
+                        priority = "high",
+                    },
+                },
+            });
+
+        public static string CreateSnmpManifest(
+            int port,
+            string communityReference) =>
+            JsonSerializer.Serialize(new
+            {
+                simulator = new
+                {
+                    sourceId = SourceValue,
+                    seed = 17UL,
+                    points = new[]
+                    {
+                        new
+                        {
+                            pointId = PointValue,
+                            baseline = 1L,
+                            amplitude = 0L,
+                            unit = "kW",
+                        },
+                    },
+                },
+                protocolSources = new[]
+                {
+                    new
+                    {
+                        kind = "snmp_v2c_read_only",
+                        sourceId = SnmpSourceValue,
+                        host = "127.0.0.1",
+                        port,
+                        communityReference,
+                        retry = new
+                        {
+                            maxAttempts = 2,
+                            responseTimeoutMs = 100,
+                            delayMs = 0,
+                        },
+                        points = new[]
+                        {
+                            new
+                            {
+                                pointId = SnmpPointValue,
+                                oid = "1.3.6.1.2.1.1.3.0",
+                                type = "timeticks",
+                                unit = "s",
+                            },
+                        },
+                    },
+                },
+                alarmDefinitions = new[]
+                {
+                    new
+                    {
+                        definitionId = SnmpAlarmValue,
+                        pointId = SnmpPointValue,
+                        name = "SNMP high value",
                         direction = "high",
                         threshold = 40L,
                         hysteresis = 0L,

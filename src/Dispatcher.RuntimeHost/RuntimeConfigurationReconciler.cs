@@ -29,7 +29,7 @@ public sealed record ActivatedRuntimeConfiguration(
     RevisionNumber AlarmDefinitionEpoch,
     SimulatorPollingSource Source,
     ProtocolActivationPlan? ProtocolPlan,
-    IReadOnlyList<SourceBinding> ModbusBindings);
+    IReadOnlyList<SourceBinding> ProtocolBindings);
 
 public enum RuntimeConfigurationActivationPoint
 {
@@ -271,7 +271,7 @@ public sealed class RuntimeConfigurationReconciler
             RuntimeScopeId.From(scopeId.Value),
             active.Value.Configuration.SourceId,
             cancellationToken).ConfigureAwait(false);
-        var modbusBindings = await CreateModbusBindingsAsync(
+        var protocolBindings = await CreateProtocolBindingsAsync(
             prepared.Plan.ProtocolExtension,
             cancellationToken).ConfigureAwait(false);
         return Result.Success(new ActivatedRuntimeConfiguration(
@@ -280,7 +280,7 @@ public sealed class RuntimeConfigurationReconciler
             acknowledged.Value.AlarmDefinitionEpoch,
             new SimulatorPollingSource(active.Value, sessionGeneration, wallClock),
             prepared.Plan.ProtocolExtension,
-            modbusBindings));
+            protocolBindings));
     }
 
     public async Task<Result<ActivatedRuntimeConfiguration>> RestoreAsync(
@@ -317,7 +317,7 @@ public sealed class RuntimeConfigurationReconciler
             return Result.Failure<ActivatedRuntimeConfiguration>(restoredPlan.Error!);
         }
 
-        var modbusBindings = await CreateModbusBindingsAsync(
+        var protocolBindings = await CreateProtocolBindingsAsync(
             restoredPlan.Value.Plan,
             cancellationToken).ConfigureAwait(false);
         return Result.Success(new ActivatedRuntimeConfiguration(
@@ -326,7 +326,7 @@ public sealed class RuntimeConfigurationReconciler
             acknowledged.Value.AlarmDefinitionEpoch,
             new SimulatorPollingSource(active.Value, sessionGeneration, wallClock),
             restoredPlan.Value.Plan,
-            modbusBindings));
+            protocolBindings));
     }
 
     private Result<RestoredProtocolPlan> CreateProtocolPlan(
@@ -370,26 +370,30 @@ public sealed class RuntimeConfigurationReconciler
         }
     }
 
-    private async Task<IReadOnlyList<SourceBinding>> CreateModbusBindingsAsync(
+    private async Task<IReadOnlyList<SourceBinding>> CreateProtocolBindingsAsync(
         ProtocolActivationPlan? plan,
         CancellationToken cancellationToken)
     {
-        if (plan is null || plan.ModbusSources.Count == 0)
+        if (plan is null)
         {
             return [];
         }
 
-        var bindings = new SourceBinding[plan.ModbusSources.Count];
-        for (var index = 0; index < plan.ModbusSources.Count; index++)
+        var sources = plan.ModbusSources
+            .Select(source => source.SourceId)
+            .Concat(plan.SnmpSources.Select(source => source.SourceId))
+            .OrderBy(sourceId => sourceId.Value)
+            .ToArray();
+        var bindings = new SourceBinding[sources.Length];
+        for (var index = 0; index < sources.Length; index++)
         {
-            var source = plan.ModbusSources[index];
             var session = await allocateSessionGeneration(
                 plan.ScopeId,
-                source.SourceId,
+                sources[index],
                 cancellationToken).ConfigureAwait(false);
             bindings[index] = new SourceBinding(
                 plan.ScopeId,
-                source.SourceId,
+                sources[index],
                 plan.BindingGeneration,
                 session);
         }

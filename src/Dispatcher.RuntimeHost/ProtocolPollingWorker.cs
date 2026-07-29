@@ -42,7 +42,7 @@ public sealed record ProtocolPollingWorkerSnapshot(
 
 public sealed class ProtocolPollingWorker
 {
-    private readonly IReadOnlyList<ModbusRuntimeSource> sources;
+    private readonly IReadOnlyList<IRuntimeProtocolSource> sources;
     private readonly BoundedPollScheduler scheduler;
     private readonly TimeSpan pollInterval;
     private readonly int maxProcessBatch;
@@ -58,7 +58,7 @@ public sealed class ProtocolPollingWorker
     private string? lastErrorCode;
 
     internal ProtocolPollingWorker(
-        IReadOnlyList<ModbusRuntimeSource> sources,
+        IReadOnlyList<IRuntimeProtocolSource> sources,
         BoundedPollScheduler scheduler,
         TimeSpan pollInterval,
         int maxProcessBatch,
@@ -186,7 +186,7 @@ public sealed class ProtocolPollingWorker
             scheduler.GetSnapshot());
 
     private async Task<Result> PollAsync(
-        ModbusRuntimeSource source,
+        IRuntimeProtocolSource source,
         SourceCounters sourceCounters,
         PollAttemptToken attempt,
         CancellationToken cancellationToken)
@@ -195,7 +195,7 @@ public sealed class ProtocolPollingWorker
             new ProtocolSourceRequest(
                 source.Binding,
                 attempt.ScheduleSequence,
-                null),
+                source.SecretReference),
             cancellationToken).ConfigureAwait(false);
         RuntimeCut cut;
         if (acquired.IsFailure)
@@ -211,8 +211,7 @@ public sealed class ProtocolPollingWorker
             sourceCounters.RecordFailure(
                 acquired.Error?.Code.Value ?? "protocol.io_failed",
                 status == PollCompletionStatus.TimedOut);
-            var unavailable = source.Source.CreateUnavailableCut(
-                source.Binding,
+            var unavailable = source.CreateUnavailableCut(
                 attempt.ScheduleSequence);
             if (unavailable.IsFailure)
             {
@@ -240,8 +239,7 @@ public sealed class ProtocolPollingWorker
             if (completion.Value.Status == PollCompletionStatus.TimedOut)
             {
                 sourceCounters.RecordFailure("protocol.io_timeout", timedOut: true);
-                var unavailable = source.Source.CreateUnavailableCut(
-                    source.Binding,
+                var unavailable = source.CreateUnavailableCut(
                     attempt.ScheduleSequence);
                 if (unavailable.IsFailure)
                 {

@@ -1,23 +1,20 @@
 using Dispatcher.Core;
-using Dispatcher.Modbus;
 using Dispatcher.ProtocolCommissioning;
 using Dispatcher.Protocols;
 using Dispatcher.Semantics;
+using Dispatcher.Snmp;
 
 namespace Dispatcher.RuntimeHost;
 
-public sealed class ModbusRuntimeSourceSet : IDisposable
+public sealed class SnmpRuntimeSourceSet : IDisposable
 {
     private int disposed;
 
-    internal ModbusRuntimeSourceSet(
-        IReadOnlyList<ModbusRuntimeSource> sources) =>
+    internal SnmpRuntimeSourceSet(
+        IReadOnlyList<SnmpRuntimeSource> sources) =>
         Sources = sources;
 
-    internal IReadOnlyList<ModbusRuntimeSource> Sources { get; }
-
-    public IReadOnlyList<SourceBinding> Bindings =>
-        Sources.Select(source => source.Binding).ToArray();
+    internal IReadOnlyList<SnmpRuntimeSource> Sources { get; }
 
     internal IReadOnlyDictionary<SourceId, ProtocolSourceController> Controllers =>
         Sources.ToDictionary(
@@ -38,74 +35,70 @@ public sealed class ModbusRuntimeSourceSet : IDisposable
     }
 }
 
-internal sealed record ModbusRuntimeSource(
-    ModbusTcpSourceConfiguration Configuration,
+internal sealed record SnmpRuntimeSource(
+    SnmpV2cSourceConfiguration Configuration,
     SourceBinding Binding,
-    ModbusTcpSource Source) : IRuntimeProtocolSource
+    SnmpV2cSource Source) : IRuntimeProtocolSource
 {
     public ProtocolSourceController Controller => Source.Controller;
 
-    public ProtocolSecretReference? SecretReference => null;
+    public ProtocolSecretReference? SecretReference =>
+        Configuration.CommunityReference;
 
     public Result<RuntimeCut> CreateUnavailableCut(ulong scheduleSequence) =>
         Source.CreateUnavailableCut(Binding, scheduleSequence);
 }
 
-internal interface IRuntimeProtocolSource
+public static class SnmpRuntimeSourceFactory
 {
-    SourceBinding Binding { get; }
-
-    ProtocolSourceController Controller { get; }
-
-    ProtocolSecretReference? SecretReference { get; }
-
-    Result<RuntimeCut> CreateUnavailableCut(ulong scheduleSequence);
-}
-
-public static class ModbusRuntimeSourceFactory
-{
-    public static Result<ModbusRuntimeSourceSet> Create(
+    public static Result<SnmpRuntimeSourceSet> Create(
         ProtocolActivationPlan? plan,
         IReadOnlyList<SourceBinding> bindings,
-        ModbusConfigurationLimits configurationLimits,
+        SnmpConfigurationLimits configurationLimits,
+        SnmpWireLimits wireLimits,
         ProtocolWorkloadIdentity workloadIdentity,
         ProtocolIoLimits ioLimits,
-        IModbusTcpConnectionFactory connectionFactory,
+        IProtocolSecretResolver secretResolver,
+        ISnmpDatagramClientFactory clientFactory,
         IWallClock wallClock)
     {
         ArgumentNullException.ThrowIfNull(bindings);
         ArgumentNullException.ThrowIfNull(configurationLimits);
+        ArgumentNullException.ThrowIfNull(wireLimits);
         ArgumentNullException.ThrowIfNull(ioLimits);
-        ArgumentNullException.ThrowIfNull(connectionFactory);
+        ArgumentNullException.ThrowIfNull(secretResolver);
+        ArgumentNullException.ThrowIfNull(clientFactory);
         ArgumentNullException.ThrowIfNull(wallClock);
         if (plan is null)
         {
             return bindings.Count == 0
-                ? Result.Success(new ModbusRuntimeSourceSet([]))
+                ? Result.Success(new SnmpRuntimeSourceSet([]))
                 : Failure(
-                    "runtime.modbus_binding_plan",
-                    "Modbus bindings exist without a protocol activation plan.");
+                    "runtime.snmp_binding_plan",
+                    "SNMP bindings exist without a protocol activation plan.");
         }
 
         var bindingBySource = bindings.ToDictionary(binding => binding.SourceId);
         if (bindingBySource.Count != bindings.Count ||
-            bindingBySource.Count != plan.ModbusSources.Count ||
-            plan.ModbusSources.Any(source => !bindingBySource.ContainsKey(source.SourceId)))
+            bindingBySource.Count != plan.SnmpSources.Count ||
+            plan.SnmpSources.Any(source => !bindingBySource.ContainsKey(source.SourceId)))
         {
             return Failure(
-                "runtime.modbus_binding_plan",
-                "Modbus source bindings do not match the activation plan.");
+                "runtime.snmp_binding_plan",
+                "SNMP source bindings do not match the activation plan.");
         }
 
-        var created = new List<ModbusRuntimeSource>(plan.ModbusSources.Count);
-        foreach (var configuration in plan.ModbusSources)
+        var created = new List<SnmpRuntimeSource>(plan.SnmpSources.Count);
+        foreach (var configuration in plan.SnmpSources)
         {
-            var source = ModbusTcpSource.Create(
+            var source = SnmpV2cSource.Create(
                 configuration,
                 configurationLimits,
+                wireLimits,
                 workloadIdentity,
                 ioLimits,
-                connectionFactory,
+                secretResolver,
+                clientFactory,
                 wallClock);
             if (source.IsFailure)
             {
@@ -114,21 +107,21 @@ public static class ModbusRuntimeSourceFactory
                     item.Source.Dispose();
                 }
 
-                return Result.Failure<ModbusRuntimeSourceSet>(source.Error!);
+                return Result.Failure<SnmpRuntimeSourceSet>(source.Error!);
             }
 
-            created.Add(new ModbusRuntimeSource(
+            created.Add(new SnmpRuntimeSource(
                 configuration,
                 bindingBySource[configuration.SourceId],
                 source.Value));
         }
 
-        return Result.Success(new ModbusRuntimeSourceSet(created));
+        return Result.Success(new SnmpRuntimeSourceSet(created));
     }
 
-    private static Result<ModbusRuntimeSourceSet> Failure(
+    private static Result<SnmpRuntimeSourceSet> Failure(
         string code,
         string message) =>
-        Result.Failure<ModbusRuntimeSourceSet>(
+        Result.Failure<SnmpRuntimeSourceSet>(
             new OperationError(ErrorCode.From(code), message));
 }

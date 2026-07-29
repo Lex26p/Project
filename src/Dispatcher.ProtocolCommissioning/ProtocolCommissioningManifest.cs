@@ -172,7 +172,7 @@ public static class ProtocolCommissioningManifest
     {
         var retry = source.GetProperty("retry");
         return new SnmpV2cSourceConfiguration(
-            SnmpRuntimeProfile.NonProductionV2cReadOnly,
+            SnmpRuntimeProfile.ProductionV2cReadOnly,
             SourceId.From(source.GetProperty("sourceId").GetGuid()),
             source.GetProperty("host").GetString()!,
             source.GetProperty("port").GetInt32(),

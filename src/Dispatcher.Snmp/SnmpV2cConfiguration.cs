@@ -7,7 +7,8 @@ namespace Dispatcher.Snmp;
 
 public enum SnmpRuntimeProfile
 {
-    NonProductionV2cReadOnly = 1,
+    ProductionV2cReadOnly = 1,
+    NonProductionV2cReadOnly = ProductionV2cReadOnly,
 }
 
 public enum SnmpNumericType
@@ -136,9 +137,9 @@ public sealed record SnmpV2cSourceConfiguration(
     public Result Validate(SnmpConfigurationLimits limits)
     {
         ArgumentNullException.ThrowIfNull(limits);
-        if (Profile != SnmpRuntimeProfile.NonProductionV2cReadOnly)
+        if (Profile != SnmpRuntimeProfile.ProductionV2cReadOnly)
         {
-            return Failure("snmp.profile", "Only the non-production SNMP v2c read-only profile is available.");
+            return Failure("snmp.profile", "Only the production SNMP v2c read-only profile is available.");
         }
 
         if (string.IsNullOrWhiteSpace(Host) || Host.Length > 253)

@@ -211,13 +211,16 @@ public sealed class SnmpV2cTransport : IReadOnlyProtocolTransport
 public sealed class SnmpV2cSource : IDisposable
 {
     private readonly SnmpV2cSourceConfiguration configuration;
+    private readonly SnmpObservationParser parser;
 
     private SnmpV2cSource(
         SnmpV2cSourceConfiguration configuration,
-        ProtocolSourceController controller)
+        ProtocolSourceController controller,
+        SnmpObservationParser parser)
     {
         this.configuration = configuration;
         Controller = controller;
+        this.parser = parser;
     }
 
     public ProtocolSourceController Controller { get; }
@@ -255,7 +258,8 @@ public sealed class SnmpV2cSource : IDisposable
                 parser,
                 secretResolver,
                 ioLimits,
-                parser)));
+                parser),
+            parser));
     }
 
     public Task<Result<RuntimeCut>> AcquireAsync(
@@ -285,6 +289,14 @@ public sealed class SnmpV2cSource : IDisposable
                 configuration.CommunityReference,
                 ProtocolDiagnosticMode.SamplePoll),
             cancellationToken);
+
+    public Result<RuntimeCut> CreateUnavailableCut(
+        SourceBinding binding,
+        ulong scheduleSequence) =>
+        RuntimeCut.Normalize(
+            binding,
+            scheduleSequence,
+            parser.CreateUnavailable(binding));
 
     public void Dispose() => Controller.Dispose();
 }

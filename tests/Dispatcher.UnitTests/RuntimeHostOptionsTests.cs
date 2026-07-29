@@ -40,6 +40,11 @@ public sealed class RuntimeHostOptionsTests
         Assert.Equal(
             TimeSpan.FromMilliseconds(500),
             options.ConfigurationReconciliationInterval);
+        Assert.Equal(12, options.SnmpLimits.MaxPoints);
+        Assert.Equal(24, options.SnmpLimits.MaxOidArcs);
+        Assert.Equal(96, options.SnmpLimits.MaxOidBytes);
+        Assert.Equal(48, options.SnmpWireLimits.MaxCommunityBytes);
+        Assert.Equal(2048, options.SnmpWireLimits.MaxRequestBytes);
         Assert.Equal("history", downstream.HistoryDatabaseRole);
         Assert.Equal("alarm", downstream.AlarmDatabaseRole);
         Assert.Equal(
@@ -132,6 +137,16 @@ public sealed class RuntimeHostOptionsTests
                 "250",
             ["DISPATCHER_RUNTIME_RECONCILIATION_MAX_BACKOFF_MS"] =
                 "4000",
+            ["DISPATCHER_RUNTIME_SNMP_MAX_POINTS"] =
+                "12",
+            ["DISPATCHER_RUNTIME_SNMP_MAX_OID_ARCS"] =
+                "24",
+            ["DISPATCHER_RUNTIME_SNMP_MAX_OID_BYTES"] =
+                "96",
+            ["DISPATCHER_RUNTIME_SNMP_MAX_COMMUNITY_BYTES"] =
+                "48",
+            ["DISPATCHER_RUNTIME_SNMP_MAX_REQUEST_BYTES"] =
+                "2048",
             ["DISPATCHER_RUNTIME_HISTORY_DATABASE_ROLE"] =
                 "history",
             ["DISPATCHER_RUNTIME_ALARM_DATABASE_ROLE"] =

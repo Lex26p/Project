@@ -9,6 +9,7 @@ using Dispatcher.ProtocolCommissioning;
 using Dispatcher.Protocols;
 using Dispatcher.Semantics;
 using Dispatcher.Simulator;
+using Dispatcher.Snmp;
 using Npgsql;
 
 namespace Dispatcher.RuntimeHost;
@@ -24,6 +25,8 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private readonly IMonotonicClock monotonicClock;
     private readonly IWallClock wallClock;
     private readonly IModbusTcpConnectionFactory modbusConnectionFactory;
+    private readonly ISnmpDatagramClientFactory snmpClientFactory;
+    private readonly IProtocolSecretResolver protocolSecretResolver;
     private bool started;
     private bool stopped;
 
@@ -36,7 +39,9 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         RuntimeHostOptions options,
         IMonotonicClock monotonicClock,
         IWallClock wallClock,
-        IModbusTcpConnectionFactory modbusConnectionFactory)
+        IModbusTcpConnectionFactory modbusConnectionFactory,
+        ISnmpDatagramClientFactory snmpClientFactory,
+        IProtocolSecretResolver protocolSecretResolver)
     {
         this.dataSource = dataSource;
         this.core = core;
@@ -47,21 +52,32 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         this.monotonicClock = monotonicClock;
         this.wallClock = wallClock;
         this.modbusConnectionFactory = modbusConnectionFactory;
+        this.snmpClientFactory = snmpClientFactory;
+        this.protocolSecretResolver = protocolSecretResolver;
     }
 
     public static ProductionRuntimeHostSession Create(
         RuntimeHostOptions options,
         IWallClock wallClock,
         IMonotonicClock monotonicClock,
-        IModbusTcpConnectionFactory? modbusConnectionFactory = null)
+        IModbusTcpConnectionFactory? modbusConnectionFactory = null,
+        ISnmpDatagramClientFactory? snmpClientFactory = null,
+        IProtocolSecretResolver? protocolSecretResolver = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(wallClock);
         ArgumentNullException.ThrowIfNull(monotonicClock);
-        if (options.ProtocolMaxObservations < options.ModbusLimits.MaxPoints)
+        if (options.ProtocolMaxObservations <
+            Math.Max(options.ModbusLimits.MaxPoints, options.SnmpLimits.MaxPoints))
         {
             throw new InvalidOperationException(
-                "Runtime protocol observation capacity must cover the configured Modbus point capacity.");
+                "Runtime protocol observation capacity must cover configured protocol point capacity.");
+        }
+
+        if (options.ProtocolMaxResponseBytes <= 4)
+        {
+            throw new InvalidOperationException(
+                "Runtime protocol response capacity must contain the bounded SNMP response envelope.");
         }
 
         var downstream = options.Downstream ??
@@ -155,7 +171,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
                 wallClock,
                 protocolLimits: new ProtocolCommissioningLimits(
                     options.ModbusLimits,
-                    new(256, 128, 512)),
+                    options.SnmpLimits),
                 maxProtocolSources: Math.Min(
                     options.MaxProtocolSources,
                     options.SchedulerMaxBindings - 1));
@@ -168,7 +184,10 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             options,
             monotonicClock,
             wallClock,
-            modbusConnectionFactory ?? new TcpModbusConnectionFactory());
+            modbusConnectionFactory ?? new TcpModbusConnectionFactory(),
+            snmpClientFactory ?? new UdpSnmpDatagramClientFactory(),
+            protocolSecretResolver ??
+                new EnvironmentProtocolSecretResolver(options.WorkloadIdentity));
     }
 
     public async Task<Result> StartAsync(
@@ -392,15 +411,34 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         StartWorkers(
             configuration.Source,
             configuration.ProtocolPlan,
-            configuration.ModbusBindings,
+            configuration.ProtocolBindings,
             cancellationToken);
 
     private Result<ActiveRuntimeWorkers> StartWorkers(
         SimulatorPollingSource simulator,
         ProtocolActivationPlan? protocolPlan,
-        IReadOnlyList<SourceBinding> modbusBindings,
+        IReadOnlyList<SourceBinding> protocolBindings,
         CancellationToken cancellationToken)
     {
+        var modbusSourceIds = protocolPlan?.ModbusSources
+            .Select(source => source.SourceId)
+            .ToHashSet() ?? [];
+        var snmpSourceIds = protocolPlan?.SnmpSources
+            .Select(source => source.SourceId)
+            .ToHashSet() ?? [];
+        var modbusBindings = protocolBindings
+            .Where(binding => modbusSourceIds.Contains(binding.SourceId))
+            .ToArray();
+        var snmpBindings = protocolBindings
+            .Where(binding => snmpSourceIds.Contains(binding.SourceId))
+            .ToArray();
+        if (modbusBindings.Length + snmpBindings.Length != protocolBindings.Count)
+        {
+            return Failure<ActiveRuntimeWorkers>(
+                "runtime.protocol_binding_plan",
+                "Protocol source bindings do not match the activation plan.");
+        }
+
         var modbus = ModbusRuntimeSourceFactory.Create(
             protocolPlan,
             modbusBindings,
@@ -414,10 +452,30 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
             return Result.Failure<ActiveRuntimeWorkers>(modbus.Error!);
         }
 
-        var registered = process.ReplaceProtocolSources(modbus.Value.Controllers);
+        var snmp = SnmpRuntimeSourceFactory.Create(
+            protocolPlan,
+            snmpBindings,
+            options.SnmpLimits,
+            options.SnmpWireLimits,
+            options.WorkloadIdentity,
+            options.CreateProtocolIoLimits(),
+            protocolSecretResolver,
+            snmpClientFactory,
+            wallClock);
+        if (snmp.IsFailure)
+        {
+            modbus.Value.Dispose();
+            return Result.Failure<ActiveRuntimeWorkers>(snmp.Error!);
+        }
+
+        var controllers = modbus.Value.Controllers
+            .Concat(snmp.Value.Controllers)
+            .ToDictionary(item => item.Key, item => item.Value);
+        var registered = process.ReplaceProtocolSources(controllers);
         if (registered.IsFailure)
         {
             modbus.Value.Dispose();
+            snmp.Value.Dispose();
             return Result.Failure<ActiveRuntimeWorkers>(registered.Error!);
         }
 
@@ -442,10 +500,14 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         {
             simulatorWorker.RunAsync(linked.Token),
         };
-        if (modbus.Value.Sources.Count > 0)
+        var protocolSources = modbus.Value.Sources
+            .Cast<IRuntimeProtocolSource>()
+            .Concat(snmp.Value.Sources)
+            .ToArray();
+        if (protocolSources.Length > 0)
         {
             var protocolWorker = new ProtocolPollingWorker(
-                modbus.Value.Sources,
+                protocolSources,
                 scheduler,
                 options.PollInterval,
                 maxProcessBatch,
@@ -456,7 +518,7 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         return Result.Success(new ActiveRuntimeWorkers(
             linked,
             CompleteWorkersAsync(tasks),
-            modbus.Value));
+            [modbus.Value, snmp.Value]));
     }
 
     private static async Task<Result> CompleteWorkersAsync(
@@ -546,17 +608,17 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
     private sealed class ActiveRuntimeWorkers : IAsyncDisposable
     {
         private readonly CancellationTokenSource cancellation;
-        private readonly ModbusRuntimeSourceSet modbus;
+        private readonly IReadOnlyList<IDisposable> protocolSources;
         private int disposed;
 
         public ActiveRuntimeWorkers(
             CancellationTokenSource cancellation,
             Task<Result> completion,
-            ModbusRuntimeSourceSet modbus)
+            IReadOnlyList<IDisposable> protocolSources)
         {
             this.cancellation = cancellation;
             Completion = completion;
-            this.modbus = modbus;
+            this.protocolSources = protocolSources;
         }
 
         public Task<Result> Completion { get; }
@@ -571,7 +633,11 @@ public sealed class ProductionRuntimeHostSession : IRuntimeHostSession
         {
             if (Interlocked.Exchange(ref disposed, 1) == 0)
             {
-                modbus.Dispose();
+                foreach (var source in protocolSources)
+                {
+                    source.Dispose();
+                }
+
                 cancellation.Dispose();
             }
 

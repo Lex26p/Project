@@ -520,6 +520,35 @@ public sealed class SnmpObservationParser : IProtocolObservationParser, IProtoco
         return Result.Success(new ProtocolDiagnosticBatch(samples, decoded.Value.Any(item => !item.Success)));
     }
 
+    public IReadOnlyList<SourceObservation> CreateUnavailable(SourceBinding binding)
+    {
+        if (binding.SourceId != configuration.SourceId)
+        {
+            throw new ArgumentException(
+                "SNMP configuration belongs to another source binding.",
+                nameof(binding));
+        }
+
+        lock (sync)
+        {
+            var timestamp = SourceTimestamp.FromUtc(clock.GetUtcNow());
+            return configuration.Points.Select(point =>
+            {
+                sourcePosition = checked(sourcePosition + 1);
+                return new SourceObservation(
+                    binding.ScopeId,
+                    binding.SourceId,
+                    point.PointId,
+                    new OwnerPosition<SourceObservation>(sourcePosition),
+                    TypedValue.From(lastValues.GetValueOrDefault(point.PointId)),
+                    point.Unit,
+                    DataQuality.Bad,
+                    Freshness.Stale,
+                    timestamp);
+            }).ToArray();
+        }
+    }
+
     private static Result<TValue> Failure<TValue>(string code, string message) =>
         Result.Failure<TValue>(new OperationError(ErrorCode.From(code), message));
 }
