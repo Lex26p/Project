@@ -1,0 +1,194 @@
+@page "/maintenance/work-orders/{WorkOrderId:guid}"
+@implements IAsyncDisposable
+@inject MaintenanceApiClient Api
+@inject IdentitySessionState Session
+
+<PageTitle>Maintenance work order</PageTitle>
+
+<GuardedContent Route="@($"/maintenance/work-orders/{WorkOrderId:D}")">
+    <section class="maintenance-work-order" aria-labelledby="work-order-title">
+        <header class="workspace-page-heading">
+            <div>
+                <span class="workspace-page-heading__eyebrow">Maintenance work order</span>
+                <h1 id="work-order-title">@(workOrder?.Summary ?? "Work order")</h1>
+            </div>
+            @if (workOrder is not null)
+            {
+                <UiBadge Text="@workOrder.State" Tone="@StateTone(workOrder.State)" />
+            }
+        </header>
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <UiStatePanel Kind="@UiStateKind.Error" Title="Work order unavailable" Message="@error" ActionLabel="Retry" OnAction="@LoadAsync" />
+        }
+        else if (loading)
+        {
+            <UiStatePanel Kind="@UiStateKind.Loading" Title="Loading work order" Message="Reading lifecycle, safety and checklist." />
+        }
+        else if (workOrder is null)
+        {
+            <UiStatePanel Kind="@UiStateKind.NotFound" Title="Work order not found" Message="The work order does not exist or is no longer visible." />
+        }
+        else
+        {
+            <div class="maintenance-lifecycle" aria-label="Work order lifecycle">
+                @foreach (var state in Lifecycle)
+                {
+                    <span class="@(state == workOrder.State ? "is-current" : null)">@state</span>
+                }
+            </div>
+
+            <div class="maintenance-work-order-grid">
+                <article>
+                    <h2>Context</h2>
+                    <dl>
+                        <dt>Assigned person</dt><dd>@workOrder.AssignedPersonId</dd>
+                        <dt>Source</dt><dd>@workOrder.SourceKind</dd>
+                        <dt>Version</dt><dd>@workOrder.Version</dd>
+                        <dt>Updated</dt><dd>@workOrder.UpdatedAt.ToLocalTime().ToString("g")</dd>
+                    </dl>
+                    <div class="maintenance-links">
+                        <a href="@workOrder.AssetHref">Open asset</a>
+                        @if (workOrder.SourceHref is not null) { <a href="@workOrder.SourceHref">Open source</a> }
+                    </div>
+                </article>
+
+                <article>
+                    <h2>Safety</h2>
+                    <dl>
+                        <dt>Permit required</dt><dd>@YesNo(workOrder.Safety.PermitRequired)</dd>
+                        <dt>Isolation required</dt><dd>@YesNo(workOrder.Safety.IsolationRequired)</dd>
+                        <dt>Instructions</dt><dd>@(workOrder.Safety.Instructions ?? "None")</dd>
+                        <dt>Acknowledged</dt><dd>@(workOrder.Safety.AcknowledgedAt?.ToLocalTime().ToString("g") ?? "No")</dd>
+                    </dl>
+                </article>
+            </div>
+
+            <section class="maintenance-checklist">
+                <h2>Checklist</h2>
+                @if (workOrder.Checklist.Count == 0)
+                {
+                    <p>No checklist items.</p>
+                }
+                @foreach (var item in workOrder.Checklist)
+                {
+                    <label>
+                        <input type="checkbox"
+                               checked="@(item.CompletedAt is not null)"
+                               disabled="@(!workOrder.CanUpdateChecklist || actionBusy)"
+                               @onchange="args => UpdateChecklistAsync(item, args)" />
+                        <span>@item.Description</span>
+                        @if (item.Mandatory) { <strong>Required</strong> }
+                    </label>
+                }
+            </section>
+
+            <div class="maintenance-actions" aria-label="Allowed actions">
+                @if (workOrder.CanClaim) { <button disabled="@actionBusy" @onclick="() => ExecuteAsync(Api.ClaimAsync)">Claim</button> }
+                @if (workOrder.CanAccept) { <button disabled="@actionBusy" @onclick="() => ExecuteAsync(Api.AcceptAsync)">Accept and acknowledge safety</button> }
+                @if (workOrder.CanStart) { <button disabled="@actionBusy" @onclick="() => ExecuteAsync(Api.StartAsync)">Start</button> }
+                @if (workOrder.CanSubmitForAcceptance) { <button disabled="@actionBusy" @onclick="() => ExecuteAsync(Api.SubmitAsync)">Submit for acceptance</button> }
+                @if (workOrder.CanAcceptResult) { <button disabled="@actionBusy" @onclick="() => ExecuteAsync(Api.AcceptResultAsync)">Accept result</button> }
+            </div>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    [Parameter] public Guid WorkOrderId { get; set; }
+    private static readonly string[] Lifecycle = ["Overdue", "Assigned", "Accepted", "InProgress", "PendingAcceptance", "Completed"];
+    private readonly CancellationTokenSource cancellation = new();
+    private MaintenanceWorkOrderPayload? workOrder;
+    private Task? polling;
+    private bool loading = true;
+    private bool actionBusy;
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+        polling ??= PollAsync(cancellation.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null) { try { await polling; } catch (OperationCanceledException) { } }
+        cancellation.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = workOrder is null;
+        error = null;
+        var result = await Api.ReadWorkOrderAsync(WorkOrderId, cancellation.Token);
+        loading = false;
+        Apply(result, false);
+    }
+
+    private async Task PollAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(token))
+        {
+            try
+            {
+                var result = await Api.ReadWorkOrderAsync(WorkOrderId, token);
+                if (result.Status == MaintenanceApiStatus.Available)
+                {
+                    workOrder = result.Payload;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (HttpRequestException) { }
+        }
+    }
+
+    private async Task ExecuteAsync(Func<MaintenanceWorkOrderPayload, CancellationToken, Task<MaintenanceApiResult<MaintenanceWorkOrderPayload>>> action)
+    {
+        if (workOrder is null) return;
+        actionBusy = true;
+        error = null;
+        var result = await action(workOrder, cancellation.Token);
+        actionBusy = false;
+        Apply(result, true);
+    }
+
+    private Task UpdateChecklistAsync(MaintenanceChecklistItemPayload item, ChangeEventArgs args) =>
+        ExecuteAsync((value, token) => Api.UpdateChecklistAsync(
+            value, item, args.Value is true || string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase), token));
+
+    private void Apply(MaintenanceApiResult<MaintenanceWorkOrderPayload> result, bool action)
+    {
+        if (result.Status == MaintenanceApiStatus.Available)
+        {
+            workOrder = result.Payload;
+            return;
+        }
+        if (result.Status == MaintenanceApiStatus.Conflict)
+        {
+            workOrder = result.Payload;
+            error = "The work order changed. Current state was loaded; repeat the action if it is still allowed.";
+            return;
+        }
+        if (result.Status == MaintenanceApiStatus.SessionExpired) Session.Invalidate();
+        if (result.Status == MaintenanceApiStatus.NotFound) { workOrder = null; return; }
+        error = result.Status switch
+        {
+            MaintenanceApiStatus.SessionExpired => "The session expired. Sign in again.",
+            MaintenanceApiStatus.Forbidden => "The current session cannot access this work order.",
+            MaintenanceApiStatus.Invalid when action => "The action is not valid in the current lifecycle state.",
+            _ => "The server could not complete the work-order request.",
+        };
+    }
+
+    private static string YesNo(bool value) => value ? "Yes" : "No";
+    private static UiBadgeTone StateTone(string state) => state switch
+    {
+        "Completed" => UiBadgeTone.Positive,
+        "Overdue" => UiBadgeTone.Critical,
+        "PendingAcceptance" => UiBadgeTone.Warning,
+        _ => UiBadgeTone.Information,
+    };
+}

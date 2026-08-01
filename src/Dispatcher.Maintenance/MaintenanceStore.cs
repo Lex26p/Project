@@ -47,8 +47,18 @@ public sealed class MaintenanceStore
         var now = UtcNow();
         var dto = new AssetDto(
             request.AssetId.Value, request.ScopeId.Value, request.Code.Trim(), request.Name.Trim(), null,
-            StateVersion.Initial.Value, now, now);
-        var fingerprint = Fingerprint(JsonSerializer.Serialize(dto));
+            (int)MaintenanceEquipmentLinkState.Standalone, StateVersion.Initial.Value, now, now);
+        var fingerprint = Fingerprint(JsonSerializer.Serialize(new
+        {
+            dto.AssetId,
+            dto.ScopeId,
+            dto.Code,
+            dto.Name,
+            dto.EquipmentId,
+            dto.Version,
+            dto.CreatedAt,
+            dto.UpdatedAt,
+        }));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
@@ -69,14 +79,16 @@ public sealed class MaintenanceStore
         await using (var command = new NpgsqlCommand(
             $"""
             INSERT INTO {MaintenanceMigrations.Schema}.asset
-                (asset_id, scope_id, code, name, equipment_id, version, created_at, updated_at)
-            VALUES (@asset, @scope, @code, @name, NULL, 1, @now, @now);
+                (asset_id, scope_id, code, name, equipment_id, equipment_link_state,
+                 version, created_at, updated_at)
+            VALUES (@asset, @scope, @code, @name, NULL, @link_state, 1, @now, @now);
             """, connection, transaction))
         {
             command.Parameters.AddWithValue("asset", dto.AssetId);
             command.Parameters.AddWithValue("scope", dto.ScopeId);
             command.Parameters.AddWithValue("code", dto.Code);
             command.Parameters.AddWithValue("name", dto.Name);
+            command.Parameters.AddWithValue("link_state", checked((short)dto.EquipmentLinkState));
             command.Parameters.AddWithValue("now", now);
             try
             {
@@ -137,8 +149,39 @@ public sealed class MaintenanceStore
             current => current.EquipmentId == request.EquipmentId.Value
                 ? Failure<Mutation>("maintenance.equipment_link", "Equipment is already linked to this asset.")
                 : Result.Success(new Mutation(
-                    current with { EquipmentId = request.EquipmentId.Value },
+                    current with
+                    {
+                        EquipmentId = request.EquipmentId.Value,
+                        EquipmentLinkState = (int)MaintenanceEquipmentLinkState.ReviewRequired,
+                    },
                     MaintenanceEquipmentLinkAction.Linked)),
+            cancellationToken);
+    }
+
+    public Task<Result<MaintenanceCommandResult>> ConfirmEquipmentLinkAsync(
+        AuthorizedMutation authorization,
+        ConfirmMaintenanceEquipmentLinkRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return MutateAsync(
+            authorization,
+            request.AssetId,
+            request.ExpectedVersion,
+            request.IdempotencyKey,
+            "confirm-equipment-link",
+            JsonSerializer.Serialize(new
+            {
+                AssetId = request.AssetId.Value,
+                ExpectedVersion = request.ExpectedVersion.Value,
+            }),
+            current => current.EquipmentLinkState != (int)MaintenanceEquipmentLinkState.ReviewRequired
+                ? Failure<Mutation>(
+                    "maintenance.equipment_link_state",
+                    "Only a link requiring review can be confirmed.")
+                : Result.Success(new Mutation(
+                    current with { EquipmentLinkState = (int)MaintenanceEquipmentLinkState.Linked },
+                    MaintenanceEquipmentLinkAction.ReviewConfirmed)),
             cancellationToken);
     }
 
@@ -157,7 +200,11 @@ public sealed class MaintenanceStore
             current => current.EquipmentId is null
                 ? Failure<Mutation>("maintenance.equipment_link", "Maintenance asset has no equipment link.")
                 : Result.Success(new Mutation(
-                    current with { EquipmentId = null },
+                    current with
+                    {
+                        EquipmentId = null,
+                        EquipmentLinkState = (int)MaintenanceEquipmentLinkState.Standalone,
+                    },
                     MaintenanceEquipmentLinkAction.Unlinked)),
             cancellationToken);
     }
@@ -182,7 +229,8 @@ public sealed class MaintenanceStore
         await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             $"""
-            SELECT asset_id, scope_id, code, name, equipment_id, version, created_at, updated_at
+            SELECT asset_id, scope_id, code, name, equipment_id, equipment_link_state,
+                   version, created_at, updated_at
             FROM {MaintenanceMigrations.Schema}.asset WHERE scope_id = @scope ORDER BY code, asset_id;
             """, connection, transaction);
         command.Parameters.AddWithValue("scope", scopeId.Value);
@@ -195,6 +243,66 @@ public sealed class MaintenanceStore
         await reader.DisposeAsync().ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return results;
+    }
+
+    public async Task<MaintenanceAssetPage> QueryAssetsAsync(
+        MaintenanceAssetQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var results = new List<MaintenanceAssetSnapshot>();
+        var search = string.IsNullOrWhiteSpace(query.Search)
+            ? null
+            : $"%{EscapeLike(query.Search.Trim())}%";
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT asset_id, scope_id, code, name, equipment_id, equipment_link_state,
+                   version, created_at, updated_at
+            FROM {MaintenanceMigrations.Schema}.asset
+            WHERE scope_id = @scope
+              AND (@search IS NULL OR code ILIKE @search ESCAPE '\' OR name ILIKE @search ESCAPE '\')
+              AND (@link_state IS NULL OR equipment_link_state = @link_state)
+              AND (@after_code IS NULL OR code > @after_code OR (code = @after_code AND asset_id > @after_asset))
+            ORDER BY code, asset_id
+            LIMIT @limit;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("scope", query.ScopeId.Value);
+        command.Parameters.Add(new NpgsqlParameter("search", NpgsqlDbType.Text)
+        {
+            Value = search is null ? DBNull.Value : search,
+        });
+        command.Parameters.Add(new NpgsqlParameter("link_state", NpgsqlDbType.Smallint)
+        {
+            Value = query.LinkState is null ? DBNull.Value : checked((short)query.LinkState.Value),
+        });
+        command.Parameters.Add(new NpgsqlParameter("after_code", NpgsqlDbType.Text)
+        {
+            Value = query.AfterCode is null ? DBNull.Value : query.AfterCode,
+        });
+        command.Parameters.Add(new NpgsqlParameter("after_asset", NpgsqlDbType.Uuid)
+        {
+            Value = query.AfterAssetId is null ? DBNull.Value : query.AfterAssetId.Value.Value,
+        });
+        command.Parameters.AddWithValue("limit", query.PageSize + 1);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(ReadAsset(reader).ToModel());
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var hasMore = results.Count > query.PageSize;
+        var page = results.Take(query.PageSize).ToArray();
+        return new MaintenanceAssetPage(
+            page,
+            hasMore ? page[^1].Code : null,
+            hasMore ? page[^1].AssetId : null);
     }
 
     public async Task<IReadOnlyList<MaintenanceEquipmentLinkHistory>> ReadLinkHistoryAsync(
@@ -305,7 +413,8 @@ public sealed class MaintenanceStore
         await using (var command = new NpgsqlCommand(
             $"""
             UPDATE {MaintenanceMigrations.Schema}.asset
-            SET code = @code, name = @name, equipment_id = @equipment, version = @version, updated_at = @updated
+            SET code = @code, name = @name, equipment_id = @equipment,
+                equipment_link_state = @link_state, version = @version, updated_at = @updated
             WHERE asset_id = @asset;
             """, connection, transaction))
         {
@@ -316,6 +425,7 @@ public sealed class MaintenanceStore
             {
                 Value = next.EquipmentId is null ? DBNull.Value : next.EquipmentId.Value,
             });
+            command.Parameters.AddWithValue("link_state", checked((short)next.EquipmentLinkState));
             command.Parameters.AddWithValue("version", checked((long)next.Version));
             command.Parameters.AddWithValue("updated", next.UpdatedAt);
             try
@@ -393,7 +503,8 @@ public sealed class MaintenanceStore
     {
         await using var command = new NpgsqlCommand(
             $"""
-            SELECT asset_id, scope_id, code, name, equipment_id, version, created_at, updated_at
+            SELECT asset_id, scope_id, code, name, equipment_id, equipment_link_state,
+                   version, created_at, updated_at
             FROM {MaintenanceMigrations.Schema}.asset WHERE asset_id = @asset{(forUpdate ? " FOR UPDATE" : string.Empty)};
             """, connection, transaction);
         command.Parameters.AddWithValue("asset", assetId.Value);
@@ -403,8 +514,9 @@ public sealed class MaintenanceStore
 
     private static AssetDto ReadAsset(NpgsqlDataReader reader) => new(
         reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3),
-        reader.IsDBNull(4) ? null : reader.GetGuid(4), checked((ulong)reader.GetInt64(5)),
-        reader.GetFieldValue<DateTimeOffset>(6), reader.GetFieldValue<DateTimeOffset>(7));
+        reader.IsDBNull(4) ? null : reader.GetGuid(4), reader.GetInt16(5),
+        checked((ulong)reader.GetInt64(6)),
+        reader.GetFieldValue<DateTimeOffset>(7), reader.GetFieldValue<DateTimeOffset>(8));
 
     private static async Task WriteLinkHistoryAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
@@ -484,6 +596,11 @@ public sealed class MaintenanceStore
     private static string Fingerprint(string content) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 
+    private static string EscapeLike(string value) =>
+        value.Replace(@"\", @"\\", StringComparison.Ordinal)
+            .Replace("%", @"\%", StringComparison.Ordinal)
+            .Replace("_", @"\_", StringComparison.Ordinal);
+
     private static Result Failure(string code, string message) =>
         Result.Failure(new OperationError(ErrorCode.From(code), message));
 
@@ -495,11 +612,16 @@ public sealed class MaintenanceStore
 
     private sealed record AssetDto(
         Guid AssetId, Guid ScopeId, string Code, string Name, Guid? EquipmentId,
-        ulong Version, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
+        int EquipmentLinkState, ulong Version, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
     {
         public MaintenanceAssetSnapshot ToModel() => new(
             MaintenanceAssetId.From(AssetId), FacilityScopeId.From(ScopeId), Code, Name,
             EquipmentId is null ? null : Dispatcher.Equipment.EquipmentId.From(EquipmentId.Value),
+            EquipmentLinkState == 0
+                ? EquipmentId is null
+                    ? MaintenanceEquipmentLinkState.Standalone
+                    : MaintenanceEquipmentLinkState.Linked
+                : (MaintenanceEquipmentLinkState)EquipmentLinkState,
             StateVersion.From(Version), CreatedAt, UpdatedAt);
     }
 }

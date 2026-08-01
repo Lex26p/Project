@@ -46,7 +46,15 @@ public readonly record struct WorkOrderChecklistItemId
 
 public enum MaintenanceRequestState { Submitted = 1, Approved = 2, Converted = 3 }
 public enum MaintenanceDefectState { Reported = 1, Confirmed = 2, Converted = 3 }
-public enum MaintenanceWorkOrderState { Assigned = 1, InProgress = 2, Completed = 3, Accepted = 4 }
+public enum MaintenanceWorkOrderState
+{
+    Overdue = 1,
+    Assigned = 2,
+    Accepted = 3,
+    InProgress = 4,
+    PendingAcceptance = 5,
+    Completed = 6,
+}
 public enum MaintenanceWorkSourceKind { Request = 1, Defect = 2, Forecast = 3 }
 
 public sealed record MaintenanceEventSourceLink(
@@ -78,6 +86,34 @@ public sealed record MaintenanceDefectSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
+public sealed record MaintenanceRequestQuery(
+    FacilityScopeId ScopeId,
+    int PageSize,
+    MaintenanceRequestState? State = null,
+    MaintenanceAssetId? AssetId = null,
+    string? Search = null,
+    DateTimeOffset? AfterCreatedAt = null,
+    MaintenanceRequestId? AfterRequestId = null);
+
+public sealed record MaintenanceRequestPage(
+    IReadOnlyList<MaintenanceRequestSnapshot> Requests,
+    DateTimeOffset? NextCreatedAt,
+    MaintenanceRequestId? NextRequestId);
+
+public sealed record MaintenanceDefectQuery(
+    FacilityScopeId ScopeId,
+    int PageSize,
+    MaintenanceDefectState? State = null,
+    MaintenanceAssetId? AssetId = null,
+    string? Search = null,
+    DateTimeOffset? AfterCreatedAt = null,
+    MaintenanceDefectId? AfterDefectId = null);
+
+public sealed record MaintenanceDefectPage(
+    IReadOnlyList<MaintenanceDefectSnapshot> Defects,
+    DateTimeOffset? NextCreatedAt,
+    MaintenanceDefectId? NextDefectId);
+
 public sealed record WorkOrderSafetyFields(
     bool PermitRequired,
     bool IsolationRequired,
@@ -105,6 +141,29 @@ public sealed record MaintenanceWorkOrderSnapshot(
     IReadOnlyList<WorkOrderChecklistItem> Checklist,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+public sealed record MaintenanceWorkOrderQuery(
+    FacilityScopeId ScopeId,
+    int PageSize,
+    MaintenanceWorkOrderState? State = null,
+    MaintenanceAssetId? AssetId = null,
+    PersonId? AssignedPersonId = null,
+    string? Search = null,
+    DateTimeOffset? AfterCreatedAt = null,
+    MaintenanceWorkOrderId? AfterWorkOrderId = null);
+
+public sealed record MaintenanceWorkOrderPage(
+    IReadOnlyList<MaintenanceWorkOrderSnapshot> WorkOrders,
+    DateTimeOffset? NextCreatedAt,
+    MaintenanceWorkOrderId? NextWorkOrderId);
+
+public sealed record MaintenanceOverviewSnapshot(
+    int Overdue,
+    int DueToday,
+    int RequiresAssignment,
+    int InProgress,
+    int PendingAcceptance,
+    int SafetyAttention);
 
 public sealed record CreateMaintenanceRequest(
     MaintenanceRequestId RequestId,
@@ -202,10 +261,15 @@ public static class MaintenanceCrossLinks
 
 public static class MaintenanceNucleusContract
 {
-    public const int Version = 1;
-    public const string Lifecycle = "Assigned>InProgress>Completed>Accepted";
+    public const int Version = 2;
+    public const string Lifecycle = "Overdue>Assigned>Accepted>InProgress>PendingAcceptance>Completed";
     public const string Sources = "Request|Defect|Forecast";
 }
+
+public sealed record ClaimMaintenanceWorkOrder(
+    MaintenanceWorkOrderId WorkOrderId,
+    StateVersion ExpectedVersion,
+    string IdempotencyKey);
 
 public sealed record TransitionMaintenanceWorkOrder(
     MaintenanceWorkOrderId WorkOrderId,
@@ -216,6 +280,13 @@ public sealed record TransitionMaintenanceWorkOrder(
 public sealed record CompleteWorkOrderChecklistItem(
     MaintenanceWorkOrderId WorkOrderId,
     WorkOrderChecklistItemId ItemId,
+    StateVersion ExpectedVersion,
+    string IdempotencyKey);
+
+public sealed record UpdateWorkOrderChecklistItem(
+    MaintenanceWorkOrderId WorkOrderId,
+    WorkOrderChecklistItemId ItemId,
+    bool Completed,
     StateVersion ExpectedVersion,
     string IdempotencyKey);
 

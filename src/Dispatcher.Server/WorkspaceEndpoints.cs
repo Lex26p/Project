@@ -1,5 +1,6 @@
 using Dispatcher.Dashboards;
 using Dispatcher.Incidents;
+using Dispatcher.Maintenance;
 using Dispatcher.MyWork;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
@@ -94,6 +95,20 @@ public static class WorkspaceEndpoints
                 return ToHttpResult(access.IsSuccess
                     ? Result.Success(true)
                     : Result.Failure<bool>(access.Error!));
+            }
+
+            if (string.Equals(path, "/maintenance", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("/maintenance/", StringComparison.OrdinalIgnoreCase))
+            {
+                var permitted = session is not null && session.Permissions.Grants.Any(permission =>
+                    permission.Value.StartsWith("maintenance.scope.", StringComparison.Ordinal) &&
+                    permission.Value.EndsWith(".read", StringComparison.Ordinal) &&
+                    !session.Permissions.Denials.Contains(permission));
+                return ToHttpResult(permitted
+                    ? Result.Success(true)
+                    : Result.Failure<bool>(new OperationError(
+                        ErrorCode.From("permission.denied"),
+                        "Maintenance workspace access is denied.")));
             }
 
             var incidentSegments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -199,6 +214,13 @@ public static class WorkspaceEndpoints
                     new WorkspaceNavigationPayload(
                         "Dashboards",
                         "/dashboards"));
+            }
+            if (session is not null && session.Permissions.Grants.Any(permission =>
+                    permission.Value.StartsWith("maintenance.scope.", StringComparison.Ordinal) &&
+                    permission.Value.EndsWith(".read", StringComparison.Ordinal) &&
+                    !session.Permissions.Denials.Contains(permission)))
+            {
+                items.Add(new WorkspaceNavigationPayload("Maintenance", "/maintenance"));
             }
 
             var registry = context.RequestServices.GetService<RegistryProjectionService>();

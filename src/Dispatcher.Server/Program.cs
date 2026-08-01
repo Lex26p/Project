@@ -127,6 +127,21 @@ if (incidentMyWorkEnabled)
         incidentRole!,
         myWorkRole!);
 }
+var maintenanceRole = builder.Configuration["Dispatcher:Maintenance:DatabaseRole"];
+var maintenanceMaximumPageSize = builder.Configuration.GetValue<int?>(
+    "Dispatcher:Maintenance:MaximumPageSize");
+var maintenanceEnabled = registryEnabled && eventEnabled && workspaceEnabled &&
+                         incidentMyWorkEnabled &&
+                         !string.IsNullOrWhiteSpace(maintenanceRole) &&
+                         maintenanceMaximumPageSize > 0;
+if (maintenanceEnabled)
+{
+    builder.Services.AddMaintenanceServer(
+        workspaceConnection!,
+        maintenanceRole!,
+        new Dispatcher.Maintenance.MaintenanceQueryLimits(
+            maintenanceMaximumPageSize!.Value));
+}
 var dashboardRole = builder.Configuration["Dispatcher:Dashboards:DatabaseRole"];
 var dashboardMaxVisibleWindows = builder.Configuration.GetValue<int?>(
     "Dispatcher:Dashboards:MaxVisibleWindows");
@@ -315,6 +330,10 @@ if (eventEnabled)
 if (incidentMyWorkEnabled)
 {
     app.MapIncidentMyWorkServer();
+}
+if (maintenanceEnabled)
+{
+    app.MapMaintenanceServer();
 }
 if (dashboardEnabled)
 {

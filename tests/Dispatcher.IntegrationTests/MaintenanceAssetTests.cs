@@ -43,6 +43,7 @@ public sealed class MaintenanceAssetTests
         Assert.Equal(MaintenanceCommandDisposition.Applied, created.Value.Disposition);
         Assert.Equal(MaintenanceCommandDisposition.Replay, replay.Value.Disposition);
         Assert.Null(created.Value.Asset.EquipmentId);
+        Assert.Equal(MaintenanceEquipmentLinkState.Standalone, created.Value.Asset.EquipmentLinkState);
         Assert.Equal(assetId, replay.Value.Asset.AssetId);
 
         var updated = await maintenance.UpdateAssetAsync(
@@ -68,12 +69,24 @@ public sealed class MaintenanceAssetTests
                 assetId, equipmentId, updated.Value.Asset.Version, "maintenance-link-1"));
         Assert.Equal(assetId, linked.Value.Asset.AssetId);
         Assert.Equal(equipmentId, linked.Value.Asset.EquipmentId);
+        Assert.Equal(MaintenanceEquipmentLinkState.ReviewRequired, linked.Value.Asset.EquipmentLinkState);
+        var deniedConfirmation = await maintenance.ConfirmEquipmentLinkAsync(
+            manager,
+            new ConfirmMaintenanceEquipmentLinkRequest(
+                assetId, linked.Value.Asset.Version, "maintenance-confirm-denied"));
+        Assert.Equal("permission.denied", deniedConfirmation.Error?.Code.Value);
+        var confirmed = await maintenance.ConfirmEquipmentLinkAsync(
+            Session(MaintenancePermissions.ManageAsset(ScopeId), EquipmentPermissions.Read(ScopeId)),
+            new ConfirmMaintenanceEquipmentLinkRequest(
+                assetId, linked.Value.Asset.Version, "maintenance-confirm-1"));
+        Assert.Equal(MaintenanceEquipmentLinkState.Linked, confirmed.Value.Asset.EquipmentLinkState);
         var unlinked = await maintenance.UnlinkEquipmentAsync(
             manager,
             new UnlinkMaintenanceEquipmentRequest(
-                assetId, linked.Value.Asset.Version, "maintenance-unlink-1"));
+                assetId, confirmed.Value.Asset.Version, "maintenance-unlink-1"));
         Assert.Equal(assetId, unlinked.Value.Asset.AssetId);
         Assert.Null(unlinked.Value.Asset.EquipmentId);
+        Assert.Equal(MaintenanceEquipmentLinkState.Standalone, unlinked.Value.Asset.EquipmentLinkState);
 
         var history = await maintenance.ReadLinkHistoryAsync(
             Session(MaintenancePermissions.Read(ScopeId)), assetId);
@@ -86,10 +99,15 @@ public sealed class MaintenanceAssetTests
             },
             item =>
             {
+                Assert.Equal(MaintenanceEquipmentLinkAction.ReviewConfirmed, item.Action);
+                Assert.Equal(equipmentId, item.EquipmentId);
+            },
+            item =>
+            {
                 Assert.Equal(MaintenanceEquipmentLinkAction.Unlinked, item.Action);
                 Assert.Null(item.EquipmentId);
             });
-        Assert.Equal(4, await maintenanceStore.CountAuditAsync(assetId));
+        Assert.Equal(5, await maintenanceStore.CountAuditAsync(assetId));
 
         var restarted = new MaintenanceService(
             new MaintenanceStore(dataSource, PostgreSqlClusterFixture.OwnerBRole, clock),
@@ -101,6 +119,32 @@ public sealed class MaintenanceAssetTests
         Assert.Null(restoredAsset.EquipmentId);
         var deniedRead = await restarted.ReadAssetsAsync(Session(), ScopeId);
         Assert.Equal("permission.denied", deniedRead.Error?.Code.Value);
+        var secondAssetId = MaintenanceAssetId.New();
+        Assert.True((await restarted.CreateAssetAsync(
+            manager,
+            new CreateMaintenanceAssetRequest(
+                secondAssetId, ScopeId, "B-200", "Standalone fan", "maintenance-create-2"))).IsSuccess);
+        var firstPage = await restarted.QueryAssetsAsync(
+            Session(MaintenancePermissions.Read(ScopeId)),
+            new MaintenanceAssetQuery(ScopeId, 1));
+        Assert.Single(firstPage.Value.Assets);
+        Assert.NotNull(firstPage.Value.NextCode);
+        var secondPage = await restarted.QueryAssetsAsync(
+            Session(MaintenancePermissions.Read(ScopeId)),
+            new MaintenanceAssetQuery(
+                ScopeId,
+                1,
+                AfterCode: firstPage.Value.NextCode,
+                AfterAssetId: firstPage.Value.NextAssetId));
+        Assert.Equal(secondAssetId, Assert.Single(secondPage.Value.Assets).AssetId);
+        var standalone = await restarted.QueryAssetsAsync(
+            Session(MaintenancePermissions.Read(ScopeId)),
+            new MaintenanceAssetQuery(
+                ScopeId,
+                10,
+                Search: "fan",
+                LinkState: MaintenanceEquipmentLinkState.Standalone));
+        Assert.Equal(secondAssetId, Assert.Single(standalone.Value.Assets).AssetId);
 
         var plan = new ApprovedMaintenancePlan(
             MaintenancePlanId.New(), assetId, RevisionNumber.Initial, "Weekly inspection",

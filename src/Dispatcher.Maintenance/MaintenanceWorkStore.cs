@@ -304,7 +304,7 @@ public sealed class MaintenanceWorkStore
         var dto = new WorkOrderDto(
             request.WorkOrderId.Value, request.AssetId.Value, request.ScopeId.Value,
             (int)MaintenanceWorkSourceKind.Forecast, request.ObligationId.Value,
-            request.Summary.Trim(), request.AssignedPersonId.Value, (int)MaintenanceWorkOrderState.Assigned,
+            request.Summary.Trim(), request.AssignedPersonId.Value, (int)MaintenanceWorkOrderState.Overdue,
             request.Safety.PermitRequired, request.Safety.IsolationRequired,
             request.Safety.Instructions?.Trim(), null, StateVersion.Initial.Value,
             request.Checklist.OrderBy(value => value.ItemId.Value)
@@ -327,31 +327,53 @@ public sealed class MaintenanceWorkStore
         return Applied(dto.ToModel());
     }
 
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> ClaimWorkOrderAsync(
+        AuthorizedMutation authorization, PersonId actor, ClaimMaintenanceWorkOrder request,
+        CancellationToken cancellationToken = default) =>
+        TransitionWorkOrderAsync(
+            authorization,
+            actor,
+            new TransitionMaintenanceWorkOrder(
+                request.WorkOrderId, request.ExpectedVersion, request.IdempotencyKey),
+            "claim-work-order",
+            MaintenanceWorkOrderState.Overdue,
+            MaintenanceWorkOrderState.Assigned,
+            requireChecklist: false,
+            assignActor: true,
+            cancellationToken);
+
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> AcceptWorkOrderAsync(
+        AuthorizedMutation authorization, PersonId actor, TransitionMaintenanceWorkOrder request,
+        CancellationToken cancellationToken = default) =>
+        TransitionWorkOrderAsync(
+            authorization, actor, request, "accept-work-order", MaintenanceWorkOrderState.Assigned,
+            MaintenanceWorkOrderState.Accepted, requireChecklist: false, assignActor: false, cancellationToken);
+
     public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> StartWorkOrderAsync(
         AuthorizedMutation authorization, PersonId actor, TransitionMaintenanceWorkOrder request,
         CancellationToken cancellationToken = default) =>
         TransitionWorkOrderAsync(
-            authorization, actor, request, "start-work-order", MaintenanceWorkOrderState.Assigned,
-            MaintenanceWorkOrderState.InProgress, requireChecklist: false, cancellationToken);
+            authorization, actor, request, "start-work-order", MaintenanceWorkOrderState.Accepted,
+            MaintenanceWorkOrderState.InProgress, requireChecklist: false, assignActor: false, cancellationToken);
 
-    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> CompleteWorkOrderAsync(
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> SubmitWorkOrderForAcceptanceAsync(
         AuthorizedMutation authorization, PersonId actor, TransitionMaintenanceWorkOrder request,
         CancellationToken cancellationToken = default) =>
         TransitionWorkOrderAsync(
-            authorization, actor, request, "complete-work-order", MaintenanceWorkOrderState.InProgress,
-            MaintenanceWorkOrderState.Completed, requireChecklist: false, cancellationToken);
+            authorization, actor, request, "submit-work-order", MaintenanceWorkOrderState.InProgress,
+            MaintenanceWorkOrderState.PendingAcceptance, requireChecklist: true, assignActor: false, cancellationToken);
 
-    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> AcceptWorkOrderAsync(
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> AcceptWorkResultAsync(
         AuthorizedMutation authorization, TransitionMaintenanceWorkOrder request,
         CancellationToken cancellationToken = default) =>
         TransitionWorkOrderAsync(
-            authorization, null, request, "accept-work-order", MaintenanceWorkOrderState.Completed,
-            MaintenanceWorkOrderState.Accepted, requireChecklist: true, cancellationToken);
+            authorization, null, request, "accept-work-result", MaintenanceWorkOrderState.PendingAcceptance,
+            MaintenanceWorkOrderState.Completed, requireChecklist: false, assignActor: false, cancellationToken);
 
-    public async Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> CompleteChecklistItemAsync(
+    public async Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> UpdateChecklistItemAsync(
         AuthorizedMutation authorization,
         PersonId actor,
-        CompleteWorkOrderChecklistItem request,
+        UpdateWorkOrderChecklistItem request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -360,13 +382,14 @@ public sealed class MaintenanceWorkStore
             WorkOrderId = request.WorkOrderId.Value,
             ItemId = request.ItemId.Value,
             Actor = actor.Value,
+            request.Completed,
             ExpectedVersion = request.ExpectedVersion.Value,
         }));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var replay = await ReadReceiptAsync<WorkOrderDto>(
-            connection, transaction, request.IdempotencyKey, "complete-checklist", fingerprint, cancellationToken).ConfigureAwait(false);
+            connection, transaction, request.IdempotencyKey, "update-checklist", fingerprint, cancellationToken).ConfigureAwait(false);
         if (replay.IsFailure)
         {
             return Result.Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(replay.Error!);
@@ -391,7 +414,11 @@ public sealed class MaintenanceWorkStore
             request.ExpectedVersion, current.Version, request.IdempotencyKey);
         var item = current.Checklist.SingleOrDefault(value => value.ItemId == request.ItemId.Value);
         if (contract.IsFailure || current.AssignedPersonId != actor.Value ||
-            current.State == (int)MaintenanceWorkOrderState.Accepted || item is null || item.CompletedAt is not null)
+            current.State != (int)MaintenanceWorkOrderState.Accepted &&
+            current.State != (int)MaintenanceWorkOrderState.InProgress ||
+            item is null ||
+            request.Completed && item.CompletedAt is not null ||
+            !request.Completed && item.CompletedAt is null)
         {
             if (contract.IsFailure)
             {
@@ -401,20 +428,31 @@ public sealed class MaintenanceWorkStore
             return Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(
                 current.AssignedPersonId != actor.Value ? "permission.denied" : "maintenance.checklist_state",
                 current.AssignedPersonId != actor.Value
-                    ? "Only the assigned person may complete checklist items."
+                    ? "Only the assigned person may update checklist items."
                     : "Checklist item cannot be completed in its current state.");
         }
 
         var now = UtcNow();
-        var completedItem = item with { CompletedAt = now, CompletedBy = actor.Value };
+        var updatedItem = item with
+        {
+            CompletedAt = request.Completed ? now : null,
+            CompletedBy = request.Completed ? actor.Value : null,
+        };
         await using (var command = new NpgsqlCommand(
             $"""
             UPDATE {MaintenanceMigrations.Schema}.work_order_checklist
-            SET completed_at = @now, completed_by = @person WHERE checklist_item_id = @item;
+            SET completed_at = @completed_at, completed_by = @completed_by
+            WHERE checklist_item_id = @item;
             """, connection, transaction))
         {
-            command.Parameters.AddWithValue("now", now);
-            command.Parameters.AddWithValue("person", actor.Value);
+            command.Parameters.Add(new NpgsqlParameter("completed_at", NpgsqlDbType.TimestampTz)
+            {
+                Value = request.Completed ? now : DBNull.Value,
+            });
+            command.Parameters.Add(new NpgsqlParameter("completed_by", NpgsqlDbType.Uuid)
+            {
+                Value = request.Completed ? actor.Value : DBNull.Value,
+            });
             command.Parameters.AddWithValue("item", request.ItemId.Value);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -423,11 +461,11 @@ public sealed class MaintenanceWorkStore
         {
             Version = request.ExpectedVersion.Next().Value,
             UpdatedAt = now,
-            Checklist = current.Checklist.Select(value => value.ItemId == item.ItemId ? completedItem : value).ToList(),
+            Checklist = current.Checklist.Select(value => value.ItemId == item.ItemId ? updatedItem : value).ToList(),
         };
         await UpdateWorkOrderAsync(connection, transaction, next, cancellationToken).ConfigureAwait(false);
         await WriteReceiptAndAuditAsync(
-            connection, transaction, request.IdempotencyKey, "complete-checklist", fingerprint, "work-order", next,
+            connection, transaction, request.IdempotencyKey, "update-checklist", fingerprint, "work-order", next,
             authorization, next.ScopeId, next.WorkOrderId, next.Version, now, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Applied(next.ToModel());
@@ -455,6 +493,91 @@ public sealed class MaintenanceWorkStore
         return value?.ToModel();
     }
 
+    public async Task<MaintenanceRequestPage> QueryRequestsAsync(
+        MaintenanceRequestQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var results = new List<MaintenanceRequestSnapshot>();
+        var search = string.IsNullOrWhiteSpace(query.Search)
+            ? null
+            : $"%{EscapeLike(query.Search.Trim())}%";
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT request_id, asset_id, scope_id, summary, state, version, event_id, occurrence_id,
+                   source_runtime_scope_id, point_id, source_route, source_permissions, created_at, updated_at
+            FROM {MaintenanceMigrations.Schema}.maintenance_request
+            WHERE scope_id = @scope
+              AND (@state IS NULL OR state = @state)
+              AND (@asset IS NULL OR asset_id = @asset)
+              AND (@search IS NULL OR summary ILIKE @search ESCAPE '\')
+              AND (@after_created IS NULL OR created_at > @after_created
+                   OR (created_at = @after_created AND request_id > @after_id))
+            ORDER BY created_at, request_id
+            LIMIT @limit;
+            """, connection, transaction);
+        AddRequestQueryParameters(command, query, search);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(ReadRequest(reader).ToModel());
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var hasMore = results.Count > query.PageSize;
+        var page = results.Take(query.PageSize).ToArray();
+        return new MaintenanceRequestPage(
+            page,
+            hasMore ? page[^1].CreatedAt : null,
+            hasMore ? page[^1].RequestId : null);
+    }
+
+    public async Task<MaintenanceDefectPage> QueryDefectsAsync(
+        MaintenanceDefectQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var results = new List<MaintenanceDefectSnapshot>();
+        var search = string.IsNullOrWhiteSpace(query.Search)
+            ? null
+            : $"%{EscapeLike(query.Search.Trim())}%";
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT defect_id, asset_id, scope_id, summary, state, version, created_at, updated_at
+            FROM {MaintenanceMigrations.Schema}.defect
+            WHERE scope_id = @scope
+              AND (@state IS NULL OR state = @state)
+              AND (@asset IS NULL OR asset_id = @asset)
+              AND (@search IS NULL OR summary ILIKE @search ESCAPE '\')
+              AND (@after_created IS NULL OR created_at > @after_created
+                   OR (created_at = @after_created AND defect_id > @after_id))
+            ORDER BY created_at, defect_id
+            LIMIT @limit;
+            """, connection, transaction);
+        AddDefectQueryParameters(command, query, search);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(ReadDefect(reader).ToModel());
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var hasMore = results.Count > query.PageSize;
+        var page = results.Take(query.PageSize).ToArray();
+        return new MaintenanceDefectPage(
+            page,
+            hasMore ? page[^1].CreatedAt : null,
+            hasMore ? page[^1].DefectId : null);
+    }
+
     public async Task<MaintenanceWorkOrderSnapshot?> ReadWorkOrderAsync(
         MaintenanceWorkOrderId workOrderId, CancellationToken cancellationToken = default)
     {
@@ -464,6 +587,117 @@ public sealed class MaintenanceWorkStore
         var value = await ReadWorkOrderDtoAsync(connection, transaction, workOrderId, false, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return value?.ToModel();
+    }
+
+    public async Task<MaintenanceWorkOrderPage> QueryWorkOrdersAsync(
+        MaintenanceWorkOrderQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var search = string.IsNullOrWhiteSpace(query.Search)
+            ? null
+            : $"%{EscapeLike(query.Search.Trim())}%";
+        var ids = new List<MaintenanceWorkOrderId>();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using (var command = new NpgsqlCommand(
+            $"""
+            SELECT work_order_id
+            FROM {MaintenanceMigrations.Schema}.work_order
+            WHERE scope_id = @scope
+              AND (@state IS NULL OR state = @state)
+              AND (@asset IS NULL OR asset_id = @asset)
+              AND (@assigned IS NULL OR assigned_person_id = @assigned)
+              AND (@search IS NULL OR summary ILIKE @search ESCAPE '\')
+              AND (@after_created IS NULL OR created_at > @after_created
+                   OR (created_at = @after_created AND work_order_id > @after_id))
+            ORDER BY created_at, work_order_id
+            LIMIT @limit;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("scope", query.ScopeId.Value);
+            command.Parameters.Add(new NpgsqlParameter("state", NpgsqlDbType.Smallint)
+            {
+                Value = query.State is null ? DBNull.Value : checked((short)query.State.Value),
+            });
+            AddNullableUuid(command, "asset", query.AssetId?.Value);
+            AddNullableUuid(command, "assigned", query.AssignedPersonId?.Value);
+            command.Parameters.Add(new NpgsqlParameter("search", NpgsqlDbType.Text)
+            {
+                Value = search is null ? DBNull.Value : search,
+            });
+            command.Parameters.Add(new NpgsqlParameter("after_created", NpgsqlDbType.TimestampTz)
+            {
+                Value = query.AfterCreatedAt is null ? DBNull.Value : query.AfterCreatedAt.Value,
+            });
+            AddNullableUuid(command, "after_id", query.AfterWorkOrderId?.Value);
+            command.Parameters.AddWithValue("limit", query.PageSize + 1);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                ids.Add(MaintenanceWorkOrderId.From(reader.GetGuid(0)));
+            }
+        }
+
+        var results = new List<MaintenanceWorkOrderSnapshot>(ids.Count);
+        foreach (var id in ids)
+        {
+            var dto = await ReadWorkOrderDtoAsync(
+                connection, transaction, id, false, cancellationToken).ConfigureAwait(false);
+            if (dto is not null)
+            {
+                results.Add(dto.ToModel());
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var hasMore = results.Count > query.PageSize;
+        var page = results.Take(query.PageSize).ToArray();
+        return new MaintenanceWorkOrderPage(
+            page,
+            hasMore ? page[^1].CreatedAt : null,
+            hasMore ? page[^1].WorkOrderId : null);
+    }
+
+    public async Task<MaintenanceOverviewSnapshot> ReadOverviewAsync(
+        FacilityScopeId scopeId,
+        DateOnly today,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT
+                (count(*) FILTER (WHERE state = 1))::int,
+                (SELECT count(*)::int FROM {MaintenanceMigrations.Schema}.forecast_materialization
+                 WHERE scope_id = @scope AND due_on = @today),
+                (count(*) FILTER (WHERE state = 1))::int,
+                (count(*) FILTER (WHERE state = 4))::int,
+                (count(*) FILTER (WHERE state = 5))::int,
+                (count(*) FILTER (
+                    WHERE state <> 6
+                      AND (permit_required OR isolation_required OR safety_instructions IS NOT NULL)
+                      AND safety_acknowledged_at IS NULL))::int
+            FROM {MaintenanceMigrations.Schema}.work_order
+            WHERE scope_id = @scope;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("scope", scopeId.Value);
+        command.Parameters.AddWithValue("today", today);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var result = new MaintenanceOverviewSnapshot(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.GetInt32(2),
+            reader.GetInt32(3),
+            reader.GetInt32(4),
+            reader.GetInt32(5));
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<IReadOnlyList<MaintenanceTimelineEntry>> ReadTimelineAsync(
@@ -684,6 +918,7 @@ public sealed class MaintenanceWorkStore
         MaintenanceWorkOrderState requiredState,
         MaintenanceWorkOrderState nextState,
         bool requireChecklist,
+        bool assignActor,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -718,13 +953,13 @@ public sealed class MaintenanceWorkStore
                 "maintenance.work_order_not_found", "Work order was not found.");
         }
 
-        var requiredPermission = nextState == MaintenanceWorkOrderState.Accepted
+        var requiredPermission = nextState == MaintenanceWorkOrderState.Completed
             ? MaintenanceWorkPermissions.Accept(FacilityScopeId.From(current.ScopeId))
             : MaintenanceWorkPermissions.Execute(FacilityScopeId.From(current.ScopeId));
         var contract = ValidateTransition(
             authorization, requiredPermission, request.ExpectedVersion, current.Version, request.IdempotencyKey);
         if (contract.IsFailure || current.State != (int)requiredState ||
-            actor is not null && current.AssignedPersonId != actor.Value.Value)
+            !assignActor && actor is not null && current.AssignedPersonId != actor.Value.Value)
         {
             if (contract.IsFailure)
             {
@@ -732,10 +967,10 @@ public sealed class MaintenanceWorkStore
             }
 
             return Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(
-                actor is not null && current.AssignedPersonId != actor.Value.Value
+                !assignActor && actor is not null && current.AssignedPersonId != actor.Value.Value
                     ? "permission.denied"
                     : "maintenance.work_order_state",
-                actor is not null && current.AssignedPersonId != actor.Value.Value
+                !assignActor && actor is not null && current.AssignedPersonId != actor.Value.Value
                     ? "Only the assigned person may execute the work order."
                     : "Work order transition is invalid for the current state.");
         }
@@ -758,6 +993,7 @@ public sealed class MaintenanceWorkStore
         var next = current with
         {
             State = (int)nextState,
+            AssignedPersonId = assignActor ? actor!.Value.Value : current.AssignedPersonId,
             SafetyAcknowledgedAt = nextState == MaintenanceWorkOrderState.InProgress && request.SafetyAcknowledged
                 ? now
                 : current.SafetyAcknowledgedAt,
@@ -904,18 +1140,7 @@ public sealed class MaintenanceWorkStore
             return null;
         }
 
-        EventSourceDto? source = null;
-        if (!reader.IsDBNull(6))
-        {
-            source = new EventSourceDto(
-                reader.GetGuid(6), reader.GetGuid(7), reader.GetGuid(8), reader.GetGuid(9), reader.GetString(10),
-                reader.GetFieldValue<string[]>(11));
-        }
-
-        return new RequestDto(
-            reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3), reader.GetInt16(4),
-            checked((ulong)reader.GetInt64(5)), source,
-            reader.GetFieldValue<DateTimeOffset>(12), reader.GetFieldValue<DateTimeOffset>(13));
+        return ReadRequest(reader);
     }
 
     private static async Task<DefectDto?> ReadDefectDtoAsync(
@@ -930,11 +1155,7 @@ public sealed class MaintenanceWorkStore
             """, connection, transaction);
         command.Parameters.AddWithValue("id", defectId.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? new DefectDto(
-                reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3), reader.GetInt16(4),
-                checked((ulong)reader.GetInt64(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetFieldValue<DateTimeOffset>(7))
-            : null;
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadDefect(reader) : null;
     }
 
     private static async Task<WorkOrderDto?> ReadWorkOrderDtoAsync(
@@ -1071,11 +1292,13 @@ public sealed class MaintenanceWorkStore
         await using var command = new NpgsqlCommand(
             $"""
             UPDATE {MaintenanceMigrations.Schema}.work_order
-            SET state = @state, safety_acknowledged_at = @acknowledged, version = @version, updated_at = @updated
+            SET state = @state, assigned_person_id = @assigned,
+                safety_acknowledged_at = @acknowledged, version = @version, updated_at = @updated
             WHERE work_order_id = @id;
             """, connection, transaction);
         command.Parameters.AddWithValue("id", value.WorkOrderId);
         command.Parameters.AddWithValue("state", checked((short)value.State));
+        command.Parameters.AddWithValue("assigned", value.AssignedPersonId);
         command.Parameters.Add(new NpgsqlParameter("acknowledged", NpgsqlDbType.TimestampTz)
         {
             Value = value.SafetyAcknowledgedAt is null ? DBNull.Value : value.SafetyAcknowledgedAt.Value,
@@ -1140,6 +1363,93 @@ public sealed class MaintenanceWorkStore
         {
             Value = value is null ? DBNull.Value : value.Value,
         });
+
+    private static void AddRequestQueryParameters(
+        NpgsqlCommand command,
+        MaintenanceRequestQuery query,
+        string? search)
+    {
+        command.Parameters.AddWithValue("scope", query.ScopeId.Value);
+        command.Parameters.Add(new NpgsqlParameter("state", NpgsqlDbType.Smallint)
+        {
+            Value = query.State is null ? DBNull.Value : checked((short)query.State.Value),
+        });
+        AddNullableUuid(command, "asset", query.AssetId?.Value);
+        command.Parameters.Add(new NpgsqlParameter("search", NpgsqlDbType.Text)
+        {
+            Value = search is null ? DBNull.Value : search,
+        });
+        command.Parameters.Add(new NpgsqlParameter("after_created", NpgsqlDbType.TimestampTz)
+        {
+            Value = query.AfterCreatedAt is null ? DBNull.Value : query.AfterCreatedAt.Value,
+        });
+        AddNullableUuid(command, "after_id", query.AfterRequestId?.Value);
+        command.Parameters.AddWithValue("limit", query.PageSize + 1);
+    }
+
+    private static void AddDefectQueryParameters(
+        NpgsqlCommand command,
+        MaintenanceDefectQuery query,
+        string? search)
+    {
+        command.Parameters.AddWithValue("scope", query.ScopeId.Value);
+        command.Parameters.Add(new NpgsqlParameter("state", NpgsqlDbType.Smallint)
+        {
+            Value = query.State is null ? DBNull.Value : checked((short)query.State.Value),
+        });
+        AddNullableUuid(command, "asset", query.AssetId?.Value);
+        command.Parameters.Add(new NpgsqlParameter("search", NpgsqlDbType.Text)
+        {
+            Value = search is null ? DBNull.Value : search,
+        });
+        command.Parameters.Add(new NpgsqlParameter("after_created", NpgsqlDbType.TimestampTz)
+        {
+            Value = query.AfterCreatedAt is null ? DBNull.Value : query.AfterCreatedAt.Value,
+        });
+        AddNullableUuid(command, "after_id", query.AfterDefectId?.Value);
+        command.Parameters.AddWithValue("limit", query.PageSize + 1);
+    }
+
+    private static RequestDto ReadRequest(NpgsqlDataReader reader)
+    {
+        EventSourceDto? source = null;
+        if (!reader.IsDBNull(6))
+        {
+            source = new EventSourceDto(
+                reader.GetGuid(6),
+                reader.GetGuid(7),
+                reader.GetGuid(8),
+                reader.GetGuid(9),
+                reader.GetString(10),
+                reader.GetFieldValue<string[]>(11));
+        }
+
+        return new RequestDto(
+            reader.GetGuid(0),
+            reader.GetGuid(1),
+            reader.GetGuid(2),
+            reader.GetString(3),
+            reader.GetInt16(4),
+            checked((ulong)reader.GetInt64(5)),
+            source,
+            reader.GetFieldValue<DateTimeOffset>(12),
+            reader.GetFieldValue<DateTimeOffset>(13));
+    }
+
+    private static DefectDto ReadDefect(NpgsqlDataReader reader) => new(
+        reader.GetGuid(0),
+        reader.GetGuid(1),
+        reader.GetGuid(2),
+        reader.GetString(3),
+        reader.GetInt16(4),
+        checked((ulong)reader.GetInt64(5)),
+        reader.GetFieldValue<DateTimeOffset>(6),
+        reader.GetFieldValue<DateTimeOffset>(7));
+
+    private static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
 
     private async Task SetRoleAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken cancellationToken)

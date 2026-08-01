@@ -1,0 +1,273 @@
+@page "/maintenance"
+@implements IAsyncDisposable
+@inject MaintenanceApiClient Api
+@inject RegistryApiClient Registry
+@inject IdentitySessionState Session
+
+<PageTitle>Maintenance</PageTitle>
+
+<GuardedContent Route="/maintenance">
+    <section class="maintenance-page" aria-labelledby="maintenance-title">
+        <header class="workspace-page-heading">
+            <div>
+                <span class="workspace-page-heading__eyebrow">Maintenance Core</span>
+                <h1 id="maintenance-title">Maintenance</h1>
+            </div>
+            <div class="maintenance-toolbar">
+                <label>
+                    <span>Facility scope</span>
+                    <select value="@selectedScopeId" @onchange="ChangeScopeAsync">
+                        @foreach (var scope in scopes)
+                        {
+                            <option value="@scope.ScopeId">@scope.Label</option>
+                        }
+                    </select>
+                </label>
+                <button type="button" @onclick="LoadAsync">Refresh</button>
+            </div>
+        </header>
+
+        <nav class="maintenance-tabs" aria-label="Maintenance views">
+            <button class="@(tab == MaintenanceTab.Overview ? "is-selected" : null)" @onclick="() => tab = MaintenanceTab.Overview">Overview</button>
+            <button class="@(tab == MaintenanceTab.Assets ? "is-selected" : null)" @onclick="() => tab = MaintenanceTab.Assets">Assets</button>
+            <button class="@(tab == MaintenanceTab.Calendar ? "is-selected" : null)" @onclick="() => tab = MaintenanceTab.Calendar">Calendar &amp; forecast</button>
+            <button class="@(tab == MaintenanceTab.Work ? "is-selected" : null)" @onclick="() => tab = MaintenanceTab.Work">Work</button>
+        </nav>
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <UiStatePanel Kind="@UiStateKind.Error" Title="Maintenance unavailable" Message="@error" ActionLabel="Retry" OnAction="@LoadAsync" />
+        }
+        else if (loading)
+        {
+            <UiStatePanel Kind="@UiStateKind.Loading" Title="Loading maintenance" Message="Reading the selected facility scope." />
+        }
+        else if (selectedScopeId == Guid.Empty)
+        {
+            <UiStatePanel Kind="@UiStateKind.Empty" Title="No facility scope" Message="No accessible facility scope is available." />
+        }
+        else if (tab == MaintenanceTab.Overview)
+        {
+            <div class="maintenance-counters" aria-label="Maintenance overview">
+                @Counter("Overdue", overview?.Overdue ?? 0, UiBadgeTone.Critical)
+                @Counter("Due today", overview?.DueToday ?? 0, UiBadgeTone.Information)
+                @Counter("Requires assignment", overview?.RequiresAssignment ?? 0, UiBadgeTone.Warning)
+                @Counter("In progress", overview?.InProgress ?? 0, UiBadgeTone.Information)
+                @Counter("Pending acceptance", overview?.PendingAcceptance ?? 0, UiBadgeTone.Warning)
+                @Counter("Safety attention", overview?.SafetyAttention ?? 0, UiBadgeTone.Critical)
+            </div>
+        }
+        else if (tab == MaintenanceTab.Assets)
+        {
+            @if (assets.Count == 0)
+            {
+                <UiStatePanel Kind="@UiStateKind.Empty" Title="No maintenance assets" Message="This scope has no standalone or equipment-linked maintenance assets." />
+            }
+            else
+            {
+                <div class="maintenance-list" role="list">
+                    @foreach (var asset in assets)
+                    {
+                        <article role="listitem" data-asset-id="@asset.AssetId">
+                            <div><strong>@asset.Code</strong><span>@asset.Name</span></div>
+                            <UiBadge Text="@LinkLabel(asset.LinkState)" Tone="@LinkTone(asset.LinkState)" />
+                            @if (asset.EquipmentHref is not null)
+                            {
+                                <a href="@asset.EquipmentHref">Open equipment</a>
+                            }
+                        </article>
+                    }
+                </div>
+            }
+        }
+        else if (tab == MaintenanceTab.Calendar)
+        {
+            <div class="maintenance-columns">
+                @ForecastColumn("Calendar", calendar)
+                @ForecastColumn("Forecast", forecast)
+            </div>
+        }
+        else
+        {
+            <div class="maintenance-columns maintenance-columns--work">
+                @WorkColumn("Requests", requests.Select(value => new WorkRow(value.Summary, value.State, value.EventHref, value.UpdatedAt)).ToArray())
+                @WorkColumn("Defects", defects.Select(value => new WorkRow(value.Summary, value.State, value.AssetHref, value.UpdatedAt)).ToArray())
+                @WorkColumn("Work orders", workOrders.Select(value => new WorkRow(value.Summary, value.State, $"/maintenance/work-orders/{value.WorkOrderId:D}", value.UpdatedAt)).ToArray())
+            </div>
+        }
+    </section>
+</GuardedContent>
+
+@code {
+    private readonly CancellationTokenSource cancellation = new();
+    private IReadOnlyList<RegistryScopePayload> scopes = [];
+    private IReadOnlyList<MaintenanceAssetPayload> assets = [];
+    private IReadOnlyList<MaintenanceForecastPayload> calendar = [];
+    private IReadOnlyList<MaintenanceForecastPayload> forecast = [];
+    private IReadOnlyList<MaintenanceRequestPayload> requests = [];
+    private IReadOnlyList<MaintenanceDefectPayload> defects = [];
+    private IReadOnlyList<MaintenanceWorkOrderPayload> workOrders = [];
+    private MaintenanceOverviewPayload? overview;
+    private Guid selectedScopeId;
+    private MaintenanceTab tab;
+    private Task? polling;
+    private bool loading = true;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        scopes = await Registry.ReadScopesAsync(cancellation.Token) ?? [];
+        selectedScopeId = scopes.FirstOrDefault()?.ScopeId ?? Guid.Empty;
+        await LoadAsync();
+        polling = PollAsync(cancellation.Token);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellation.Cancel();
+        if (polling is not null)
+        {
+            try { await polling; } catch (OperationCanceledException) { }
+        }
+        cancellation.Dispose();
+    }
+
+    private async Task ChangeScopeAsync(ChangeEventArgs args)
+    {
+        selectedScopeId = Guid.TryParse(args.Value?.ToString(), out var value) ? value : Guid.Empty;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (selectedScopeId == Guid.Empty)
+        {
+            loading = false;
+            return;
+        }
+
+        loading = overview is null;
+        error = null;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var overviewTask = Api.ReadOverviewAsync(selectedScopeId, cancellation.Token);
+        var assetsTask = Api.ReadAssetsAsync(selectedScopeId, cancellation.Token);
+        var calendarTask = Api.ReadCalendarAsync(selectedScopeId, today.AddDays(-30), today.AddDays(30), cancellation.Token);
+        var forecastTask = Api.ReadForecastAsync(selectedScopeId, today, today.AddDays(90), cancellation.Token);
+        var requestsTask = Api.ReadRequestsAsync(selectedScopeId, cancellation.Token);
+        var defectsTask = Api.ReadDefectsAsync(selectedScopeId, cancellation.Token);
+        var workOrdersTask = Api.ReadWorkOrdersAsync(selectedScopeId, cancellation.Token);
+        await Task.WhenAll(overviewTask, assetsTask, calendarTask, forecastTask, requestsTask, defectsTask, workOrdersTask);
+
+        var overviewResult = await overviewTask;
+        var assetsResult = await assetsTask;
+        var calendarResult = await calendarTask;
+        var forecastResult = await forecastTask;
+        var requestsResult = await requestsTask;
+        var defectsResult = await defectsTask;
+        var workOrdersResult = await workOrdersTask;
+        loading = false;
+        if (ApplyFailure(overviewResult.Status) || ApplyFailure(assetsResult.Status) ||
+            ApplyFailure(calendarResult.Status) || ApplyFailure(forecastResult.Status) ||
+            ApplyFailure(requestsResult.Status) || ApplyFailure(defectsResult.Status) ||
+            ApplyFailure(workOrdersResult.Status))
+        {
+            return;
+        }
+
+        overview = overviewResult.Payload;
+        assets = assetsResult.Payload?.Assets ?? [];
+        calendar = calendarResult.Payload?.Entries ?? [];
+        forecast = forecastResult.Payload?.Entries ?? [];
+        requests = requestsResult.Payload?.Requests ?? [];
+        defects = defectsResult.Payload?.Defects ?? [];
+        workOrders = workOrdersResult.Payload?.WorkOrders ?? [];
+    }
+
+    private async Task PollAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(token))
+        {
+            if (selectedScopeId == Guid.Empty) continue;
+            try
+            {
+                var overviewResult = await Api.ReadOverviewAsync(selectedScopeId, token);
+                var workResult = await Api.ReadWorkOrdersAsync(selectedScopeId, token);
+                if (overviewResult.Status == MaintenanceApiStatus.Available && workResult.Status == MaintenanceApiStatus.Available)
+                {
+                    overview = overviewResult.Payload;
+                    workOrders = workResult.Payload?.WorkOrders ?? [];
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (HttpRequestException) { }
+        }
+    }
+
+    private bool ApplyFailure(MaintenanceApiStatus status)
+    {
+        if (status == MaintenanceApiStatus.Available) return false;
+        if (status == MaintenanceApiStatus.SessionExpired) Session.Invalidate();
+        error = status switch
+        {
+            MaintenanceApiStatus.SessionExpired => "The session expired. Sign in again.",
+            MaintenanceApiStatus.Forbidden => "The current session cannot read this facility scope.",
+            _ => "The server could not read the maintenance workspace.",
+        };
+        return true;
+    }
+
+    private static RenderFragment Counter(string label, int value, UiBadgeTone tone) => builder =>
+    {
+        builder.OpenElement(0, "article");
+        builder.AddAttribute(1, "class", $"maintenance-counter maintenance-counter--{tone.ToString().ToLowerInvariant()}");
+        builder.OpenElement(2, "span"); builder.AddContent(3, label); builder.CloseElement();
+        builder.OpenElement(4, "strong"); builder.AddContent(5, value); builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment ForecastColumn(string title, IReadOnlyList<MaintenanceForecastPayload> entries) => builder =>
+    {
+        builder.OpenElement(0, "section"); builder.AddAttribute(1, "class", "maintenance-column");
+        builder.OpenElement(2, "h2"); builder.AddContent(3, title); builder.CloseElement();
+        if (entries.Count == 0) { builder.OpenElement(4, "p"); builder.AddContent(5, "No entries in the bounded range."); builder.CloseElement(); }
+        foreach (var entry in entries)
+        {
+            builder.OpenElement(10, "article");
+            builder.OpenElement(11, "time"); builder.AddContent(12, entry.DueOn.ToString("d")); builder.CloseElement();
+            builder.OpenElement(13, "strong"); builder.AddContent(14, entry.Title); builder.CloseElement();
+            builder.OpenElement(15, "span"); builder.AddContent(16, entry.State); builder.CloseElement();
+            if (entry.WorkOrderHref is not null) { builder.OpenElement(17, "a"); builder.AddAttribute(18, "href", entry.WorkOrderHref); builder.AddContent(19, "Open work order"); builder.CloseElement(); }
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private RenderFragment WorkColumn(string title, IReadOnlyList<WorkRow> rows) => builder =>
+    {
+        builder.OpenElement(0, "section"); builder.AddAttribute(1, "class", "maintenance-column");
+        builder.OpenElement(2, "h2"); builder.AddContent(3, title); builder.CloseElement();
+        if (rows.Count == 0) { builder.OpenElement(4, "p"); builder.AddContent(5, "No items."); builder.CloseElement(); }
+        foreach (var row in rows)
+        {
+            builder.OpenElement(10, "article");
+            builder.OpenElement(11, "strong"); builder.AddContent(12, row.Summary); builder.CloseElement();
+            builder.OpenElement(13, "span"); builder.AddContent(14, row.State); builder.CloseElement();
+            builder.OpenElement(15, "small"); builder.AddContent(16, row.UpdatedAt.ToLocalTime().ToString("g")); builder.CloseElement();
+            if (row.Href is not null) { builder.OpenElement(17, "a"); builder.AddAttribute(18, "href", row.Href); builder.AddContent(19, "Open"); builder.CloseElement(); }
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private static string LinkLabel(string state) => state switch
+    {
+        "Standalone" => "Standalone",
+        "PendingReview" => "Review required",
+        _ => "Equipment linked",
+    };
+
+    private static UiBadgeTone LinkTone(string state) => state == "PendingReview" ? UiBadgeTone.Warning : UiBadgeTone.Positive;
+    private sealed record WorkRow(string Summary, string State, string? Href, DateTimeOffset UpdatedAt);
+    private enum MaintenanceTab { Overview, Assets, Calendar, Work }
+}

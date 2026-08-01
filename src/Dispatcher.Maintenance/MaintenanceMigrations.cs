@@ -165,5 +165,69 @@ public static class MaintenanceMigrations
         CREATE INDEX forecast_due_claim_idx
             ON {Schema}.forecast_materialization (due_on, lease_until, obligation_id)
             WHERE completed_at IS NULL;
+        """),
+        new MigrationStep(4, "maintenance asset equipment link review state", $"""
+        ALTER TABLE {Schema}.asset
+            ADD COLUMN equipment_link_state smallint NOT NULL DEFAULT 1;
+        UPDATE {Schema}.asset
+        SET equipment_link_state = CASE WHEN equipment_id IS NULL THEN 1 ELSE 2 END;
+        ALTER TABLE {Schema}.asset
+            ALTER COLUMN equipment_link_state DROP DEFAULT,
+            ADD CONSTRAINT maintenance_asset_link_state_check CHECK (
+                (equipment_link_state = 1 AND equipment_id IS NULL) OR
+                (equipment_link_state IN (2, 3) AND equipment_id IS NOT NULL));
+        ALTER TABLE {Schema}.equipment_link_history
+            DROP CONSTRAINT equipment_link_history_action_check;
+        ALTER TABLE {Schema}.equipment_link_history
+            ADD CONSTRAINT equipment_link_history_action_check CHECK (action IN (1, 2, 3));
+        CREATE INDEX maintenance_asset_scope_link_idx
+            ON {Schema}.asset (scope_id, equipment_link_state, code, asset_id);
+        """),
+        new MigrationStep(5, "approved maintenance plan read model", $"""
+        CREATE TABLE {Schema}.approved_plan (
+            plan_id uuid PRIMARY KEY,
+            asset_id uuid NOT NULL REFERENCES {Schema}.asset(asset_id),
+            scope_id uuid NOT NULL,
+            plan_revision bigint NOT NULL CHECK (plan_revision > 0),
+            title text NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 500),
+            first_due_on date NOT NULL,
+            interval_days integer NOT NULL CHECK (interval_days > 0),
+            effective_through date NULL,
+            fingerprint character(64) NOT NULL,
+            created_at timestamp with time zone NOT NULL,
+            updated_at timestamp with time zone NOT NULL,
+            CONSTRAINT approved_plan_effective_range CHECK (
+                effective_through IS NULL OR effective_through >= first_due_on)
+        );
+        CREATE INDEX approved_plan_scope_asset_idx
+            ON {Schema}.approved_plan (scope_id, asset_id, plan_id);
+        CREATE INDEX forecast_scope_calendar_idx
+            ON {Schema}.forecast_materialization (scope_id, due_on, obligation_id);
+        """),
+        new MigrationStep(6, "bounded maintenance request and defect read models", $"""
+        CREATE INDEX maintenance_request_scope_page_idx
+            ON {Schema}.maintenance_request (scope_id, created_at, request_id);
+        CREATE INDEX maintenance_request_scope_state_page_idx
+            ON {Schema}.maintenance_request (scope_id, state, created_at, request_id);
+        CREATE INDEX defect_scope_page_idx
+            ON {Schema}.defect (scope_id, created_at, defect_id);
+        CREATE INDEX defect_scope_state_page_idx
+            ON {Schema}.defect (scope_id, state, created_at, defect_id);
+        """),
+        new MigrationStep(7, "verified maintenance work order lifecycle", $"""
+        ALTER TABLE {Schema}.work_order DROP CONSTRAINT work_order_state_check;
+        UPDATE {Schema}.work_order
+        SET state = CASE state
+            WHEN 1 THEN 2
+            WHEN 2 THEN 4
+            WHEN 3 THEN 5
+            WHEN 4 THEN 6
+        END;
+        ALTER TABLE {Schema}.work_order
+            ADD CONSTRAINT work_order_state_check CHECK (state BETWEEN 1 AND 6);
+        CREATE INDEX work_order_scope_page_idx
+            ON {Schema}.work_order (scope_id, created_at, work_order_id);
+        CREATE INDEX work_order_scope_state_page_idx
+            ON {Schema}.work_order (scope_id, state, created_at, work_order_id);
         """)]);
 }

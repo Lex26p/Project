@@ -29,11 +29,13 @@ public sealed record MaintenanceAssetSnapshot(
     string Code,
     string Name,
     EquipmentId? EquipmentId,
+    MaintenanceEquipmentLinkState EquipmentLinkState,
     StateVersion Version,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-public enum MaintenanceEquipmentLinkAction { Linked = 1, Unlinked = 2 }
+public enum MaintenanceEquipmentLinkState { Standalone = 1, Linked = 2, ReviewRequired = 3 }
+public enum MaintenanceEquipmentLinkAction { Linked = 1, Unlinked = 2, ReviewConfirmed = 3 }
 
 public sealed record MaintenanceEquipmentLinkHistory(
     MaintenanceAssetId AssetId,
@@ -66,6 +68,31 @@ public sealed record UnlinkMaintenanceEquipmentRequest(
     MaintenanceAssetId AssetId,
     StateVersion ExpectedVersion,
     string IdempotencyKey);
+
+public sealed record ConfirmMaintenanceEquipmentLinkRequest(
+    MaintenanceAssetId AssetId,
+    StateVersion ExpectedVersion,
+    string IdempotencyKey);
+
+public sealed record MaintenanceAssetQuery(
+    FacilityScopeId ScopeId,
+    int PageSize,
+    string? Search = null,
+    MaintenanceEquipmentLinkState? LinkState = null,
+    string? AfterCode = null,
+    MaintenanceAssetId? AfterAssetId = null);
+
+public sealed record MaintenanceAssetPage(
+    IReadOnlyList<MaintenanceAssetSnapshot> Assets,
+    string? NextCode,
+    MaintenanceAssetId? NextAssetId);
+
+public sealed record MaintenanceQueryLimits(
+    int MaximumPageSize,
+    int MaximumCalendarRangeDays = 366)
+{
+    public static MaintenanceQueryLimits Default { get; } = new(100, 366);
+}
 
 public enum MaintenanceCommandDisposition { Applied = 1, Replay = 2 }
 public sealed record MaintenanceCommandResult(MaintenanceAssetSnapshot Asset, MaintenanceCommandDisposition Disposition);
@@ -125,6 +152,25 @@ public sealed record MaintenanceForecastEntry(
     RevisionNumber PlanRevision,
     string Title,
     DateOnly DueOn);
+
+public sealed record MaintenancePlanSnapshot(
+    ApprovedMaintenancePlan Plan,
+    FacilityScopeId ScopeId,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
+
+public sealed record MaintenanceForecastQuery(
+    FacilityScopeId ScopeId,
+    DateOnly From,
+    DateOnly To,
+    int PageSize,
+    DateOnly? AfterDueOn = null,
+    MaintenanceForecastObligationId? AfterObligationId = null);
+
+public sealed record MaintenanceForecastPage(
+    IReadOnlyList<MaintenanceForecastObligation> Entries,
+    DateOnly? NextDueOn,
+    MaintenanceForecastObligationId? NextObligationId);
 
 public static class MaintenancePermissions
 {

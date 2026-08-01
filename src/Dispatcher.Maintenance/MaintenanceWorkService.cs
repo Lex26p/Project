@@ -1,4 +1,5 @@
 using Dispatcher.Events;
+using Dispatcher.Facilities;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
 
@@ -9,15 +10,19 @@ public sealed class MaintenanceWorkService
     private readonly MaintenanceWorkStore workStore;
     private readonly MaintenanceStore assetStore;
     private readonly IWallClock clock;
+    private readonly MaintenanceQueryLimits limits;
 
     public MaintenanceWorkService(
         MaintenanceWorkStore workStore,
         MaintenanceStore assetStore,
-        IWallClock clock)
+        IWallClock clock,
+        MaintenanceQueryLimits? limits = null)
     {
         this.workStore = workStore ?? throw new ArgumentNullException(nameof(workStore));
         this.assetStore = assetStore ?? throw new ArgumentNullException(nameof(assetStore));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.limits = limits ?? MaintenanceQueryLimits.Default;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(this.limits.MaximumPageSize);
     }
 
     public async Task<Result<MaintenanceWorkCommandResult<MaintenanceRequestSnapshot>>> CreateRequestAsync(
@@ -145,6 +150,20 @@ public sealed class MaintenanceWorkService
             : await workStore.CreateWorkOrderAsync(authorization.Value, request, cancellationToken).ConfigureAwait(false);
     }
 
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> ClaimWorkOrderAsync(
+        MaintenanceWorkUserContext? context,
+        ClaimMaintenanceWorkOrder request,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(context, request.WorkOrderId, (authorization, actor, token) =>
+            workStore.ClaimWorkOrderAsync(authorization, actor, request, token), cancellationToken);
+
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> AcceptWorkOrderAsync(
+        MaintenanceWorkUserContext? context,
+        TransitionMaintenanceWorkOrder request,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(context, request.WorkOrderId, (authorization, actor, token) =>
+            workStore.AcceptWorkOrderAsync(authorization, actor, request, token), cancellationToken);
+
     public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> StartWorkOrderAsync(
         MaintenanceWorkUserContext? context,
         TransitionMaintenanceWorkOrder request,
@@ -152,21 +171,22 @@ public sealed class MaintenanceWorkService
         ExecuteAsync(context, request.WorkOrderId, (authorization, actor, token) =>
             workStore.StartWorkOrderAsync(authorization, actor, request, token), cancellationToken);
 
-    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> CompleteWorkOrderAsync(
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> SubmitWorkOrderForAcceptanceAsync(
         MaintenanceWorkUserContext? context,
         TransitionMaintenanceWorkOrder request,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(context, request.WorkOrderId, (authorization, actor, token) =>
-            workStore.CompleteWorkOrderAsync(authorization, actor, request, token), cancellationToken);
+            workStore.SubmitWorkOrderForAcceptanceAsync(
+                authorization, actor, request, token), cancellationToken);
 
-    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> CompleteChecklistItemAsync(
+    public Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> UpdateChecklistItemAsync(
         MaintenanceWorkUserContext? context,
-        CompleteWorkOrderChecklistItem request,
+        UpdateWorkOrderChecklistItem request,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(context, request.WorkOrderId, (authorization, actor, token) =>
-            workStore.CompleteChecklistItemAsync(authorization, actor, request, token), cancellationToken);
+            workStore.UpdateChecklistItemAsync(authorization, actor, request, token), cancellationToken);
 
-    public async Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> AcceptWorkOrderAsync(
+    public async Task<Result<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>> AcceptWorkResultAsync(
         SessionSnapshot? session,
         TransitionMaintenanceWorkOrder request,
         CancellationToken cancellationToken = default)
@@ -183,7 +203,8 @@ public sealed class MaintenanceWorkService
             session, MaintenanceWorkPermissions.Accept(current.ScopeId), clock);
         return authorization.IsFailure
             ? Result.Failure<MaintenanceWorkCommandResult<MaintenanceWorkOrderSnapshot>>(authorization.Error!)
-            : await workStore.AcceptWorkOrderAsync(authorization.Value, request, cancellationToken).ConfigureAwait(false);
+            : await workStore.AcceptWorkResultAsync(
+                authorization.Value, request, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<Result<MaintenanceWorkOrderSnapshot>> ReadWorkOrderAsync(
@@ -203,6 +224,134 @@ public sealed class MaintenanceWorkService
         return authorization.IsFailure
             ? Result.Failure<MaintenanceWorkOrderSnapshot>(authorization.Error!)
             : Result.Success(current);
+    }
+
+    public async Task<Result<MaintenanceRequestSnapshot>> ReadRequestAsync(
+        SessionSnapshot? session,
+        MaintenanceRequestId requestId,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await workStore.ReadRequestAsync(requestId, cancellationToken).ConfigureAwait(false);
+        if (current is null)
+        {
+            return Failure<MaintenanceRequestSnapshot>(
+                "maintenance.request_not_found", "Maintenance request was not found.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(current.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceRequestSnapshot>(authorization.Error!)
+            : Result.Success(current);
+    }
+
+    public async Task<Result<MaintenanceDefectSnapshot>> ReadDefectAsync(
+        SessionSnapshot? session,
+        MaintenanceDefectId defectId,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await workStore.ReadDefectAsync(defectId, cancellationToken).ConfigureAwait(false);
+        if (current is null)
+        {
+            return Failure<MaintenanceDefectSnapshot>(
+                "maintenance.defect_not_found", "Maintenance defect was not found.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(current.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceDefectSnapshot>(authorization.Error!)
+            : Result.Success(current);
+    }
+
+    public async Task<Result<MaintenanceRequestPage>> QueryRequestsAsync(
+        SessionSnapshot? session,
+        MaintenanceRequestQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (!ValidateQuery(
+                query.PageSize,
+                query.Search,
+                query.AfterCreatedAt,
+                query.AfterRequestId is not null) ||
+            query.State is { } state && !Enum.IsDefined(state))
+        {
+            return Failure<MaintenanceRequestPage>(
+                "maintenance.request_query", "Maintenance request query is invalid.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(query.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceRequestPage>(authorization.Error!)
+            : Result.Success(
+                await workStore.QueryRequestsAsync(query, cancellationToken).ConfigureAwait(false));
+    }
+
+    public async Task<Result<MaintenanceDefectPage>> QueryDefectsAsync(
+        SessionSnapshot? session,
+        MaintenanceDefectQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (!ValidateQuery(
+                query.PageSize,
+                query.Search,
+                query.AfterCreatedAt,
+                query.AfterDefectId is not null) ||
+            query.State is { } state && !Enum.IsDefined(state))
+        {
+            return Failure<MaintenanceDefectPage>(
+                "maintenance.defect_query", "Maintenance defect query is invalid.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(query.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceDefectPage>(authorization.Error!)
+            : Result.Success(
+                await workStore.QueryDefectsAsync(query, cancellationToken).ConfigureAwait(false));
+    }
+
+    public async Task<Result<MaintenanceWorkOrderPage>> QueryWorkOrdersAsync(
+        SessionSnapshot? session,
+        MaintenanceWorkOrderQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (!ValidateQuery(
+                query.PageSize,
+                query.Search,
+                query.AfterCreatedAt,
+                query.AfterWorkOrderId is not null) ||
+            query.State is { } state && !Enum.IsDefined(state))
+        {
+            return Failure<MaintenanceWorkOrderPage>(
+                "maintenance.work_order_query", "Maintenance work order query is invalid.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(query.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceWorkOrderPage>(authorization.Error!)
+            : Result.Success(
+                await workStore.QueryWorkOrdersAsync(query, cancellationToken).ConfigureAwait(false));
+    }
+
+    public async Task<Result<MaintenanceOverviewSnapshot>> ReadOverviewAsync(
+        SessionSnapshot? session,
+        FacilityScopeId scopeId,
+        CancellationToken cancellationToken = default)
+    {
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(scopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceOverviewSnapshot>(authorization.Error!)
+            : Result.Success(await workStore.ReadOverviewAsync(
+                scopeId,
+                DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime),
+                cancellationToken).ConfigureAwait(false));
     }
 
     public async Task<Result<MaintenanceEventSourceLink>> OpenRequestSourceAsync(
@@ -297,6 +446,16 @@ public sealed class MaintenanceWorkService
 
         return Result.Success();
     }
+
+    private bool ValidateQuery(
+        int pageSize,
+        string? search,
+        DateTimeOffset? afterCreatedAt,
+        bool hasAfterId) =>
+        pageSize > 0 &&
+        pageSize <= limits.MaximumPageSize &&
+        (search is null || search.Length <= 200) &&
+        (afterCreatedAt is not null) == hasAfterId;
 
     private static Result<T> Failure<T>(string code, string message) =>
         Result.Failure<T>(new OperationError(ErrorCode.From(code), message));

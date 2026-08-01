@@ -10,12 +10,19 @@ public sealed class MaintenanceService
     private readonly MaintenanceStore store;
     private readonly EquipmentStore equipmentStore;
     private readonly IWallClock clock;
+    private readonly MaintenanceQueryLimits limits;
 
-    public MaintenanceService(MaintenanceStore store, EquipmentStore equipmentStore, IWallClock clock)
+    public MaintenanceService(
+        MaintenanceStore store,
+        EquipmentStore equipmentStore,
+        IWallClock clock,
+        MaintenanceQueryLimits? limits = null)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.equipmentStore = equipmentStore ?? throw new ArgumentNullException(nameof(equipmentStore));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.limits = limits ?? MaintenanceQueryLimits.Default;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(this.limits.MaximumPageSize);
     }
 
     public async Task<Result<MaintenanceCommandResult>> CreateAssetAsync(
@@ -77,6 +84,66 @@ public sealed class MaintenanceService
         MutateExistingAsync(session, request.AssetId, (authorization, token) =>
             store.UnlinkEquipmentAsync(authorization, request, token), cancellationToken);
 
+    public async Task<Result<MaintenanceCommandResult>> ConfirmEquipmentLinkAsync(
+        SessionSnapshot? session,
+        ConfirmMaintenanceEquipmentLinkRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var asset = await store.ReadAssetAsync(request.AssetId, cancellationToken).ConfigureAwait(false);
+        if (asset is null)
+        {
+            return Failure<MaintenanceCommandResult>(
+                "maintenance.asset_not_found", "Maintenance asset was not found.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeMutation(
+            session, MaintenancePermissions.ManageAsset(asset.ScopeId), clock);
+        if (authorization.IsFailure)
+        {
+            return Result.Failure<MaintenanceCommandResult>(authorization.Error!);
+        }
+
+        var equipmentAuthorization = SessionAuthorization.AuthorizeAccess(
+            session, EquipmentPermissions.Read(asset.ScopeId), clock);
+        if (equipmentAuthorization.IsFailure)
+        {
+            return Result.Failure<MaintenanceCommandResult>(equipmentAuthorization.Error!);
+        }
+
+        var equipment = asset.EquipmentId is null
+            ? null
+            : await equipmentStore.ReadEquipmentAsync(asset.EquipmentId.Value, cancellationToken).ConfigureAwait(false);
+        if (equipment is null || equipment.ScopeId != asset.ScopeId)
+        {
+            return Failure<MaintenanceCommandResult>(
+                "maintenance.equipment_not_found",
+                "Linked equipment is not available in the maintenance asset scope.");
+        }
+
+        return await store.ConfirmEquipmentLinkAsync(
+            authorization.Value, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<Result<MaintenanceAssetSnapshot>> ReadAssetAsync(
+        SessionSnapshot? session,
+        MaintenanceAssetId assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await store.ReadAssetAsync(assetId, cancellationToken).ConfigureAwait(false);
+        if (asset is null)
+        {
+            return Failure<MaintenanceAssetSnapshot>(
+                "maintenance.asset_not_found", "Maintenance asset was not found.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(asset.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceAssetSnapshot>(authorization.Error!)
+            : Result.Success(asset);
+    }
+
     public async Task<Result<IReadOnlyList<MaintenanceAssetSnapshot>>> ReadAssetsAsync(
         SessionSnapshot? session, FacilityScopeId scopeId, CancellationToken cancellationToken = default)
     {
@@ -84,6 +151,28 @@ public sealed class MaintenanceService
         return authorization.IsFailure
             ? Result.Failure<IReadOnlyList<MaintenanceAssetSnapshot>>(authorization.Error!)
             : Result.Success(await store.ReadAssetsAsync(scopeId, cancellationToken).ConfigureAwait(false));
+    }
+
+    public async Task<Result<MaintenanceAssetPage>> QueryAssetsAsync(
+        SessionSnapshot? session,
+        MaintenanceAssetQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (query.PageSize <= 0 || query.PageSize > limits.MaximumPageSize ||
+            query.Search?.Length > 200 ||
+            (query.AfterCode is null) != (query.AfterAssetId is null) ||
+            query.AfterCode?.Length > 100)
+        {
+            return Failure<MaintenanceAssetPage>(
+                "maintenance.asset_query", "Maintenance asset query is invalid.");
+        }
+
+        var authorization = SessionAuthorization.AuthorizeAccess(
+            session, MaintenancePermissions.Read(query.ScopeId), clock);
+        return authorization.IsFailure
+            ? Result.Failure<MaintenanceAssetPage>(authorization.Error!)
+            : Result.Success(await store.QueryAssetsAsync(query, cancellationToken).ConfigureAwait(false));
     }
 
     public async Task<Result<IReadOnlyList<MaintenanceEquipmentLinkHistory>>> ReadLinkHistoryAsync(

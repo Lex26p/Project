@@ -28,6 +28,129 @@
     --shell-context-width: 20rem;
 }
 
+.maintenance-page,
+.maintenance-work-order {
+    display: grid;
+    gap: 1rem;
+}
+
+.maintenance-toolbar,
+.maintenance-toolbar label,
+.maintenance-links,
+.maintenance-actions {
+    display: flex;
+    align-items: end;
+    gap: .75rem;
+    flex-wrap: wrap;
+}
+
+.maintenance-toolbar label {
+    align-items: start;
+    flex-direction: column;
+    gap: .25rem;
+}
+
+.maintenance-tabs {
+    display: flex;
+    gap: .5rem;
+    overflow-x: auto;
+}
+
+.maintenance-tabs .is-selected {
+    border-color: var(--accent, #4f7cff);
+    background: color-mix(in srgb, var(--accent, #4f7cff) 14%, transparent);
+}
+
+.maintenance-counters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: .75rem;
+}
+
+.maintenance-counter,
+.maintenance-list article,
+.maintenance-column,
+.maintenance-work-order-grid article,
+.maintenance-checklist {
+    border: 1px solid var(--border-color, #d8dee9);
+    border-radius: .75rem;
+    padding: 1rem;
+    background: var(--surface-raised, #fff);
+}
+
+.maintenance-counter {
+    display: grid;
+    gap: .4rem;
+}
+
+.maintenance-counter strong {
+    font-size: 1.8rem;
+}
+
+.maintenance-counter--critical { border-inline-start: .3rem solid #c9364f; }
+.maintenance-counter--warning { border-inline-start: .3rem solid #c77d00; }
+.maintenance-counter--information { border-inline-start: .3rem solid #376fd0; }
+
+.maintenance-list,
+.maintenance-column,
+.maintenance-checklist {
+    display: grid;
+    gap: .75rem;
+}
+
+.maintenance-list article,
+.maintenance-column article {
+    display: grid;
+    gap: .35rem;
+}
+
+.maintenance-list article > div {
+    display: grid;
+}
+
+.maintenance-columns,
+.maintenance-work-order-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    gap: 1rem;
+}
+
+.maintenance-columns--work {
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+.maintenance-lifecycle {
+    display: flex;
+    gap: .4rem;
+    flex-wrap: wrap;
+}
+
+.maintenance-lifecycle span {
+    padding: .35rem .6rem;
+    border: 1px solid var(--border-color, #d8dee9);
+    border-radius: 999px;
+}
+
+.maintenance-lifecycle .is-current {
+    border-color: var(--accent, #4f7cff);
+    font-weight: 700;
+}
+
+.maintenance-work-order-grid dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: .5rem .8rem;
+}
+
+.maintenance-work-order-grid dd { margin: 0; overflow-wrap: anywhere; }
+
+.maintenance-checklist label {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: .6rem;
+    align-items: center;
+}
+
 *,
 *::before,
 *::after {

@@ -106,6 +106,12 @@ public sealed class BrowserScenario :
     private static readonly Guid TransferPersonId =
         Guid.Parse(
             "81000000-0000-0000-0000-000000000030");
+    private static readonly Guid MaintenanceAssetId =
+        Guid.Parse("81000000-0000-0000-0000-000000000032");
+    private static readonly Guid MaintenanceWorkOrderId =
+        Guid.Parse("81000000-0000-0000-0000-000000000033");
+    private static readonly Guid MaintenanceChecklistId =
+        Guid.Parse("81000000-0000-0000-0000-000000000034");
     private const string AccessToken =
         "browser-access-token";
     private const string RefreshToken =
@@ -117,6 +123,7 @@ public sealed class BrowserScenario :
     private bool c10Enabled;
     private bool c14Enabled;
     private bool c16Enabled;
+    private bool c17Enabled;
     private bool eventGap;
     private bool additionalOccurrence;
     private ulong occurrenceCursor = 1;
@@ -155,6 +162,10 @@ public sealed class BrowserScenario :
     private bool incidentTaskAssignedToCurrent = true;
     private string incidentTaskState = "Offered";
     private ulong incidentTaskVersion = 1;
+    private string maintenanceWorkOrderState = "Overdue";
+    private ulong maintenanceWorkOrderVersion = 1;
+    private bool maintenanceChecklistCompleted;
+    private bool maintenanceSafetyAcknowledged;
 
     private BrowserScenario(
         IBrowserContext context,
@@ -274,6 +285,11 @@ public sealed class BrowserScenario :
     public void EnableC16()
     {
         c16Enabled = true;
+    }
+
+    public void EnableC17()
+    {
+        c17Enabled = true;
     }
 
     public void SetC14DiagnosticOutcome(
@@ -742,6 +758,15 @@ public sealed class BrowserScenario :
             return;
         }
 
+        if (c17Enabled && path.StartsWith(
+                "/api/maintenance",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleC17Async(route, request, uri)
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (c09Enabled &&
             (path.StartsWith(
                  "/api/events/",
@@ -801,6 +826,176 @@ public sealed class BrowserScenario :
                 404)
             .ConfigureAwait(false);
     }
+
+    private async Task HandleC17Async(IRoute route, IRequest request, Uri uri)
+    {
+        if (!IsAuthorized(request))
+        {
+            await StatusAsync(route, 401).ConfigureAwait(false);
+            return;
+        }
+
+        var path = uri.AbsolutePath;
+        if (string.Equals(path, "/api/maintenance/overview", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new
+            {
+                overdue = maintenanceWorkOrderState == "Overdue" ? 1 : 0,
+                dueToday = 1,
+                requiresAssignment = maintenanceWorkOrderState == "Overdue" ? 1 : 0,
+                inProgress = maintenanceWorkOrderState == "InProgress" ? 1 : 0,
+                pendingAcceptance = maintenanceWorkOrderState == "PendingAcceptance" ? 1 : 0,
+                safetyAttention = maintenanceSafetyAcknowledged ? 0 : 1,
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/maintenance/assets", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new
+            {
+                assets = new[]
+                {
+                    new
+                    {
+                        assetId = MaintenanceAssetId,
+                        scopeId = ScopeId,
+                        code = "PUMP-01",
+                        name = "Feed pump",
+                        equipmentId = EventPointId,
+                        equipmentHref = $"/equipment/{EventPointId:D}?scopeId={ScopeId:D}",
+                        linkState = "PendingReview",
+                        version = 2UL,
+                        canManage = true,
+                        createdAt = DateTimeOffset.UtcNow.AddDays(-2),
+                        updatedAt = DateTimeOffset.UtcNow,
+                    },
+                },
+                nextCode = (string?)null,
+                nextAssetId = (Guid?)null,
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/maintenance/calendar", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, "/api/maintenance/forecast", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new
+            {
+                entries = new[]
+                {
+                    new
+                    {
+                        obligationId = Guid.Parse("81000000-0000-0000-0000-000000000035"),
+                        workOrderId = MaintenanceWorkOrderId,
+                        planId = Guid.Parse("81000000-0000-0000-0000-000000000036"),
+                        assetId = MaintenanceAssetId,
+                        scopeId = ScopeId,
+                        planRevision = 1UL,
+                        title = "Monthly pump inspection",
+                        dueOn = DateOnly.FromDateTime(DateTime.UtcNow),
+                        state = "Completed",
+                        isOverdue = false,
+                        workOrderHref = $"/maintenance/work-orders/{MaintenanceWorkOrderId:D}",
+                        canManage = true,
+                    },
+                },
+                nextDueOn = (DateOnly?)null,
+                nextObligationId = (Guid?)null,
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/maintenance/requests", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new { requests = Array.Empty<object>(), nextCreatedAt = (DateTimeOffset?)null, nextRequestId = (Guid?)null }).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/maintenance/defects", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new { defects = Array.Empty<object>(), nextCreatedAt = (DateTimeOffset?)null, nextDefectId = (Guid?)null }).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.Equals(path, "/api/maintenance/work-orders", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, new
+            {
+                workOrders = new[] { MaintenanceWorkOrderPayload() },
+                nextCreatedAt = (DateTimeOffset?)null,
+                nextWorkOrderId = (Guid?)null,
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        if (path.EndsWith($"/{MaintenanceWorkOrderId:D}", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            await JsonAsync(route, MaintenanceWorkOrderPayload()).ConfigureAwait(false);
+            return;
+        }
+
+        if (path.Contains($"/work-orders/{MaintenanceWorkOrderId:D}/", StringComparison.OrdinalIgnoreCase))
+        {
+            maintenanceWorkOrderVersion = checked(maintenanceWorkOrderVersion + 1);
+            if (path.EndsWith("/claim", StringComparison.OrdinalIgnoreCase)) maintenanceWorkOrderState = "Assigned";
+            else if (path.EndsWith("/accept", StringComparison.OrdinalIgnoreCase))
+            {
+                maintenanceWorkOrderState = "Accepted";
+                maintenanceSafetyAcknowledged = true;
+            }
+            else if (path.EndsWith("/start", StringComparison.OrdinalIgnoreCase)) maintenanceWorkOrderState = "InProgress";
+            else if (path.Contains("/checklist/", StringComparison.OrdinalIgnoreCase)) maintenanceChecklistCompleted = true;
+            else if (path.EndsWith("/submit-for-acceptance", StringComparison.OrdinalIgnoreCase)) maintenanceWorkOrderState = "PendingAcceptance";
+            else if (path.EndsWith("/accept-result", StringComparison.OrdinalIgnoreCase)) maintenanceWorkOrderState = "Completed";
+            await JsonAsync(route, new { workOrder = MaintenanceWorkOrderPayload(), disposition = "Applied" }).ConfigureAwait(false);
+            return;
+        }
+
+        await StatusAsync(route, 404).ConfigureAwait(false);
+    }
+
+    private object MaintenanceWorkOrderPayload() => new
+    {
+        workOrderId = MaintenanceWorkOrderId,
+        assetId = MaintenanceAssetId,
+        scopeId = ScopeId,
+        sourceKind = "Forecast",
+        sourceId = Guid.Parse("81000000-0000-0000-0000-000000000035"),
+        summary = "Monthly pump inspection",
+        assignedPersonId = PersonId,
+        state = maintenanceWorkOrderState,
+        version = maintenanceWorkOrderVersion,
+        safety = new
+        {
+            permitRequired = true,
+            isolationRequired = true,
+            instructions = "Isolate the pump before inspection.",
+            acknowledgedAt = maintenanceSafetyAcknowledged ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+        },
+        checklist = new[]
+        {
+            new
+            {
+                itemId = MaintenanceChecklistId,
+                description = "Inspect seals",
+                mandatory = true,
+                completedAt = maintenanceChecklistCompleted ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+                completedBy = maintenanceChecklistCompleted ? PersonId : (Guid?)null,
+            },
+        },
+        assetHref = $"/maintenance/assets/{MaintenanceAssetId:D}",
+        sourceHref = "/maintenance/forecast/81000000-0000-0000-0000-000000000035",
+        canClaim = maintenanceWorkOrderState == "Overdue",
+        canAccept = maintenanceWorkOrderState == "Assigned",
+        canStart = maintenanceWorkOrderState == "Accepted",
+        canUpdateChecklist = maintenanceWorkOrderState == "InProgress",
+        canSubmitForAcceptance = maintenanceWorkOrderState == "InProgress" && maintenanceChecklistCompleted,
+        canAcceptResult = maintenanceWorkOrderState == "PendingAcceptance",
+        createdAt = DateTimeOffset.UtcNow.AddDays(-1),
+        updatedAt = DateTimeOffset.UtcNow,
+    };
 
     private async Task HandleC16Async(
         IRoute route,
@@ -2151,6 +2346,14 @@ public sealed class BrowserScenario :
                 $"configuration.scope.s{ScopeId:N}.publish");
         }
 
+        if (c17Enabled)
+        {
+            permissions.Add($"maintenance.scope.s{ScopeId:N}.read");
+            permissions.Add($"maintenance.scope.s{ScopeId:N}.work.manage");
+            permissions.Add($"maintenance.scope.s{ScopeId:N}.work.execute");
+            permissions.Add($"maintenance.scope.s{ScopeId:N}.work.accept");
+        }
+
         return new
         {
             accountId = AccountId,
@@ -2218,6 +2421,10 @@ public sealed class BrowserScenario :
                     label = "Equipment",
                     route = "/equipment",
                 });
+        }
+        if (c17Enabled)
+        {
+            items.Add(new { label = "Maintenance", route = "/maintenance" });
         }
 
         return items.ToArray();

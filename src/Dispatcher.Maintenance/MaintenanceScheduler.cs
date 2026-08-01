@@ -101,6 +101,14 @@ public sealed class MaintenanceSchedulerStore
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        if (!await PersistPlanAsync(
+                connection, transaction, plan, asset.ScopeId, now, cancellationToken).ConfigureAwait(false))
+        {
+            return Failure<IReadOnlyList<MaintenanceForecastObligation>>(
+                "maintenance.plan_conflict",
+                "The approved plan revision conflicts with the persisted plan.");
+        }
+
         var result = new List<MaintenanceForecastObligation>(entries.Count);
         foreach (var entry in entries)
         {
@@ -154,6 +162,81 @@ public sealed class MaintenanceSchedulerStore
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Result.Success<IReadOnlyList<MaintenanceForecastObligation>>(result);
+    }
+
+    public async Task<MaintenancePlanSnapshot?> ReadPlanAsync(
+        MaintenancePlanId planId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT plan_id, asset_id, scope_id, plan_revision, title, first_due_on,
+                   interval_days, effective_through, created_at, updated_at
+            FROM {MaintenanceMigrations.Schema}.approved_plan
+            WHERE plan_id = @plan;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("plan", planId.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadPlan(reader)
+            : null;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    public async Task<MaintenanceForecastPage> QueryForecastAsync(
+        MaintenanceForecastQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var results = new List<MaintenanceForecastObligation>();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetRoleAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT obligation_id, work_order_id, plan_id, asset_id, scope_id, plan_revision, title, due_on,
+                   assigned_person_id, permit_required, isolation_required, safety_instructions, checklist::text,
+                   state, claimed_by, lease_until, attempts, created_at, completed_at
+            FROM {MaintenanceMigrations.Schema}.forecast_materialization
+            WHERE scope_id = @scope AND due_on BETWEEN @from AND @to
+              AND (@after_due IS NULL OR due_on > @after_due
+                   OR (due_on = @after_due AND obligation_id > @after_id))
+            ORDER BY due_on, obligation_id
+            LIMIT @limit;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("scope", query.ScopeId.Value);
+        command.Parameters.AddWithValue("from", query.From);
+        command.Parameters.AddWithValue("to", query.To);
+        command.Parameters.Add(new NpgsqlParameter("after_due", NpgsqlDbType.Date)
+        {
+            Value = query.AfterDueOn is null ? DBNull.Value : query.AfterDueOn.Value,
+        });
+        command.Parameters.Add(new NpgsqlParameter("after_id", NpgsqlDbType.Uuid)
+        {
+            Value = query.AfterObligationId is null
+                ? DBNull.Value
+                : query.AfterObligationId.Value.Value,
+        });
+        command.Parameters.AddWithValue("limit", query.PageSize + 1);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(Read(reader));
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var hasMore = results.Count > query.PageSize;
+        var page = results.Take(query.PageSize).ToArray();
+        return new MaintenanceForecastPage(
+            page,
+            hasMore ? page[^1].DueOn : null,
+            hasMore ? page[^1].ObligationId : null);
     }
 
     public async Task<MaintenanceForecastObligation?> ClaimNextAsync(
@@ -265,6 +348,65 @@ public sealed class MaintenanceSchedulerStore
             : null;
     }
 
+    private static async Task<bool> PersistPlanAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ApprovedMaintenancePlan plan,
+        FacilityScopeId scopeId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var fingerprint = PlanFingerprint(plan, scopeId);
+        await using (var command = new NpgsqlCommand(
+            $"""
+            INSERT INTO {MaintenanceMigrations.Schema}.approved_plan AS current_plan
+                (plan_id, asset_id, scope_id, plan_revision, title, first_due_on,
+                 interval_days, effective_through, fingerprint, created_at, updated_at)
+            VALUES (@plan, @asset, @scope, @revision, @title, @first_due,
+                    @interval, @effective_through, @fingerprint, @now, @now)
+            ON CONFLICT (plan_id) DO UPDATE
+            SET asset_id = EXCLUDED.asset_id,
+                scope_id = EXCLUDED.scope_id,
+                plan_revision = EXCLUDED.plan_revision,
+                title = EXCLUDED.title,
+                first_due_on = EXCLUDED.first_due_on,
+                interval_days = EXCLUDED.interval_days,
+                effective_through = EXCLUDED.effective_through,
+                fingerprint = EXCLUDED.fingerprint,
+                updated_at = EXCLUDED.updated_at
+            WHERE current_plan.fingerprint = EXCLUDED.fingerprint
+               OR current_plan.plan_revision < EXCLUDED.plan_revision;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("plan", plan.PlanId.Value);
+            command.Parameters.AddWithValue("asset", plan.AssetId.Value);
+            command.Parameters.AddWithValue("scope", scopeId.Value);
+            command.Parameters.AddWithValue("revision", checked((long)plan.Revision.Value));
+            command.Parameters.AddWithValue("title", plan.Title);
+            command.Parameters.AddWithValue("first_due", plan.FirstDueOn);
+            command.Parameters.AddWithValue("interval", plan.Recurrence.IntervalDays);
+            command.Parameters.Add(new NpgsqlParameter("effective_through", NpgsqlDbType.Date)
+            {
+                Value = plan.EffectiveThrough is null ? DBNull.Value : plan.EffectiveThrough.Value,
+            });
+            command.Parameters.AddWithValue("fingerprint", fingerprint);
+            command.Parameters.AddWithValue("now", now);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var verify = new NpgsqlCommand(
+            $"""
+            SELECT fingerprint
+            FROM {MaintenanceMigrations.Schema}.approved_plan
+            WHERE plan_id = @plan;
+            """, connection, transaction);
+        verify.Parameters.AddWithValue("plan", plan.PlanId.Value);
+        return string.Equals(
+            (string?)await verify.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            fingerprint,
+            StringComparison.Ordinal);
+    }
+
     private static MaintenanceForecastObligation Read(NpgsqlDataReader reader)
     {
         var checklist = JsonSerializer.Deserialize<ChecklistDto[]>(reader.GetString(12)) ?? [];
@@ -285,6 +427,19 @@ public sealed class MaintenanceSchedulerStore
             reader.IsDBNull(18) ? null : reader.GetFieldValue<DateTimeOffset>(18));
     }
 
+    private static MaintenancePlanSnapshot ReadPlan(NpgsqlDataReader reader) => new(
+        new ApprovedMaintenancePlan(
+            MaintenancePlanId.From(reader.GetGuid(0)),
+            MaintenanceAssetId.From(reader.GetGuid(1)),
+            RevisionNumber.From(checked((ulong)reader.GetInt64(3))),
+            reader.GetString(4),
+            reader.GetFieldValue<DateOnly>(5),
+            new MaintenanceRecurrence(reader.GetInt32(6)),
+            reader.IsDBNull(7) ? null : reader.GetFieldValue<DateOnly>(7)),
+        FacilityScopeId.From(reader.GetGuid(2)),
+        reader.GetFieldValue<DateTimeOffset>(8),
+        reader.GetFieldValue<DateTimeOffset>(9));
+
     private static string Fingerprint(
         MaintenanceForecastEntry entry, FacilityScopeId scopeId, MaintenanceMaterializationPolicy policy) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
@@ -293,6 +448,19 @@ public sealed class MaintenanceSchedulerStore
             Revision = entry.PlanRevision.Value, entry.Title, entry.DueOn,
             Assigned = policy.AssignedPersonId.Value, policy.Safety,
             Checklist = policy.Checklist.OrderBy(value => value.ItemId.Value),
+        })))).ToLowerInvariant();
+
+    private static string PlanFingerprint(ApprovedMaintenancePlan plan, FacilityScopeId scopeId) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            PlanId = plan.PlanId.Value,
+            AssetId = plan.AssetId.Value,
+            ScopeId = scopeId.Value,
+            Revision = plan.Revision.Value,
+            plan.Title,
+            plan.FirstDueOn,
+            IntervalDays = plan.Recurrence.IntervalDays,
+            plan.EffectiveThrough,
         })))).ToLowerInvariant();
 
     private async Task SetRoleAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)

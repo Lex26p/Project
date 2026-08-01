@@ -8,6 +8,7 @@ using Dispatcher.MyWork;
 using Dispatcher.Persistence;
 using Dispatcher.Platform;
 using Dispatcher.Semantics;
+using Dispatcher.Server;
 using Dispatcher.Workspace;
 using Npgsql;
 using Xunit;
@@ -71,20 +72,51 @@ public sealed class MaintenanceWorkTests
         var workStore = new MaintenanceWorkStore(dataSource, PostgreSqlClusterFixture.OwnerBRole, clock);
         var work = new MaintenanceWorkService(workStore, assetStore, clock);
         var manage = Session(
+            MaintenancePermissions.Read(FacilityScopeId),
             MaintenanceWorkPermissions.Manage(FacilityScopeId),
             PermissionCode.From("events.dispatcher.read"),
             PermissionCode.From($"runtime.point.p{PointId.Value:N}.read"));
         var requestId = MaintenanceRequestId.New();
-        var deniedEventRequest = await work.CreateRequestFromEventAsync(
+        var eventApplication = new MaintenanceEventApplicationService(eventStore, work, clock);
+        var deniedEventRequest = await eventApplication.CreateRequestAsync(
             Session(MaintenanceWorkPermissions.Manage(FacilityScopeId)),
-            new CreateMaintenanceRequestFromEvent(
-                requestId, asset.AssetId, "Inspect alarm source", operationalEvent, "s31-event-denied"));
+            RuntimeScopeId,
+            operationalEvent.EventId,
+            new CreateMaintenanceRequestInput(
+                requestId.Value, asset.AssetId.Value, "Inspect alarm source", "s31-event-denied"),
+            CancellationToken.None);
         Assert.Equal("permission.denied", deniedEventRequest.Error?.Code.Value);
-        var request = (await work.CreateRequestFromEventAsync(
+        var request = (await eventApplication.CreateRequestAsync(
             manage,
-            new CreateMaintenanceRequestFromEvent(
-                requestId, asset.AssetId, "Inspect alarm source", operationalEvent, "s31-event-request"))).Value.Value;
+            RuntimeScopeId,
+            operationalEvent.EventId,
+            new CreateMaintenanceRequestInput(
+                requestId.Value, asset.AssetId.Value, "Inspect alarm source", "s31-event-request"),
+            CancellationToken.None)).Value.Value;
         Assert.Equal(MaintenanceRequestState.Submitted, request.State);
+        var secondRequest = (await work.CreateRequestAsync(
+            manage,
+            new CreateMaintenanceRequest(
+                MaintenanceRequestId.New(), asset.AssetId, "Routine inspection", "s31-request-second"))).Value.Value;
+        var requestPage = (await work.QueryRequestsAsync(
+            manage,
+            new MaintenanceRequestQuery(
+                FacilityScopeId,
+                1,
+                MaintenanceRequestState.Submitted))).Value;
+        Assert.Single(requestPage.Requests);
+        Assert.NotNull(requestPage.NextRequestId);
+        var nextRequestPage = (await work.QueryRequestsAsync(
+            manage,
+            new MaintenanceRequestQuery(
+                FacilityScopeId,
+                1,
+                MaintenanceRequestState.Submitted,
+                AfterCreatedAt: requestPage.NextCreatedAt,
+                AfterRequestId: requestPage.NextRequestId))).Value;
+        Assert.Single(nextRequestPage.Requests);
+        Assert.NotEqual(requestPage.Requests[0].RequestId, nextRequestPage.Requests[0].RequestId);
+        Assert.Equal(secondRequest, (await work.ReadRequestAsync(manage, secondRequest.RequestId)).Value);
         var approved = (await work.ApproveRequestAsync(
             manage,
             new ApproveMaintenanceRequest(requestId, request.Version, "s31-request-approve"))).Value.Value;
@@ -98,6 +130,15 @@ public sealed class MaintenanceWorkTests
             manage,
             new ConfirmMaintenanceDefect(defectId, defect.Version, "s31-defect-confirm"))).Value.Value;
         Assert.Equal(MaintenanceDefectState.Confirmed, confirmed.State);
+        var defectPage = (await work.QueryDefectsAsync(
+            manage,
+            new MaintenanceDefectQuery(
+                FacilityScopeId,
+                10,
+                MaintenanceDefectState.Confirmed,
+                Search: "Seal"))).Value;
+        Assert.Equal(defectId, Assert.Single(defectPage.Defects).DefectId);
+        Assert.Equal(confirmed, (await work.ReadDefectAsync(manage, defectId)).Value);
         var defectWorkOrder = (await work.CreateWorkOrderAsync(
             manage,
             new CreateWorkOrderFromDefect(
@@ -123,43 +164,47 @@ public sealed class MaintenanceWorkTests
         Assert.Equal(MaintenanceRequestState.Converted, (await workStore.ReadRequestAsync(requestId))!.State);
         var executor = new MaintenanceWorkUserContext(
             Session(MaintenanceWorkPermissions.Execute(FacilityScopeId)), Assignee);
+        var acceptedByWorker = (await work.AcceptWorkOrderAsync(
+            executor,
+            new TransitionMaintenanceWorkOrder(
+                workOrderId, workOrder.Version, "s31-accept-assignment"))).Value.Value;
+        Assert.Equal(MaintenanceWorkOrderState.Accepted, acceptedByWorker.State);
         var safetyDenied = await work.StartWorkOrderAsync(
             executor,
             new TransitionMaintenanceWorkOrder(
-                workOrderId, workOrder.Version, "s31-start-denied", SafetyAcknowledged: false));
+                workOrderId, acceptedByWorker.Version, "s31-start-denied", SafetyAcknowledged: false));
         Assert.Equal("maintenance.safety_acknowledgement", safetyDenied.Error?.Code.Value);
         var started = (await work.StartWorkOrderAsync(
             executor,
             new TransitionMaintenanceWorkOrder(
-                workOrderId, workOrder.Version, "s31-start", SafetyAcknowledged: true))).Value.Value;
+                workOrderId, acceptedByWorker.Version, "s31-start", SafetyAcknowledged: true))).Value.Value;
         Assert.Equal(MaintenanceWorkOrderState.InProgress, started.State);
         Assert.NotNull(started.Safety.AcknowledgedAt);
-        var completed = (await work.CompleteWorkOrderAsync(
+        var checklistDenied = await work.SubmitWorkOrderForAcceptanceAsync(
             executor,
             new TransitionMaintenanceWorkOrder(
-                workOrderId, started.Version, "s31-complete"))).Value.Value;
-        Assert.Equal(MaintenanceWorkOrderState.Completed, completed.State);
-        var acceptor = Session(MaintenanceWorkPermissions.Accept(FacilityScopeId));
-        var checklistDenied = await work.AcceptWorkOrderAsync(
-            acceptor,
-            new TransitionMaintenanceWorkOrder(
-                workOrderId, completed.Version, "s31-accept-denied"));
+                workOrderId, started.Version, "s31-submit-denied"));
         Assert.Equal("maintenance.checklist_incomplete", checklistDenied.Error?.Code.Value);
-        var checkedOrder = (await work.CompleteChecklistItemAsync(
+        var checkedOrder = (await work.UpdateChecklistItemAsync(
             executor,
-            new CompleteWorkOrderChecklistItem(
-                workOrderId, mandatoryItemId, completed.Version, "s31-checklist"))).Value.Value;
-        var accepted = (await work.AcceptWorkOrderAsync(
-            acceptor,
+            new UpdateWorkOrderChecklistItem(
+                workOrderId, mandatoryItemId, true, started.Version, "s31-checklist"))).Value.Value;
+        var pendingAcceptance = (await work.SubmitWorkOrderForAcceptanceAsync(
+            executor,
             new TransitionMaintenanceWorkOrder(
-                workOrderId, checkedOrder.Version, "s31-accept"))).Value.Value;
-        Assert.Equal(MaintenanceWorkOrderState.Accepted, accepted.State);
-        Assert.Contains(accepted.Checklist, item => item.ItemId == optionalItemId && item.CompletedAt is null);
+                workOrderId, checkedOrder.Version, "s31-submit"))).Value.Value;
+        Assert.Equal(MaintenanceWorkOrderState.PendingAcceptance, pendingAcceptance.State);
+        var completed = (await work.AcceptWorkResultAsync(
+            Session(MaintenanceWorkPermissions.Accept(FacilityScopeId)),
+            new TransitionMaintenanceWorkOrder(
+                workOrderId, pendingAcceptance.Version, "s31-accept-result"))).Value.Value;
+        Assert.Equal(MaintenanceWorkOrderState.Completed, completed.State);
+        Assert.Contains(completed.Checklist, item => item.ItemId == optionalItemId && item.CompletedAt is null);
 
         var myWork = new MyWorkService(
             new MyWorkStore(dataSource, PostgreSqlClusterFixture.OwnerARole), clock);
         Assert.True((await myWork.AcceptSourceAssignmentAsync(
-            WorkAssignmentProjection.FromMaintenanceWorkOrder(accepted))).IsSuccess);
+            WorkAssignmentProjection.FromMaintenanceWorkOrder(completed))).IsSuccess);
         var visible = await myWork.ReadAsync(new MyWorkUserContext(
             Session(MyWorkPermissions.Read, MaintenancePermissions.Read(FacilityScopeId)), Assignee));
         Assert.Equal(workOrderId.Value, Assert.Single(visible.Value).SourceItemId);
@@ -177,14 +222,14 @@ public sealed class MaintenanceWorkTests
             requestId);
         Assert.Equal(operationalEvent.EventId, source.Value.EventId);
 
-        Assert.Equal(5, await workStore.CountAuditAsync(workOrderId.Value));
+        Assert.Equal(6, await workStore.CountAuditAsync(workOrderId.Value));
         Assert.Equal(3, await workStore.CountAuditAsync(requestId.Value));
         Assert.Equal(3, await workStore.CountAuditAsync(defectId.Value));
         Assert.Equal(
             AlarmAcknowledgementState.Unacknowledged,
             Assert.Single(await alarmStore.ReadOccurrencesAsync(RuntimeScopeId)).Acknowledgement.State);
         Assert.Equal(
-            ["Assigned", "InProgress", "Completed", "Accepted"],
+            ["Overdue", "Assigned", "Accepted", "InProgress", "PendingAcceptance", "Completed"],
             Enum.GetNames<MaintenanceWorkOrderState>());
     }
 
